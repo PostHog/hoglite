@@ -1,0 +1,340 @@
+name: ECR release
+
+# This workflow publishes the hoglite image to the shared-services
+# ECR. A Kargo Warehouse in PostHog/charts reads the repository.
+#
+# The Warehouse makes Freight only when all of these are true:
+#   - The newest tag matches ^r[0-9]{12}-[0-9a-f]{6}$.
+#   - The index revision annotation names a 40-hex commit.
+#   - The tag ends with the first six characters of that commit.
+#   - The index source annotation names this repository.
+# One job builds the image and pushes it with ONE tag,
+# r<UTC minute>-<sha6>. The job makes the tag one time.
+#
+# A completed CI run on main starts this workflow. The gate publishes
+# only when that run concluded with success. A person can also
+# dispatch this workflow on main with dry_run false. That path reads
+# the CI gate for the commit, so a commit whose tests failed is not
+# released.
+#
+# A pull request that changes this workflow or its script starts a
+# dry run. A person can also start a dry run by hand on any branch.
+# The dry run pushes the image to a local registry. Then it does the
+# same checks. The dry run does not use AWS.
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/ecr-release.yml"
+      - ".github/scripts/ecr-release.sh"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Run the build and the checks against a local registry. Push nothing to ECR. Any branch.
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# Each commit has its own group. Runs for different commits do not
+# cancel each other. For one commit, a waiting run can replace another
+# waiting run. Both runs do the same work, so this has no effect.
+concurrency:
+  # A real dispatch joins the commit's group. Otherwise it races the
+  # automatic workflow_run publish for the same commit, and the second
+  # push fails on tag immutability.
+  group: >-
+    ecr-release-${{ github.event.workflow_run.head_sha
+    || (github.event_name == 'workflow_dispatch' && !inputs.dry_run && github.sha)
+    || github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash --noprofile --norc -Eeuo pipefail {0}
+
+jobs:
+  gate:
+    # Forks must not publish. A push to main of this repository starts
+    # a release when its CI run passed, and so does a dispatch on
+    # main. A person can start a dry run on any branch. A dispatch on
+    # a branch that is not main must be a dry run. The role trust
+    # accepts only refs/heads/main, so a real publish from another
+    # branch fails at the credential step. The gate refuses it first,
+    # so the run says why.
+    if: >-
+      github.repository == 'PostHog/hoglite' &&
+      (
+        github.event_name == 'pull_request' ||
+        github.event_name == 'workflow_dispatch' ||
+        (
+          github.event.workflow_run.event == 'push' &&
+          github.event.workflow_run.head_branch == 'main' &&
+          github.event.workflow_run.conclusion == 'success' &&
+          github.event.workflow_run.head_repository.full_name == github.repository
+        )
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      publish: ${{ steps.decide.outputs.publish }}
+      sha: ${{ steps.decide.outputs.sha }}
+      dry-run: ${{ steps.decide.outputs.dry-run }}
+    steps:
+      # Use the script from the same commit as this workflow file. An
+      # older commit can run again, and that commit can lack the script.
+      - name: Check out the release script
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.workflow_sha || github.sha }}
+          path: .release-tools
+          sparse-checkout: .github/scripts
+
+      - name: Read the test gate
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+          PR_SHA: ${{ github.event.pull_request.head.sha }}
+          DISPATCH_SHA: ${{ github.sha }}
+          DISPATCH_REF: ${{ github.ref }}
+          DISPATCH_DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          if [[ $EVENT == pull_request ]]; then
+            echo "Dry run for ${PR_SHA}. Nothing goes to ECR."
+            {
+              echo "publish=true"
+              echo "dry-run=true"
+              echo "sha=${PR_SHA}"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ $EVENT == workflow_dispatch ]]; then
+            if [[ $DISPATCH_DRY_RUN != true && $DISPATCH_REF != refs/heads/main ]]; then
+              echo "::error::A dispatch on ${DISPATCH_REF} must set dry_run. Only refs/heads/main can publish to ECR."
+              exit 1
+            fi
+            if [[ $DISPATCH_DRY_RUN == true ]]; then
+              echo "Dry run for ${DISPATCH_SHA} on ${DISPATCH_REF}. Nothing goes to ECR."
+              {
+                echo "publish=true"
+                echo "dry-run=true"
+                echo "sha=${DISPATCH_SHA}"
+              } >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            # A real dispatch reads the same test gate as a
+            # workflow_run. A person must not publish a commit whose
+            # tests failed.
+            echo "Release for ${DISPATCH_SHA} on ${DISPATCH_REF}."
+            {
+              .release-tools/.github/scripts/ecr-release.sh gate "$GITHUB_REPOSITORY" "$DISPATCH_SHA"
+              echo "dry-run=false"
+              echo "sha=${DISPATCH_SHA}"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # The workflow_run event fired only for a successful CI run
+          # on main. The head_sha is the tested commit.
+          echo "Release for ${RUN_SHA}. CI passed on main."
+          {
+            echo "publish=true"
+            echo "dry-run=false"
+            echo "sha=${RUN_SHA}"
+          } >> "$GITHUB_OUTPUT"
+
+  publish:
+    needs: gate
+    if: needs.gate.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # The dry run does not use id-token. The AWS steps do not run for
+    # a dry run, from a pull request or from a dispatch. The role
+    # trust also accepts only refs/heads/main.
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      SHA: ${{ needs.gate.outputs.sha }}
+      DRY_RUN: ${{ needs.gate.outputs.dry-run }}
+      AWS_REGION: us-east-1
+    steps:
+      - name: Require publish role
+        if: needs.gate.outputs.dry-run != 'true'
+        env:
+          PUBLISH_ROLE: ${{ secrets.HOGLITE_AWS_ECR_PUBLISH_IAM_ROLE }}
+        run: |
+          if [[ -z "$PUBLISH_ROLE" ]]; then
+            echo "::error::Set the repository secret HOGLITE_AWS_ECR_PUBLISH_IAM_ROLE to the GitHub OIDC publish role ARN"
+            exit 1
+          fi
+
+      # In a workflow_run event, GITHUB_SHA is the newest main commit.
+      # It is not the tested commit. Build the head_sha of the run.
+      - name: Check out the tested commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ needs.gate.outputs.sha }}
+
+      # Use the script from the same commit as this workflow file.
+      - name: Check out the release script
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.workflow_sha || github.sha }}
+          path: .release-tools
+          sparse-checkout: .github/scripts
+
+      # The dry run pushes to this local registry, not to ECR. The
+      # digest is the multi-arch index digest of registry:3.
+      - name: Start the local registry (dry run)
+        if: needs.gate.outputs.dry-run == 'true'
+        run: |
+          docker run -d --name registry -p 127.0.0.1:5000:5000 \
+            registry:3@sha256:01cd312e67026f06f5d89c3e133a4a9adc7cb9eeb9b1194e0b2954dfd770efd2
+          for _ in $(seq 1 15); do
+            if curl -fsS -m 2 http://127.0.0.1:5000/v2/ >/dev/null; then exit 0; fi
+            sleep 1
+          done
+          echo "::error::the local registry did not start"
+          exit 1
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+
+      # In the dry run, the builder uses the host network. Then it can
+      # reach the local registry on 127.0.0.1.
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          driver-opts: ${{ needs.gate.outputs.dry-run == 'true' && 'network=host' || '' }}
+
+      - name: Install crane
+        uses: imjasonh/setup-crane@feee3b6bb0d4c68370f256a4502498c9227e5c6b # v0.7
+        with:
+          version: v0.22.0
+
+      - name: Configure AWS credentials
+        if: needs.gate.outputs.dry-run != 'true'
+        uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708 # v5.1.1
+        with:
+          role-to-assume: ${{ secrets.HOGLITE_AWS_ECR_PUBLISH_IAM_ROLE }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # The login gives the registry of the role's account. Thus this
+      # file does not name the account.
+      - name: Log in to Amazon ECR
+        if: needs.gate.outputs.dry-run != 'true'
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@062b18b96a7aff071d4dc91bc00c4c1a7945b076 # v2.0.1
+
+      - name: Select the registry
+        id: registry
+        env:
+          ECR_REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          if [[ $DRY_RUN == true ]]; then
+            echo "value=127.0.0.1:5000" >> "$GITHUB_OUTPUT"
+          else
+            [[ -n $ECR_REGISTRY ]] || { echo "::error::the ECR login gave no registry"; exit 1; }
+            echo "value=${ECR_REGISTRY}" >> "$GITHUB_OUTPUT"
+          fi
+
+      # If select cannot read the tags, it must stop and give no tag.
+      # Otherwise it could make a second tag for a good release.
+      - name: Check the tag read failure rule (dry run)
+        if: needs.gate.outputs.dry-run == 'true'
+        run: |
+          if out=$(.release-tools/.github/scripts/ecr-release.sh select 127.0.0.1:5999 "$SHA" hoglite); then
+            echo "::error::select did not stop when the registry was not available"
+            exit 1
+          fi
+          [[ -z $out ]] || { echo "::error::select gave output after a failure: ${out}"; exit 1; }
+
+      # This step makes the release tag. The select function in the
+      # script gives the rerun rules. ECR tags are immutable.
+      - name: Select the release tag
+        id: release
+        env:
+          REGISTRY: ${{ steps.registry.outputs.value }}
+        run: |
+          .release-tools/.github/scripts/ecr-release.sh select "$REGISTRY" "$SHA" hoglite \
+            | tee -a "$GITHUB_OUTPUT"
+
+      # The Containerfile pins the build stage to $BUILDPLATFORM, so
+      # go runs one time. QEMU runs only the runtime stage for arm64.
+      # The annotations go on the index AND on each manifest.
+      - name: Build and push hoglite
+        if: steps.release.outputs.push == 'true'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: Containerfile
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            ${{ steps.registry.outputs.value }}/hoglite:${{ steps.release.outputs.tag }}
+          annotations: |
+            index:org.opencontainers.image.revision=${{ env.SHA }}
+            index:org.opencontainers.image.source=https://github.com/PostHog/hoglite
+            manifest:org.opencontainers.image.revision=${{ env.SHA }}
+            manifest:org.opencontainers.image.source=https://github.com/PostHog/hoglite
+          labels: |
+            org.opencontainers.image.revision=${{ env.SHA }}
+            org.opencontainers.image.source=https://github.com/PostHog/hoglite
+          cache-from: type=gha,scope=hoglite
+
+      # Read back the release from the registry. A missing annotation
+      # fails this step. Without the annotations, Kargo makes no
+      # Freight. This check finds that problem in the build, not
+      # later in Kargo.
+      - name: Verify the release
+        env:
+          REGISTRY: ${{ steps.registry.outputs.value }}
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          .release-tools/.github/scripts/ecr-release.sh check-release "$REGISTRY" "$TAG" "$SHA" hoglite
+
+      # A second select for the same commit must use the same tag. It
+      # must push nothing. This proves the rerun rule on a registry.
+      - name: Check the rerun rule (dry run)
+        if: needs.gate.outputs.dry-run == 'true'
+        env:
+          REGISTRY: ${{ steps.registry.outputs.value }}
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          out=$(.release-tools/.github/scripts/ecr-release.sh select "$REGISTRY" "$SHA" hoglite)
+          echo "$out"
+          want=$(printf 'tag=%s\npush=false' "$TAG")
+          [[ $out == "$want" ]] || { echo "::error::a rerun did not use the existing release"; exit 1; }
+
+      - name: Summary
+        env:
+          REGISTRY: ${{ steps.registry.outputs.value }}
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          {
+            if [[ $DRY_RUN == true ]]; then
+              echo "### ECR release (dry run, local registry)"
+            else
+              echo "### ECR release"
+            fi
+            echo
+            echo '```'
+            digest=$(crane digest "${REGISTRY}/hoglite:${TAG}")
+            echo "hoglite:${TAG}@${digest}"
+            echo "revision ${SHA}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
