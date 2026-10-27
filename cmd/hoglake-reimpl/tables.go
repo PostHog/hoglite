@@ -422,10 +422,10 @@ func listFiles(w http.ResponseWriter, r *http.Request) {
 			apiErr(w, 400, "limit must be positive")
 			return
 		}
-		// Keyset pagination: `after` is the last id of the previous page.
-		// OFFSET scans every skipped row (18s for one page at 16M files);
-		// a keyset seek on the primary key is O(limit).
 		if a := r.URL.Query().Get("after"); a != "" {
+			// Keyset pagination: `after` is the last id of the previous
+			// page. OFFSET scans every skipped row (18s for one page at
+			// 16M files); a keyset seek on the primary key is O(limit).
 			aid, err := strconv.ParseInt(a, 10, 64)
 			if err != nil || aid < 0 {
 				apiErr(w, 400, "after must be a non-negative file id")
@@ -438,6 +438,17 @@ func listFiles(w http.ResponseWriter, r *http.Request) {
 			off, _ := strconv.Atoi(r.URL.Query().Get("offset"))
 			limit = fmt.Sprintf(" LIMIT %d OFFSET %d", min(n, 10000), max(off, 0))
 		}
+	} else if a := r.URL.Query().Get("after"); a != "" {
+		// Keyset without an explicit limit: apply the page cap so the
+		// seek still happens instead of silently returning page one.
+		aid, err := strconv.ParseInt(a, 10, 64)
+		if err != nil || aid < 0 {
+			apiErr(w, 400, "after must be a non-negative file id")
+			return
+		}
+		keyset = " AND f.id > ?"
+		args = append(args, aid)
+		limit = " LIMIT 10000"
 	}
 	// The table is resolved at the snapshot, so a dropped table's files
 	// vanish at head and stay visible to time travel before the drop.

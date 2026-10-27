@@ -27,6 +27,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -300,6 +301,19 @@ func (p *pipeline) retire() bool {
 
 // submit is the only way to enqueue; it refuses a retired pipeline and
 // sheds load past the global queue cap.
+// drainRetire retires a pipeline that lost its map slot while busy.
+// Unreachable pipelines receive no new work, so retire() eventually
+// succeeds once in-flight commits finish.
+func drainRetire(p *pipeline) {
+	for i := 0; i < 600; i++ {
+		if p.retire() {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	log.Printf("pipeline for a retired tenant failed to drain in 60s; sender leaks")
+}
+
 func (p *pipeline) submit(req *pipeReq) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -393,12 +407,17 @@ func adaptPipelines() {
 				// deregister first so no new work arrives, then close;
 				// the sender drains any racing enqueue before exiting
 				if pipes.CompareAndDelete(key, v) && p.retire() {
-					return true
-				}
-				// retire() failed (busy): re-register so the tenant isn't
-				// orphaned — but only if nobody created a fresh one meanwhile
-				pipes.LoadOrStore(key, v)
 				return true
+			}
+			// retire() failed (busy): re-register so the tenant isn't
+			// orphaned — but only if nobody created a fresh one meanwhile.
+			// If a fresh pipeline won the slot, ours is unreachable: no new
+			// work can arrive, so its in-flight work drains and a background
+			// retry retires it. Without this the old sender leaks forever.
+			if actual, loaded := pipes.LoadOrStore(key, v); loaded && actual != v {
+				go drainRetire(v.(*pipeline))
+			}
+			return true
 			}
 			if queued > 0 && p.depth.Load() < int64(maxInFlight) {
 				p.depth.Store(min64(p.depth.Load()*2, int64(maxInFlight)))
@@ -444,20 +463,20 @@ func pipelinesDebug(w http.ResponseWriter, r *http.Request) {
 func metricsHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 	var b strings.Builder
-	b.WriteString("# TYPE hoglake-reimpl_pipeline_depth gauge\n")
-	b.WriteString("# TYPE hoglake-reimpl_pipeline_inflight gauge\n")
-	b.WriteString("# TYPE hoglake-reimpl_pipeline_commits_total counter\n")
+	b.WriteString("# TYPE hoglake_reimpl_pipeline_depth gauge\n")
+	b.WriteString("# TYPE hoglake_reimpl_pipeline_inflight gauge\n")
+	b.WriteString("# TYPE hoglake_reimpl_pipeline_commits_total counter\n")
 	pipes.Range(func(k, v any) bool {
 		p := v.(*pipeline)
 		c := strings.ReplaceAll(k.(string), `"`, ``)
-		fmt.Fprintf(&b, `hoglake-reimpl_pipeline_depth{catalog=%q} %d`+"\n", c, p.depth.Load())
-		fmt.Fprintf(&b, `hoglake-reimpl_pipeline_inflight{catalog=%q} %d`+"\n", c, p.inflight.Load())
-		fmt.Fprintf(&b, `hoglake-reimpl_pipeline_commits_total{catalog=%q} %d`+"\n", c, p.commitN.Load())
+		fmt.Fprintf(&b, `hoglake_reimpl_pipeline_depth{catalog=%q} %d`+"\n", c, p.depth.Load())
+		fmt.Fprintf(&b, `hoglake_reimpl_pipeline_inflight{catalog=%q} %d`+"\n", c, p.inflight.Load())
+		fmt.Fprintf(&b, `hoglake_reimpl_pipeline_commits_total{catalog=%q} %d`+"\n", c, p.commitN.Load())
 		return true
 	})
-	fmt.Fprintf(&b, "# TYPE hoglake-reimpl_queue_global gauge\n")
-	fmt.Fprintf(&b, "hoglake-reimpl_queue_global %d\n", globalQueued.Load())
-	fmt.Fprintf(&b, "hoglake-reimpl_queue_cap %d\n", *globalQueueCap)
+	fmt.Fprintf(&b, "# TYPE hoglake_reimpl_queue_global gauge\n")
+	fmt.Fprintf(&b, "hoglake_reimpl_queue_global %d\n", globalQueued.Load())
+	fmt.Fprintf(&b, "hoglake_reimpl_queue_cap %d\n", *globalQueueCap)
 	fmt.Fprint(w, b.String())
 }
 
@@ -499,7 +518,11 @@ func newMux() *http.ServeMux {
 	mux.HandleFunc("GET /v1/catalogs/{c}/consumers/{consumer}/offsets", listOffsets)
 	mux.HandleFunc("GET /v1/catalogs/{c}/consumers/{consumer}/offsets/{uuid}", getOffset)
 	mux.HandleFunc("PUT /v1/catalogs/{c}/consumers/{consumer}/offsets/{uuid}", putOffset)
-	mux.HandleFunc("GET /v1/pipelines", pipelinesDebug)
+	// Pipeline internals expose pod DNS names. Debug-gated like
+	// hoglited's debug endpoints (HL_DEBUG_ENDPOINTS).
+	if os.Getenv("HL_DEBUG_ENDPOINTS") != "" {
+		mux.HandleFunc("GET /v1/pipelines", pipelinesDebug)
+	}
 	mux.HandleFunc("GET /metrics", metricsHandler)
 	return mux
 }
