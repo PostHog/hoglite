@@ -9,7 +9,10 @@ COPY cmd ./cmd
 COPY internal ./internal
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH \
     go build -trimpath -o /out/hoglited ./cmd/hoglited
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH \
+    go build -trimpath -o /out/hoglake-reimpl ./cmd/hoglake-reimpl
 
 FROM gcr.io/distroless/static-debian12
 COPY --from=build /out/hoglited /usr/local/bin/hoglited
+COPY --from=build /out/hoglake-reimpl /usr/local/bin/hoglake-reimpl
 ENTRYPOINT ["/usr/local/bin/hoglited"]
