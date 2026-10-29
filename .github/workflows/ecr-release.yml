@@ -146,10 +146,14 @@ jobs:
             exit 0
           fi
           # The workflow_run event fired only for a successful CI run
-          # on main. The head_sha is the tested commit.
+          # on main. The head_sha is the tested commit, and this path
+          # trusts the run that fired the event. Publish only when the
+          # commit is still the tip of main: Kargo promotes the newest
+          # tag, so a late rerun of an old commit's CI must not mint a
+          # newer tag for old code.
           echo "Release for ${RUN_SHA}. CI passed on main."
           {
-            echo "publish=true"
+            .release-tools/.github/scripts/ecr-release.sh tip "$GITHUB_REPOSITORY" "$RUN_SHA"
             echo "dry-run=false"
             echo "sha=${RUN_SHA}"
           } >> "$GITHUB_OUTPUT"

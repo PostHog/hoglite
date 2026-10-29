@@ -50,3 +50,15 @@ jobs:
             echo "$out"
             exit 1
           fi
+
+  script-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out the commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Test the release script against a mocked registry
+        run: python3 .github/scripts/ecr-release-test.py
