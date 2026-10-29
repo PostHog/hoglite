@@ -407,17 +407,17 @@ func adaptPipelines() {
 				// deregister first so no new work arrives, then close;
 				// the sender drains any racing enqueue before exiting
 				if pipes.CompareAndDelete(key, v) && p.retire() {
+					return true
+				}
+				// retire() failed (busy): re-register so the tenant isn't
+				// orphaned — but only if nobody created a fresh one meanwhile.
+				// If a fresh pipeline won the slot, ours is unreachable: no new
+				// work can arrive, so its in-flight work drains and a background
+				// retry retires it. Without this the old sender leaks forever.
+				if actual, loaded := pipes.LoadOrStore(key, v); loaded && actual != v {
+					go drainRetire(v.(*pipeline))
+				}
 				return true
-			}
-			// retire() failed (busy): re-register so the tenant isn't
-			// orphaned — but only if nobody created a fresh one meanwhile.
-			// If a fresh pipeline won the slot, ours is unreachable: no new
-			// work can arrive, so its in-flight work drains and a background
-			// retry retires it. Without this the old sender leaks forever.
-			if actual, loaded := pipes.LoadOrStore(key, v); loaded && actual != v {
-				go drainRetire(v.(*pipeline))
-			}
-			return true
 			}
 			if queued > 0 && p.depth.Load() < int64(maxInFlight) {
 				p.depth.Store(min64(p.depth.Load()*2, int64(maxInFlight)))
