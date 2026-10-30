@@ -1048,9 +1048,22 @@ func TestCgroupMountinfoEdges(t *testing.T) {
 		{"malformed unrelated lines", map[string]string{"proc/self/cgroup": "0::/a\n",
 			"proc/self/mountinfo": "not mountinfo\n1 2 - cgroup2\n29 1 0:26 / /run/cg rw - cgroup2 cgroup rw\n",
 			"run/cg/a/memory.max": mib256}, 256 << 20},
-		{"no mount contains the process: smallest mount point", map[string]string{"proc/self/cgroup": "0::/x/y\n",
+		{"namespace ancestor applies, sibling mount does not", map[string]string{"proc/self/cgroup": "0::/x/y\n",
 			"proc/self/mountinfo": "29 1 0:26 /a /run/a rw - cgroup2 cgroup rw\n30 1 0:26 /.. /run/b rw - cgroup2 cgroup rw\n",
-			"run/a/memory.max":    gib, "run/b/memory.max": mib256}, 256 << 20},
+			"run/a/memory.max":    "65536\n", "run/b/memory.max": mib256}, 256 << 20},
+		// R5: a child cgroup's limit does not apply to the process
+		{"namespace ancestor applies, child mount does not", map[string]string{"proc/self/cgroup": "0::/\n",
+			"proc/self/mountinfo":      "29 1 0:26 /.. /sys/fs/cgroup ro - cgroup2 cgroup rw\n30 1 0:26 /sandbox /run/sandbox ro - cgroup2 cgroup rw\n",
+			"sys/fs/cgroup/memory.max": gib, "run/sandbox/memory.max": "65536\n"}, 1 << 30},
+		{"child mount of a full mount does not apply", map[string]string{"proc/self/cgroup": "0::/a\n",
+			"proc/self/mountinfo":        full + "30 1 0:26 /a/b /run/b rw - cgroup2 cgroup rw\n",
+			"sys/fs/cgroup/a/memory.max": gib, "run/b/memory.max": "65536\n"}, 1 << 30},
+		{"process above the namespace root", map[string]string{"proc/self/cgroup": "0::/../x\n",
+			"proc/self/mountinfo": "29 1 0:26 /.. /run/up rw - cgroup2 cgroup rw\n30 1 0:26 / /run/ns rw - cgroup2 cgroup rw\n",
+			"run/up/memory.max":   gib, "run/up/x/memory.max": mib256, "run/ns/memory.max": "65536\n"}, 256 << 20},
+		{"two levels above the namespace root", map[string]string{"proc/self/cgroup": "0::/a\n",
+			"proc/self/mountinfo": "29 1 0:26 /../.. /run/up rw - cgroup2 cgroup rw\n30 1 0:26 /../b /run/sib rw - cgroup2 cgroup rw\n",
+			"run/up/memory.max":   mib256, "run/sib/memory.max": "65536\n"}, 256 << 20},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -1121,6 +1134,90 @@ func TestCgroupReadFailure(t *testing.T) {
 	} {
 		if n, _, err := cgroupMemoryLimit(cgroupFixture(t, files)); err != nil || n != 0 {
 			t.Fatalf("%s: %d, %v", name, n, err)
+		}
+	}
+}
+
+// When cgroup mounts exist but none shows the process cgroup or an
+// ancestor, the limit is unknown. The result is an error, not the limit
+// of another cgroup (re-review of Q3, R5).
+func TestCgroupNoApplicableMount(t *testing.T) {
+	for name, files := range map[string]map[string]string{
+		"sibling only": {"proc/self/cgroup": "0::/x\n",
+			"proc/self/mountinfo": "29 1 0:26 /sandbox /run/sandbox rw - cgroup2 cgroup rw\n", "run/sandbox/memory.max": "65536\n"},
+		"child only": {"proc/self/cgroup": "0::/a\n",
+			"proc/self/mountinfo": "29 1 0:26 /a/b /run/b rw - cgroup2 cgroup rw\n", "run/b/memory.max": "65536\n"},
+		"namespace root below the process": {"proc/self/cgroup": "0::/../x\n",
+			"proc/self/mountinfo": "29 1 0:26 / /run/ns rw - cgroup2 cgroup rw\n", "run/ns/memory.max": "65536\n"},
+		"sibling above the namespace root": {"proc/self/cgroup": "0::/\n",
+			"proc/self/mountinfo": "29 1 0:26 /../b /run/b rw - cgroup2 cgroup rw\n", "run/b/memory.max": "65536\n"},
+		"v1 child only": {"proc/self/cgroup": "11:memory:/a\n",
+			"proc/self/mountinfo": "29 1 0:27 /a/b /run/b rw - cgroup cgroup rw,memory\n", "run/b/memory.limit_in_bytes": "65536\n"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if n, src, err := cgroupMemoryLimit(cgroupFixture(t, files)); err == nil {
+				t.Fatalf("no error: %d from %q", n, src)
+			}
+		})
+	}
+}
+
+func TestCgroupRel(t *testing.T) {
+	for _, c := range []struct {
+		root, p, rel string
+		ok           bool
+	}{
+		{"/", "/", "/", true},
+		{"/", "/a/b", "/a/b", true},
+		{"/a", "/a/b", "/b", true},
+		{"/a", "/ab", "", false},
+		{"/a/b", "/a", "", false},
+		{"/build..jobs", "/build..jobs/w", "/w", true},
+		{"/..", "/", "/", true},
+		{"/..", "/a", "/", true},
+		{"/../..", "/../a", "/", true},
+		{"/..", "/../a", "/a", true},
+		{"/../b", "/", "", false},
+		{"/", "/../a", "", false},
+		{"/a/..", "/a", "", false},
+		{"/./a", "/a", "", false},
+	} {
+		rel, ok := cgroupRel(c.root, c.p)
+		if rel != c.rel || ok != c.ok {
+			t.Errorf("cgroupRel(%q, %q) = %q, %v; want %q, %v", c.root, c.p, rel, ok, c.rel, c.ok)
+		}
+	}
+}
+
+// A read-only cgroup mount (files 0444, dirs 0555) is the normal
+// container layout; it must give the limit, or no limit without a file.
+func TestCgroupReadOnlyMount(t *testing.T) {
+	for _, withLimit := range []bool{false, true} {
+		files := map[string]string{"proc/self/cgroup": "0::/\n",
+			"proc/self/mountinfo":              "29 1 0:26 / /sys/fs/cgroup ro,nosuid,nodev,noexec - cgroup2 cgroup rw\n",
+			"sys/fs/cgroup/cgroup.controllers": "memory\n"}
+		want := int64(0)
+		if withLimit {
+			files["sys/fs/cgroup/memory.max"] = "1073741824\n"
+			want = 1 << 30
+		}
+		root := cgroupFixture(t, files)
+		mount := filepath.Join(root, "sys/fs/cgroup")
+		err := filepath.Walk(mount, func(p string, fi os.FileInfo, err error) error {
+			if err != nil {
+				return err
+			}
+			if fi.IsDir() {
+				return os.Chmod(p, 0o555)
+			}
+			return os.Chmod(p, 0o444)
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { os.Chmod(mount, 0o755) })
+		if n, src, err := cgroupMemoryLimit(root); err != nil || n != want {
+			t.Fatalf("limit file %v: got %d from %q (%v), want %d", withLimit, n, src, err, want)
 		}
 	}
 }

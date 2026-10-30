@@ -186,11 +186,11 @@ func CgroupMemoryLimit() (limit int64, src string, err error) {
 //
 // Limits of parent cgroups also apply. One mount can show more of the
 // ancestors than another, so the result is the smallest limit over every
-// mount of the hierarchy that contains the process, each from the
-// process cgroup up to its mount point. When no mount contains the
-// process (a cgroup namespace), the mount points are the closest visible
-// cgroups. Without mountinfo, the standard mount points apply
-// (/sys/fs/cgroup, /sys/fs/cgroup/memory).
+// mount of the hierarchy that shows the process cgroup or an ancestor,
+// each from the process cgroup up to its mount point. Mounts of other
+// cgroups do not apply. When cgroup mounts exist but none applies, the
+// result is an error (see cgroupMounts). Without mountinfo, the standard
+// mount points apply (/sys/fs/cgroup, /sys/fs/cgroup/memory).
 //
 // A file that does not exist is skipped; any other read error is
 // returned, so that the start can fail instead of running without a cap.
@@ -336,64 +336,86 @@ func filterMounts(mounts []mountEntry, match func(mountEntry) bool) []mountEntry
 }
 
 // cgroupMounts returns the smallest limit over the mounts ms of one
-// hierarchy for the process path p (see cgroupMemoryLimit).
+// hierarchy for the process path p (see cgroupMemoryLimit). Only a mount
+// that shows the process cgroup or one of its ancestors applies: limits
+// go from a parent to its children, never up or across. A mount of a
+// sibling or a child cgroup gives no information about the process.
+// When no mount applies, the limit is unknown and the result is an
+// error, not a limit that does not apply.
 func cgroupMounts(root string, ms []mountEntry, p, file string) (int64, string, error) {
-	var under []mountEntry
-	for _, m := range ms {
-		if underCgroup(m.root, p) {
-			under = append(under, m)
-		}
-	}
 	var best int64
 	var src string
-	take := func(v int64, s string) {
+	found := false
+	for _, m := range ms {
+		rel, ok := cgroupRel(m.root, p)
+		if !ok {
+			continue
+		}
+		found = true
+		v, s, err := cgroupWalk(filepath.Join(root, m.point), rel, file)
+		if err != nil {
+			return 0, "", err
+		}
 		if v > 0 && (best == 0 || v < best) {
 			best, src = v, s
 		}
 	}
-	if len(under) == 0 {
-		// no mount shows the process cgroup: each mount point is an
-		// ancestor or the closest visible cgroup
-		for _, m := range ms {
-			v, s, err := cgroupWalk(filepath.Join(root, m.point), "/", file)
-			if err != nil {
-				return 0, "", err
-			}
-			take(v, s)
-		}
-		return best, src, nil
-	}
-	for _, m := range under {
-		v, s, err := cgroupWalk(filepath.Join(root, m.point), relCgroupPath(m.root, p), file)
-		if err != nil {
-			return 0, "", err
-		}
-		take(v, s)
+	if !found {
+		return 0, "", fmt.Errorf("cgroup: no %s mount shows cgroup %q or an ancestor of it", file, p)
 	}
 	return best, src, nil
 }
 
-// underCgroup reports whether the hierarchy path p is root or below it.
-// A root with a ".." element (a cgroup namespace shows the mount of a
-// cgroup above its own root this way) never contains p.
-func underCgroup(root, p string) bool {
-	for _, e := range strings.Split(root, "/") {
-		if e == ".." {
-			return false
+// cgroupRel reports whether the mount root shows the cgroup p or an
+// ancestor of it, and returns the path of p below the mount root.
+//
+// In a cgroup namespace, both paths are relative to the namespace root.
+// A path starts with zero or more ".." elements (levels above the
+// namespace root), followed by names. A root of only ".." elements above
+// the start of p is an ancestor of p. The names between that root and p
+// are not known, so the walk starts at the mount point. A root with the
+// same number of ".." elements is an ancestor when its names are a
+// prefix of the names of p. Any other root does not verifiably contain
+// p.
+func cgroupRel(root, p string) (string, bool) {
+	rUp, rNames, ok1 := splitCgroupPath(root)
+	pUp, pNames, ok2 := splitCgroupPath(p)
+	switch {
+	case !ok1 || !ok2:
+		return "", false
+	case rUp > pUp && len(rNames) == 0:
+		return "/", true
+	case rUp != pUp || len(rNames) > len(pNames):
+		return "", false
+	}
+	for i, n := range rNames {
+		if pNames[i] != n {
+			return "", false
 		}
 	}
-	root, p = filepath.Clean("/"+root), filepath.Clean("/"+p)
-	return root == "/" || p == root || strings.HasPrefix(p, root+"/")
+	return "/" + strings.Join(pNames[len(rNames):], "/"), true
 }
 
-// relCgroupPath returns the process path p relative to the mount root
-// (p must be under root, see underCgroup).
-func relCgroupPath(root, p string) string {
-	root, p = filepath.Clean("/"+root), filepath.Clean("/"+p)
-	if root == "/" {
-		return p
+// splitCgroupPath splits a cgroup path into the count of leading ".."
+// elements and the names after them. A "." element or a ".." after a
+// name makes the path invalid (ok false); the kernel does not write
+// them.
+func splitCgroupPath(s string) (up int, names []string, ok bool) {
+	for _, e := range strings.Split(s, "/") {
+		switch {
+		case e == "":
+		case e == "..":
+			if len(names) > 0 {
+				return 0, nil, false
+			}
+			up++
+		case e == ".":
+			return 0, nil, false
+		default:
+			names = append(names, e)
+		}
 	}
-	return "/" + strings.TrimPrefix(strings.TrimPrefix(p, root), "/")
+	return up, names, true
 }
 
 // cgroupWalk returns the smallest limit in file from mount/rel up to
