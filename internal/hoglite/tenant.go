@@ -58,8 +58,8 @@ type TenantOpts struct {
 	// turns the guard off.
 	QueryTimeout   time.Duration // execution deadline of a read (/query, read-only /tx)
 	WriteTimeout   time.Duration // execution deadline of a write transaction (runs on the actor)
-	MaxResultRows  int           // rows per response
-	MaxResultBytes int64         // estimated bytes of decoded values per response
+	MaxResultRows  int           // rows per read response (not for write transactions)
+	MaxResultBytes int64         // estimated bytes of a response (reads and writes)
 }
 
 func DefaultOpts() TenantOpts {
@@ -301,6 +301,7 @@ type Tenant struct {
 	probe     *sql.Stmt             // pin probe prepared on roDB; actor-loop only
 	readDone  chan readResult       // worker outcomes whose basis was not yet durable at pin time
 	readHook  func(context.Context) // test hook: runs in the worker after the pin
+	txHook    func()                // test hook: runs on the actor after the statements of a write
 	// ckptDeferUntil delays size-triggered checkpoints after one was
 	// skipped because reads did not drain. Actor-owned.
 	ckptDeferUntil time.Time
@@ -823,9 +824,16 @@ func (t *Tenant) applyTx(req TxRequest) (o txOutcome) {
 	if allReadOnly(req.Stmts) {
 		o.readOnly = true
 	}
-	// The deadline bounds how long one transaction holds the actor. A
-	// timed-out transaction rolls back: no commit, no dedup receipt, no
-	// pending ack, and no new committed WAL bytes for cutSegment to ship.
+	// The deadline bounds how long the statements of one transaction hold
+	// the actor. The decision point is just before COMMIT: a transaction
+	// whose deadline has passed by then rolls back, also when every
+	// statement finished. No dedup receipt, no pending ack, no new
+	// committed WAL bytes for cutSegment to ship. COMMIT itself is not
+	// bounded (no interrupt, no context): it writes the frames of the
+	// transaction and is cut short by nothing, so a deadline that passes
+	// during COMMIT does not turn a committed transaction into an error.
+	// A dedup hit replays its stored result as it is (I2), without the
+	// deadline or the result limit.
 	ctx, cancel := withDeadline(context.Background(), t.opts.WriteTimeout, "write transaction")
 	defer cancel()
 	// A dedicated sql.Conn gives the sqlite handle of this transaction's
@@ -838,7 +846,7 @@ func (t *Tenant) applyTx(req TxRequest) (o txOutcome) {
 		return o
 	}
 	defer conn.Close()
-	h, _ := sqliteHandle(conn)
+	h := t.connHandle(conn)
 	// Background: the deadline must not end the transaction on its own
 	// (database/sql would roll back on another goroutine). The statements
 	// carry the deadline.
@@ -850,14 +858,17 @@ func (t *Tenant) applyTx(req TxRequest) (o txOutcome) {
 	defer tx.Rollback()
 	it := watchInterrupt(ctx, h)
 	o = t.runTx(ctx, tx, req, o)
+	if h := t.txHook; h != nil {
+		h()
+	}
 	// no interrupt may reach the COMMIT or the ROLLBACK below
 	it.stop()
 	if o.dup {
 		return o // the receipt answers; this transaction changed nothing
 	}
 	if ctx.Err() != nil {
-		// Also when every statement finished: a transaction that passed
-		// its deadline never commits, so the client sees one clear rule.
+		// Also when every statement finished: past the deadline at the
+		// commit decision means rollback, so the client sees one rule.
 		if c := context.Cause(ctx); errors.Is(c, ErrQueryTimeout) {
 			t.metrics.WriteTimeouts.Add(1)
 			o.err = c
@@ -907,7 +918,7 @@ func (t *Tenant) runTx(ctx context.Context, tx *sql.Tx, req TxRequest, o txOutco
 			return o
 		}
 	}
-	if o.results, o.err = execTxStatements(ctx, tx, req.Stmts, t.newResultLimit()); o.err != nil {
+	if o.results, o.err = execTxStatements(ctx, tx, req.Stmts, t.newResultLimit(!o.readOnly)); o.err != nil {
 		return o
 	}
 	if req.Client != "" && req.TxID != "" && !o.readOnly {
@@ -1029,6 +1040,9 @@ func execStatement(ctx context.Context, tx *sql.Tx, st Statement, lim *resultLim
 	if err != nil {
 		return QueryResult{}, err
 	}
+	if err := lim.addResult(nil); err != nil {
+		return QueryResult{}, err
+	}
 	n, _ := res.RowsAffected()
 	return QueryResult{Affected: n}, nil
 }
@@ -1087,6 +1101,9 @@ func isQuerySQL(s string) bool {
 func drainRows(rows *sql.Rows, lim *resultLimit) (QueryResult, error) {
 	cols, err := rows.Columns()
 	if err != nil {
+		return QueryResult{}, err
+	}
+	if err := lim.addResult(cols); err != nil {
 		return QueryResult{}, err
 	}
 	out := QueryResult{Cols: cols}
@@ -1887,6 +1904,8 @@ func (t *Tenant) finishClose() {
 		t.onPoison(t)
 	}
 	close(t.done)
+	// a worker that sent before the close owns no reply path any more
+	t.drainReadDone()
 	if t.onClose != nil {
 		t.onClose(t)
 	}

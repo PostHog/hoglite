@@ -68,6 +68,9 @@ type Metrics struct {
 	ReadTimeouts   atomic.Int64
 	WriteTimeouts  atomic.Int64
 	ResultTooLarge atomic.Int64
+	// failed sqlite handle lookups (guards.go connHandle): each one is a
+	// query or write that only the driver's own checks can stop
+	InterruptMisses atomic.Int64
 }
 
 // ewmaUpdate folds a sample into an atomic EWMA with alpha=1/8.
@@ -193,6 +196,9 @@ func NewManagerSat(store Backend, prefix, id, class, baseDir string, opts Tenant
 	}
 	if metrics.Logger == nil {
 		m.metrics.Logger = log.New(io.Discard, "", 0)
+	}
+	if err := interruptSupport(); err != nil {
+		m.metrics.Logger.Printf("WARNING: sqlite interrupt unavailable (%v): query deadlines and cancels cannot stop a statement after its first row; check the modernc.org/sqlite version", err)
 	}
 	m.leaseStop = make(chan struct{})
 	// 8 concurrent drains per pod: enough to absorb release bursts without
@@ -1199,6 +1205,7 @@ func (m *Manager) Stats() map[string]any {
 		"checkpoint_ms": m.metrics.CheckpointMs.Load(),
 		"acquires":      m.metrics.Acquires.Load(), "checkpoints": m.metrics.Checkpoints.Load(),
 		"proxied": m.metrics.Proxied.Load(), "evictions": m.metrics.Evictions.Load(),
-		"dedup_hits": m.metrics.DedupHits.Load(),
+		"dedup_hits":       m.metrics.DedupHits.Load(),
+		"sqlite_interrupt": interruptSupport() == nil,
 	}
 }

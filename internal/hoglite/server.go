@@ -195,6 +195,12 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) (int, any
 	fmt.Fprintf(&b, "hoglite_read_timeouts_total %d\n", m.ReadTimeouts.Load())
 	fmt.Fprintf(&b, "hoglite_write_timeouts_total %d\n", m.WriteTimeouts.Load())
 	fmt.Fprintf(&b, "hoglite_result_too_large_total %d\n", m.ResultTooLarge.Load())
+	interruptOK := 0
+	if interruptSupport() == nil {
+		interruptOK = 1
+	}
+	fmt.Fprintf(&b, "hoglite_sqlite_interrupt_available %d\n", interruptOK)
+	fmt.Fprintf(&b, "hoglite_interrupt_handle_misses_total %d\n", m.InterruptMisses.Load())
 	// saturation: max(commit-latency ratio, inflight ratio); 1.0 = at
 	// operating limit. This is the HPA target metric.
 	fmt.Fprintf(&b, "hoglite_saturation %.4f\n", s.mgr.Saturation())

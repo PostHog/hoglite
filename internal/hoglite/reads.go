@@ -206,7 +206,7 @@ func (t *Tenant) pinRead(w *readWork, basis int64) {
 	}
 	// for the read deadline (guards.go); without a handle only the
 	// driver's context checks stop the query
-	h, _ := sqliteHandle(conn)
+	h := t.connHandle(conn)
 	// Background, not ctx: database/sql rolls a transaction back on its own
 	// goroutine when the BeginTx context ends, and the connection would
 	// then return to the pool after the worker released its slot. The
@@ -364,9 +364,34 @@ func (t *Tenant) readWorker(pr *pinnedRead) {
 	t.pool.finish()
 	select {
 	case t.readDone <- readResult{w: pr.w, basis: pr.basis, gen: pr.gen, out: out}:
+		// The send can win against a closed done. The actor no longer
+		// reads readDone then, and its final drain (finishClose) may have
+		// run already, so drain here too.
+		select {
+		case <-t.done:
+			t.drainReadDone()
+		default:
+		}
 	case <-t.done:
 		// the basis may never become durable now
+		t.releaseSlots(pr.w)
 		pr.w.reply <- readOutcome{err: t.deadError()}
+	}
+}
+
+// drainReadDone fails the outcomes left in readDone after the tenant
+// closed and returns their tenant slots. The receive makes exactly one
+// party (finishClose or a late worker) the owner of each outcome.
+// Only after done is closed.
+func (t *Tenant) drainReadDone() {
+	for {
+		select {
+		case rr := <-t.readDone:
+			t.releaseSlots(rr.w)
+			rr.w.reply <- readOutcome{err: t.deadError()}
+		default:
+			return
+		}
 	}
 }
 
@@ -375,7 +400,7 @@ func (t *Tenant) readWorker(pr *pinnedRead) {
 // checkpoint preempts the read or the tenant closes. The result limit
 // covers the whole response.
 func (t *Tenant) execRead(ctx context.Context, tx *sql.Tx, w *readWork) readOutcome {
-	lim := t.newResultLimit()
+	lim := t.newResultLimit(false)
 	if w.tx {
 		res, err := execTxStatements(ctx, tx, w.stmts, lim)
 		return readOutcome{results: res, err: err}

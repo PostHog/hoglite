@@ -2,9 +2,11 @@ package hoglite
 
 // Per-query resource guards: execution deadlines and result size limits.
 //
-// Deadline. Every read (/query, read-only /tx) and every write transaction
-// runs under a context deadline (TenantOpts.QueryTimeout, WriteTimeout).
-// The deadline alone is not enough. The driver (modernc.org/sqlite
+// Deadline. Every read (/query, read-only /tx) and the statements of every
+// write transaction run under a context deadline (TenantOpts.QueryTimeout,
+// WriteTimeout). For a write the deadline is checked once more just
+// before COMMIT; COMMIT itself and dedup replays are not bounded (see
+// applyTx). The deadline alone is not enough. The driver (modernc.org/sqlite
 // v1.61.0) watches the context only while a call into it runs: Exec, the
 // first step of a Query, BEGIN. database/sql calls Rows.Next without a
 // context, so a query that already returned its first row cannot be
@@ -95,6 +97,55 @@ func sqliteHandle(c *sql.Conn) (uintptr, error) {
 	return h, err
 }
 
+// interruptProbe caches whether the handle lookup works with the linked
+// driver. A driver update can move the field; the check makes that loud.
+var interruptProbe struct {
+	once sync.Once
+	err  error
+}
+
+// interruptSupport reports whether sqliteHandle works with the linked
+// driver (nil) or why not. The first call probes an in-memory database.
+func interruptSupport() error {
+	interruptProbe.once.Do(func() {
+		db, err := sql.Open("sqlite", ":memory:")
+		if err != nil {
+			interruptProbe.err = err
+			return
+		}
+		defer db.Close()
+		c, err := db.Conn(context.Background())
+		if err != nil {
+			interruptProbe.err = err
+			return
+		}
+		defer c.Close()
+		_, interruptProbe.err = sqliteHandle(c)
+	})
+	return interruptProbe.err
+}
+
+// interruptMissLog logs the first failed handle lookup of the process.
+var interruptMissLog sync.Once
+
+// connHandle returns the sqlite handle of c for an interrupter, or 0.
+// A miss means that only the driver's own context checks stop the work
+// (no stop after the first row of a query); it counts in
+// hoglite_interrupt_handle_misses_total and logs once.
+func (t *Tenant) connHandle(c *sql.Conn) uintptr {
+	h, err := sqliteHandle(c)
+	if err == nil {
+		return h
+	}
+	t.metrics.InterruptMisses.Add(1)
+	interruptMissLog.Do(func() {
+		if t.metrics.Logger != nil {
+			t.metrics.Logger.Printf("WARNING: sqlite interrupt unavailable (%v): query deadlines and cancels cannot stop a statement after its first row", err)
+		}
+	})
+	return 0
+}
+
 // interrupter calls sqlite3_interrupt on one connection when its context
 // ends, and repeats it until stop. A nil interrupter does nothing; the
 // driver's own context handling then remains the only cancellation.
@@ -158,19 +209,47 @@ type resultLimit struct {
 	bytes    int64
 }
 
-func (t *Tenant) newResultLimit() *resultLimit {
-	return &resultLimit{maxRows: t.opts.MaxResultRows, maxBytes: t.opts.MaxResultBytes}
+// newResultLimit returns the budget of one response. A write transaction
+// has no row limit, only the byte limit: its statements are fixed by the
+// client, and their rows are mostly guard results (one row per expect_*
+// statement). A large commit has many of them, and the row count would
+// refuse it long before its response is large.
+func (t *Tenant) newResultLimit(write bool) *resultLimit {
+	l := &resultLimit{maxRows: t.opts.MaxResultRows, maxBytes: t.opts.MaxResultBytes}
+	if write {
+		l.maxRows = 0
+	}
+	return l
 }
 
-// Per-value cost estimates. They count the decoded value in memory and are
-// at least its JSON size for numbers, booleans and null. Text and blobs
-// count their length plus the same overhead. JSON escapes can make a
-// string longer than that, but memory, the resource this limit protects,
-// is still counted correctly. The count costs no allocation.
+// Cost estimates of the response, in bytes. Every part of the response
+// is charged: one container per statement result, its column names, each
+// row and each value. A number, boolean, null or timestamp value costs at
+// least its JSON size including the separator; text and blobs cost their
+// length plus the same overhead. JSON escapes can make a string longer
+// than its charge. The estimate bounds the decoded response that the
+// server holds, not the process memory of the query: SQLite's own work
+// space and driver copies are outside it. The count costs no allocation.
 const (
-	rowCost   = 24 // slice header of one row
-	valueCost = 24 // interface value (16) plus up to 8 bytes of payload
+	resultCost = 64 // QueryResult header; JSON skeleton with a 20-digit affected
+	colCost    = 24 // string header of a column name, quotes, separator
+	rowCost    = 24 // slice header of one row
+	valueCost  = 32 // interface value; JSON of a float64 is at most 24+1 bytes
+	timeCost   = 8  // RFC 3339 nano timestamp: 30 bytes + quotes + separator
 )
+
+// addResult charges the container and the column names of one statement
+// result, also when it has no rows.
+func (l *resultLimit) addResult(cols []string) error {
+	if l == nil {
+		return nil
+	}
+	n := int64(resultCost)
+	for _, c := range cols {
+		n += colCost + int64(len(c))
+	}
+	return l.charge(n)
+}
 
 // addRow charges one scanned row. It fails once the row or byte count
 // passes its limit.
@@ -190,8 +269,14 @@ func (l *resultLimit) addRow(vals []any) error {
 			n += int64(len(x))
 		case []byte:
 			n += int64(len(x))
+		case time.Time:
+			n += timeCost
 		}
 	}
+	return l.charge(n)
+}
+
+func (l *resultLimit) charge(n int64) error {
 	l.bytes += n
 	if l.maxBytes > 0 && l.bytes > l.maxBytes {
 		return fmt.Errorf("%w: more than %d bytes", ErrResultTooLarge, l.maxBytes)

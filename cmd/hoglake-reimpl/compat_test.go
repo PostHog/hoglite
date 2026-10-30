@@ -20,9 +20,16 @@ type harness struct {
 
 func newHarness(t *testing.T) *harness {
 	t.Helper()
+	return newHarnessOpts(t, func(*hoglite.TenantOpts) {})
+}
+
+// newHarnessOpts is newHarness with adjusted hoglite tenant options.
+func newHarnessOpts(t *testing.T, adjust func(*hoglite.TenantOpts)) *harness {
+	t.Helper()
 	opts := hoglite.DefaultOpts()
 	opts.BatchWindow = time.Millisecond
 	opts.IdleRelease = 0
+	adjust(&opts)
 	mgr := hoglite.NewManager(hoglite.NewFakeStore(), "fake", "r1", "standard", t.TempDir(), opts, 100, &hoglite.Metrics{}, hoglite.ControllerOpts{})
 	hlSrv := httptest.NewServer(hoglite.NewServer(mgr, map[string]string{}).Handler())
 	t.Cleanup(hlSrv.Close)

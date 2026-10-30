@@ -49,8 +49,8 @@ func main() {
 		maxReaders  = flag.Int("max-readers", 4, "concurrent read snapshots per tenant")
 		queryTO     = flag.Duration("query-timeout", 5*time.Second, "execution deadline of a read (/query, read-only /tx); negative = off")
 		writeTO     = flag.Duration("write-timeout", 10*time.Second, "execution deadline of a write transaction; it holds the tenant actor; negative = off")
-		maxRows     = flag.Int("max-result-rows", 100_000, "max rows per query response; negative = off")
-		maxBytes    = flag.Int64("max-result-bytes", 64<<20, "max estimated bytes of decoded values per query response; negative = off")
+		maxRows     = flag.Int("max-result-rows", 100_000, "max rows per read response (/query, read-only /tx); negative = off")
+		maxBytes    = flag.Int64("max-result-bytes", 64<<20, "max estimated bytes per response, reads and write transactions; negative = off")
 	)
 	flag.Parse()
 	if *bucket == "" {

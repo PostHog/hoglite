@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -382,17 +384,22 @@ func TestResultRowLimit(t *testing.T) {
 	if !errors.Is(err, ErrResultTooLarge) {
 		t.Fatalf("read-only tx 6+6 rows: want ErrResultTooLarge, got %v", err)
 	}
-	// a write with too many RETURNING rows rolls back
-	_, _, err = ten.SubmitTx(TxRequest{Client: "c", TxID: "w", Stmts: []Statement{{
-		SQL: `WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c LIMIT 11)
-			INSERT INTO kv(k, v) SELECT x, 'v' FROM c WHERE true RETURNING k`}}})
-	if !errors.Is(err, ErrResultTooLarge) {
-		t.Fatalf("write with 11 returned rows: want ErrResultTooLarge, got %v", err)
+	// a write transaction has no row limit (guard rows of large commits),
+	// only the byte limit (TestResultByteLimit)
+	var stmts []Statement
+	for i := 0; i < 12; i++ {
+		one := int64(0)
+		stmts = append(stmts, Statement{SQL: `SELECT count(*) FROM kv`, ExpectScalarInt: &one})
 	}
-	if n := countRows(t, m, "t1"); n != 0 {
-		t.Fatalf("refused write left %d rows", n)
+	stmts = append(stmts, Statement{SQL: `WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c LIMIT 11)
+			INSERT INTO kv(k, v) SELECT x, 'v' FROM c WHERE true RETURNING k`})
+	if _, _, err = ten.SubmitTx(TxRequest{Client: "c", TxID: "w", Stmts: stmts}); err != nil {
+		t.Fatalf("write with 23 result rows: %v", err)
 	}
-	if met.ResultTooLarge.Load() != 3 {
+	if n := countRows(t, m, "t1"); n != 11 {
+		t.Fatalf("write rows = %d", n)
+	}
+	if met.ResultTooLarge.Load() != 2 {
 		t.Fatalf("result too large metric = %d", met.ResultTooLarge.Load())
 	}
 	slotsFree(t, ten, met)
@@ -415,28 +422,94 @@ func TestResultByteLimit(t *testing.T) {
 			t.Fatalf("%s: want ErrResultTooLarge, got %v", q, err)
 		}
 	}
+	// a write whose RETURNING rows pass the byte limit rolls back
+	_, _, err := ten.SubmitTx(TxRequest{Client: "c", TxID: "w", Stmts: []Statement{{
+		SQL: `WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c LIMIT 50)
+			INSERT INTO kv(k, v) SELECT x, hex(zeroblob(100)) FROM c WHERE true RETURNING v`}}})
+	if !errors.Is(err, ErrResultTooLarge) {
+		t.Fatalf("write over the byte limit: want ErrResultTooLarge, got %v", err)
+	}
+	if n := countRows(t, m, "t1"); n != 0 {
+		t.Fatalf("refused write left %d rows", n)
+	}
+	if _, dup, err := ten.SubmitTx(TxRequest{Client: "c", TxID: "w", Stmts: []Statement{insertStmt(1, "v")}}); err != nil || dup {
+		t.Fatalf("txid of the refused write: dup=%v err=%v", dup, err)
+	}
 }
 
-// The estimate is at least the JSON size for numbers and plain text.
+// The estimate is at least the JSON size of a whole response made of
+// numbers, timestamps and plain text: containers, column names, rows and
+// values are all charged.
 func TestResultLimitEstimate(t *testing.T) {
-	vals := []any{int64(-9223372036854775808), 1.2345678901234567e-300, nil, "hello", []byte("blob")}
-	l := &resultLimit{}
-	if err := l.addRow(vals); err != nil {
-		t.Fatal(err)
-	}
-	conv := make([]any, len(vals))
-	for i, v := range vals {
-		conv[i] = jsonValue(v)
-	}
-	js, _ := json.Marshal([][]any{conv})
-	if l.bytes < int64(len(js)) {
-		t.Fatalf("estimate %d below JSON size %d", l.bytes, len(js))
+	vals := []any{int64(-9223372036854775808), -1.2345678901234567e-300, nil, "hello", []byte("blob"),
+		time.Date(2026, 10, 30, 11, 22, 33, 123456789, time.FixedZone("x", 3600))}
+	cols := []string{"a", "bb", "ccc", "d", "e", "f"}
+	for _, nrows := range []int{0, 1, 3} {
+		l := &resultLimit{}
+		res := []QueryResult{{Affected: -1 << 63}} // a write statement: no cols, no rows
+		if err := l.addResult(nil); err != nil {
+			t.Fatal(err)
+		}
+		qr := QueryResult{Cols: cols, Affected: -1 << 63}
+		if err := l.addResult(cols); err != nil {
+			t.Fatal(err)
+		}
+		for i := 0; i < nrows; i++ {
+			if err := l.addRow(vals); err != nil {
+				t.Fatal(err)
+			}
+			conv := make([]any, len(vals))
+			for i, v := range vals {
+				conv[i] = jsonValue(v)
+			}
+			qr.Rows = append(qr.Rows, conv)
+		}
+		res = append(res, qr)
+		js, _ := json.Marshal(res)
+		if l.bytes < int64(len(js)) {
+			t.Fatalf("%d rows: estimate %d below JSON size %d: %s", nrows, l.bytes, len(js), js)
+		}
 	}
 	off := &resultLimit{} // zero limits: no limit
 	for i := 0; i < 1000; i++ {
 		if err := off.addRow(vals); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+// Empty results are charged too: column metadata alone can pass the
+// byte budget (review of Q2, finding 2).
+func TestResultLimitEmptyResults(t *testing.T) {
+	o := guardOpts()
+	o.MaxResultBytes = 512
+	_, ten, met := guardTenant(t, o)
+	label := strings.Repeat("label", 60) // 300 bytes
+	if _, err := ten.SubmitQuery(Statement{SQL: `SELECT 1 AS "` + label + `" WHERE 0`}); err != nil {
+		t.Fatalf("one empty result within budget: %v", err)
+	}
+	_, err := ten.SubmitQuery(Statement{SQL: `SELECT 1 AS "` + label + `", 2 AS "` + label + `x" WHERE 0`})
+	if !errors.Is(err, ErrResultTooLarge) {
+		t.Fatalf("column names over budget: want ErrResultTooLarge, got %v", err)
+	}
+	// many empty results in one read-only /tx share the budget
+	var stmts []Statement
+	for i := 0; i < 10; i++ {
+		stmts = append(stmts, Statement{SQL: `SELECT 1 AS x WHERE 0`})
+	}
+	if _, _, err := ten.SubmitTx(TxRequest{Client: "c", TxID: "r", Stmts: stmts}); !errors.Is(err, ErrResultTooLarge) {
+		t.Fatalf("10 empty results: want ErrResultTooLarge, got %v", err)
+	}
+	// and so do write statements without rows
+	stmts = stmts[:0]
+	for i := 0; i < 10; i++ {
+		stmts = append(stmts, insertStmt(int64(i), "v"))
+	}
+	if _, _, err := ten.SubmitTx(TxRequest{Client: "c", TxID: "w", Stmts: stmts}); !errors.Is(err, ErrResultTooLarge) {
+		t.Fatalf("10 inserts: want ErrResultTooLarge, got %v", err)
+	}
+	if met.ResultTooLarge.Load() != 3 {
+		t.Fatalf("result too large metric = %d", met.ResultTooLarge.Load())
 	}
 }
 
@@ -528,3 +601,185 @@ func TestGuardHTTPStatus(t *testing.T) {
 		}
 	}
 }
+
+// A closed tenant returns the tenant slot of a non-durable outcome in both
+// schedules: the outcome was queued in readDone before the close, or the
+// worker finished after it (review of Q2, finding 3).
+func TestNonDurableCloseReturnsSlots(t *testing.T) {
+	for _, finishBeforeClose := range []bool{true, false} {
+		name := "worker-after-close"
+		if finishBeforeClose {
+			name = "queued-before-close"
+		}
+		t.Run(name, func(t *testing.T) {
+			fs := NewFakeStore()
+			met := &Metrics{}
+			m := newReadTestManager(t, fs, guardOpts(), met)
+			t.Cleanup(m.ShutdownAll)
+			ten, err := m.Acquire(context.Background(), "t1", true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			makeSchema(t, m, "t1")
+			upload := make(chan struct{})
+			defer close(upload)
+			fs.FailPutSegment = func(string) bool { <-upload; return false }
+			wr := make(chan error, 1)
+			go func() {
+				_, _, e := ten.SubmitTx(TxRequest{Client: "c", TxID: "w", Stmts: []Statement{insertStmt(1, "pending")}})
+				wr <- e
+			}()
+			waitFor(t, "unshipped write", func() bool {
+				return onActor(ten, func() bool { end, _ := ten.currentCommitEnd(); return end > ten.durableOff })
+			})
+			hook, pinned, workerGate := blockingHook()
+			ten.readHook = hook
+			rd := goQuery(context.Background(), ten, `SELECT count(*) FROM kv`)
+			waitPinned(t, pinned)
+			actorEntered, actorGate, actorDone := make(chan struct{}), make(chan struct{}), make(chan struct{})
+			ten.ctlCh <- func() { close(actorEntered); <-actorGate; ten.failLocked(ErrClosed); close(actorDone) }
+			<-actorEntered
+			if finishBeforeClose {
+				close(workerGate)
+				waitFor(t, "queued outcome", func() bool { return len(ten.readDone) == 1 })
+			}
+			close(actorGate)
+			<-actorDone
+			if !finishBeforeClose {
+				close(workerGate)
+			}
+			if r := recvRead(t, rd, time.Second); r.err == nil {
+				t.Fatal("non-durable success after close")
+			}
+			<-wr
+			waitFor(t, "slots returned after close", func() bool {
+				ten.pool.mu.Lock()
+				defer ten.pool.mu.Unlock()
+				return ten.pool.free == 0 && ten.pool.queued == 0 && met.QueriesInflight.Load() == 0 &&
+					len(ten.readSlots) == 0 && len(ten.readDone) == 0
+			})
+		})
+	}
+}
+
+// The commit decision happens after the statements: a transaction whose
+// statements and receipt all succeeded but whose deadline passed before
+// the decision rolls back, writes no receipt, and its txid runs again
+// (review of Q2, finding 4). txHook models a scheduler pause there.
+func TestWriteDeadlineAfterStatements(t *testing.T) {
+	m, ten, met := guardTenant(t, guardOpts())
+	onActor(ten, func() bool {
+		ten.opts.WriteTimeout = 30 * time.Millisecond
+		ten.txHook = func() { time.Sleep(60 * time.Millisecond) }
+		return true
+	})
+	req := TxRequest{Client: "c", TxID: "boundary", Stmts: []Statement{insertStmt(1, "must-rollback")}}
+	_, _, err := ten.SubmitTx(req)
+	onActor(ten, func() bool { ten.txHook = nil; ten.opts.WriteTimeout = guardOpts().WriteTimeout; return true })
+	if !errors.Is(err, ErrQueryTimeout) {
+		t.Fatalf("finished statements past the deadline: want ErrQueryTimeout, got %v", err)
+	}
+	if met.WriteTimeouts.Load() != 1 {
+		t.Fatalf("write timeouts metric = %d", met.WriteTimeouts.Load())
+	}
+	if n := countRows(t, m, "t1"); n != 0 {
+		t.Fatalf("timed-out row visible: %d rows", n)
+	}
+	receipts := onActor(ten, func() (n int64) {
+		ten.db.QueryRow(`SELECT count(*) FROM _hw_dedup WHERE txid='boundary'`).Scan(&n)
+		return n
+	})
+	if receipts != 0 {
+		t.Fatalf("receipt of the timed-out tx recorded")
+	}
+	if _, dup, err := ten.SubmitTx(req); err != nil || dup {
+		t.Fatalf("retry: dup=%v err=%v", dup, err)
+	}
+	if n := countRows(t, m, "t1"); n != 1 {
+		t.Fatalf("retry rows = %d", n)
+	}
+}
+
+// A dedup hit replays the stored result as it is, also when the result
+// limit was lowered since (I2). A fresh transaction meets the new limit.
+func TestDedupReplayIgnoresNewLimit(t *testing.T) {
+	_, ten, _ := guardTenant(t, guardOpts())
+	req := TxRequest{Client: "c", TxID: "large", Stmts: []Statement{insertStmt(1, "v"), {SQL: `VALUES (1),(2),(3),(4),(5)`}}}
+	if _, _, err := ten.SubmitTx(req); err != nil {
+		t.Fatal(err)
+	}
+	onActor(ten, func() bool { ten.opts.MaxResultBytes = 200; return true })
+	res, dup, err := ten.SubmitTx(req)
+	if err != nil || !dup || len(res) != 2 || len(res[1].Rows) != 5 {
+		t.Fatalf("replay: dup=%v err=%v res=%v", dup, err, res)
+	}
+	fresh := TxRequest{Client: "c", TxID: "fresh", Stmts: []Statement{insertStmt(2, "v"), {SQL: `VALUES (1),(2),(3),(4),(5)`}}}
+	if _, _, err := ten.SubmitTx(fresh); !errors.Is(err, ErrResultTooLarge) {
+		t.Fatalf("fresh write: want ErrResultTooLarge, got %v", err)
+	}
+}
+
+// The handle lookup works with the linked driver, and /info and /metrics
+// say so; a failed lookup is counted.
+func TestInterruptSupportVisible(t *testing.T) {
+	if err := interruptSupport(); err != nil {
+		t.Fatalf("interrupt unavailable with the linked driver: %v", err)
+	}
+	m, ten, met := guardTenant(t, guardOpts())
+	if v, ok := m.Stats()["sqlite_interrupt"].(bool); !ok || !v {
+		t.Fatalf("/info sqlite_interrupt = %v", m.Stats()["sqlite_interrupt"])
+	}
+	srv := httptest.NewServer(NewServer(m, nil).Handler())
+	t.Cleanup(srv.Close)
+	resp, err := http.Get(srv.URL + "/metrics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var b bytes.Buffer
+	b.ReadFrom(resp.Body)
+	resp.Body.Close()
+	for _, want := range []string{"hoglite_sqlite_interrupt_available 1\n", "hoglite_interrupt_handle_misses_total 0\n"} {
+		if !strings.Contains(b.String(), want) {
+			t.Fatalf("metrics lack %q", want)
+		}
+	}
+	// the handle of a sqlite connection is found and not counted
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	c, err := db.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if h := ten.connHandle(c); h == 0 || met.InterruptMisses.Load() != 0 {
+		t.Fatalf("connHandle = %x, misses %d", h, met.InterruptMisses.Load())
+	}
+	// a connection without the expected field (as after a driver change)
+	// gives no handle and is counted
+	other := sql.OpenDB(noHandleConnector{})
+	defer other.Close()
+	oc, err := other.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer oc.Close()
+	if h := ten.connHandle(oc); h != 0 || met.InterruptMisses.Load() != 1 {
+		t.Fatalf("connHandle = %x, misses %d", h, met.InterruptMisses.Load())
+	}
+}
+
+// noHandleConnector yields driver connections that are not sqlite's.
+type noHandleConnector struct{}
+
+type noHandleConn struct{ db uintptr }
+
+func (noHandleConnector) Connect(context.Context) (driver.Conn, error) {
+	return &noHandleConn{db: 1}, nil
+}
+func (noHandleConnector) Driver() driver.Driver           { return nil }
+func (*noHandleConn) Prepare(string) (driver.Stmt, error) { return nil, errors.New("no") }
+func (*noHandleConn) Close() error                        { return nil }
+func (*noHandleConn) Begin() (driver.Tx, error)           { return nil, errors.New("no") }
