@@ -14,6 +14,7 @@ package hoglite
 // from a user-supplied one here.
 
 import (
+	"errors"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -34,7 +35,21 @@ var authorizerHookOnce sync.Once
 
 func registerAuthorizerOnce() {
 	authorizerHookOnce.Do(func() {
-		sqlite.RegisterConnectionHook(func(c sqlite.ExecQuerierContext, _ string) error {
+		sqlite.RegisterConnectionHook(func(c sqlite.ExecQuerierContext, dsn string) error {
+			// A read can outlive its tenant's close by a short time (see
+			// closeReaders). If that read connection is the last one, SQLite
+			// would checkpoint and then unlink the WAL and shm files by path.
+			// A re-acquire may already have new files there. PERSIST_WAL
+			// keeps the close from unlinking anything.
+			if strings.Contains(dsn, "query_only(1)") {
+				fc, ok := c.(sqlite.FileControl)
+				if !ok {
+					return errors.New("read-only connection without file control")
+				}
+				if _, err := fc.FileControlPersistWAL("main", 1); err != nil {
+					return err
+				}
+			}
 			reg, ok := c.(sqlite.AuthorizerRegisterer)
 			if !ok {
 				return nil

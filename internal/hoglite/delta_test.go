@@ -77,8 +77,8 @@ type tlog struct{ t *testing.T }
 
 func (l tlog) Printf(format string, args ...any) { l.t.Logf(format, args...) }
 
-// onActor runs f on the tenant's actor goroutine and waits for it.
-func onActor(t *testing.T, ten *Tenant, f func()) {
+// onActorT runs f on the tenant's actor goroutine and waits for it.
+func onActorT(t *testing.T, ten *Tenant, f func()) {
 	t.Helper()
 	done := make(chan struct{})
 	ten.ctlCh <- func() { defer close(done); f() }
@@ -89,9 +89,9 @@ func onActor(t *testing.T, ten *Tenant, f func()) {
 	}
 }
 
-// checkpointNow checkpoints on the actor. It returns the local database
+// checkpointFold checkpoints on the actor. It returns the local database
 // file right after the fold and the manifest the checkpoint published.
-func checkpointNow(t *testing.T, ten *Tenant) ([]byte, Manifest) {
+func checkpointFold(t *testing.T, ten *Tenant) ([]byte, Manifest) {
 	t.Helper()
 	var (
 		ok    bool
@@ -99,7 +99,7 @@ func checkpointNow(t *testing.T, ten *Tenant) ([]byte, Manifest) {
 		mf    Manifest
 		err   error
 	)
-	onActor(t, ten, func() {
+	onActorT(t, ten, func() {
 		ok = ten.checkpointLocked("")
 		if ok {
 			local, err = os.ReadFile(ten.dbPath)
@@ -245,11 +245,11 @@ func TestDeltaByteIdentity(t *testing.T) {
 				maxChain := 0
 				for r := 0; r < rounds; r++ {
 					var werr error
-					onActor(t, ten, func() { werr = randomWork(ten, rng, r) })
+					onActorT(t, ten, func() { werr = randomWork(ten, rng, r) })
 					if werr != nil {
 						t.Fatal(werr)
 					}
-					local, mf := checkpointNow(t, ten)
+					local, mf := checkpointFold(t, ten)
 					if mf.Format != manifestFormatChain {
 						t.Fatalf("round %d: format %d", r, mf.Format)
 					}
@@ -279,7 +279,7 @@ func TestDeltaByteIdentity(t *testing.T) {
 				// applies the chain and replays the segments
 				var want string
 				var werr error
-				onActor(t, ten, func() {
+				onActorT(t, ten, func() {
 					werr = randomWork(ten, rng, rounds)
 					ten.cutSegment()
 				})
@@ -287,7 +287,7 @@ func TestDeltaByteIdentity(t *testing.T) {
 					t.Fatal(werr)
 				}
 				mustTx(t, m, "t1", "c", "last", Statement{SQL: `CREATE TABLE IF NOT EXISTS last(x)`})
-				onActor(t, ten, func() { want = dbDigest(ten) })
+				onActorT(t, ten, func() { want = dbDigest(ten) })
 				crashTenant(t, m, "t1")
 				waitLeaseExpiry()
 				m2 := newTestManager(t, fs, "b")
@@ -296,7 +296,7 @@ func TestDeltaByteIdentity(t *testing.T) {
 					t.Fatal(err)
 				}
 				var got string
-				onActor(t, ten2, func() { got = dbDigest(ten2) })
+				onActorT(t, ten2, func() { got = dbDigest(ten2) })
 				if got != want {
 					t.Fatalf("recovered content differs:\n got %s\nwant %s", got, want)
 				}
@@ -431,7 +431,7 @@ func chainTenant(t *testing.T, m *Manager, n, tail int) int64 {
 	for i := 0; i < n; i++ {
 		mustTx(t, m, "t1", "c", fmt.Sprintf("d%d", i), insertStmt(rows, strings.Repeat("d", 3000)))
 		rows++
-		checkpointNow(t, ten)
+		checkpointFold(t, ten)
 	}
 	for i := 0; i < tail; i++ {
 		mustTx(t, m, "t1", "c", fmt.Sprintf("s%d", i), insertStmt(rows, strings.Repeat("s", 3000)))
@@ -497,7 +497,7 @@ func TestDeltaChainShape(t *testing.T) {
 		return n
 	}
 	objs := ckptKeys()
-	_, mf2 := checkpointNow(t, m.LocalTenant("t1"))
+	_, mf2 := checkpointFold(t, m.LocalTenant("t1"))
 	if mf2.Gen != mf.Gen+1 || mf2.BaseKey != mf.BaseKey || len(mf2.Deltas) != 3 {
 		t.Fatalf("empty checkpoint: %+v", mf2)
 	}
@@ -567,14 +567,14 @@ func TestDeltaChainRebase(t *testing.T) {
 		}
 		mustTx(t, m, "t1", "c", "x", insertStmt(rows, "x"))
 		rows++
-		_, mf := checkpointNow(t, m.LocalTenant("t1"))
+		_, mf := checkpointFold(t, m.LocalTenant("t1"))
 		if len(mf.Deltas) != 0 || mf.BaseKey == old.BaseKey || mf.Format != manifestFormatChain {
 			t.Fatalf("rebase: %+v", mf)
 		}
 		if met.Rebases.Load() != 2 { // the create and this rebase
 			t.Fatalf("rebases %d", met.Rebases.Load())
 		}
-		waitFor(t, func() bool {
+		waitCond(t, func() bool {
 			for _, k := range manifestObjects(old) {
 				if hasKey(fs, k) {
 					return false
@@ -601,14 +601,14 @@ func TestDeltaChainRebase(t *testing.T) {
 		// passes half of it
 		mustTx(t, m, "t1", "c", "big", Statement{SQL: `CREATE TABLE big(v BLOB)`},
 			Statement{SQL: `INSERT INTO big VALUES (randomblob(400000))`})
-		checkpointNow(t, ten)
+		checkpointFold(t, ten)
 		mustTx(t, m, "t1", "c", "small", Statement{SQL: `CREATE TABLE small(k INTEGER PRIMARY KEY, v BLOB)`})
-		_, mf := checkpointNow(t, ten)
+		_, mf := checkpointFold(t, ten)
 		rebases := met.Rebases.Load()
 		for i := 0; i < 200 && met.Rebases.Load() == rebases; i++ {
 			mustTx(t, m, "t1", "c", fmt.Sprintf("s%d", i),
 				Statement{SQL: `INSERT INTO small VALUES (?, randomblob(30000))`, Args: []any{i}})
-			_, mf = checkpointNow(t, ten)
+			_, mf = checkpointFold(t, ten)
 			var sum int64
 			for _, d := range mf.Deltas {
 				sum += d.Size
@@ -623,7 +623,7 @@ func TestDeltaChainRebase(t *testing.T) {
 	})
 }
 
-func waitFor(t *testing.T, cond func() bool) {
+func waitCond(t *testing.T, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for !cond() {
@@ -686,7 +686,7 @@ func TestDeltaCrashPoints(t *testing.T) {
 			}
 			ten := m.LocalTenant("t1")
 			var ok bool
-			onActor(t, ten, func() { ok = ten.checkpointLocked("") })
+			onActorT(t, ten, func() { ok = ten.checkpointLocked("") })
 			mid := getManifest(t, hs, "t1")
 			if strings.HasPrefix(name, "after-cas") {
 				if !ok || mid.Gen != before.Gen+1 {
@@ -949,7 +949,7 @@ func TestDeltasOffWritesOldFormats(t *testing.T) {
 	if mf.Format != manifestFormatZstd || len(mf.Deltas) != 0 || mf.BaseSize != 0 || !strings.Contains(mf.BaseKey, "/base/") {
 		t.Fatalf("deltas off: %+v", mf)
 	}
-	waitFor(t, func() bool {
+	waitCond(t, func() bool {
 		for _, k := range manifestObjects(old) {
 			if hasKey(fs, k) {
 				return false
@@ -1039,7 +1039,7 @@ func TestDeltaMeasure(t *testing.T) {
 		mustCreate(t, m, "t1")
 		ten := m.LocalTenant("t1")
 		var err error
-		onActor(t, ten, func() {
+		onActorT(t, ten, func() {
 			_, err = ten.db.Exec(`CREATE TABLE ev(k INTEGER PRIMARY KEY, team INTEGER, name TEXT, props TEXT)`)
 			if err == nil {
 				_, err = ten.db.Exec(`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i < 120000)
@@ -1049,7 +1049,7 @@ func TestDeltaMeasure(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		local, _ := checkpointNow(t, ten)
+		local, _ := checkpointFold(t, ten)
 		base0, stored0 := met.BaseBytes.Load(), met.BaseStoredBytes.Load()
 		ms0 := met.CheckpointMs.Load()
 		rng := rand.New(rand.NewSource(1))
@@ -1063,7 +1063,7 @@ func TestDeltaMeasure(t *testing.T) {
 					mustTx(t, m, "t1", "c", fmt.Sprintf("i%d-%d", c, i), Statement{SQL: `INSERT INTO ev VALUES (NULL, 7, 'new', ?)`, Args: []any{strings.Repeat("p", 200)}})
 				}
 			}
-			checkpointNow(t, ten)
+			checkpointFold(t, ten)
 		}
 		up := met.BaseStoredBytes.Load() - stored0 + met.DeltaStoredBytes.Load()
 		raw := met.BaseBytes.Load() - base0 + met.DeltaBytes.Load()
@@ -1097,13 +1097,13 @@ func chainLimitRun(t *testing.T, long bool) {
 	makeSchema(t, m, "t1")
 	ten := m.LocalTenant("t1")
 	// past the constructor too: the checkpoint itself caps the chain
-	onActor(t, ten, func() { ten.opts.DeltaMaxChain = 4 * maxChainLen })
+	onActorT(t, ten, func() { ten.opts.DeltaMaxChain = 4 * maxChainLen })
 	var rows int64
 	fill := func() { // checkpoints until the chain is exactly at the limit
 		for i := 0; ; i++ {
 			mustTx(t, m, "t1", "c", fmt.Sprint(rows), insertStmt(rows, "x"))
 			rows++
-			_, mf := checkpointNow(t, ten)
+			_, mf := checkpointFold(t, ten)
 			if len(mf.Deltas) > maxChainLen {
 				t.Fatalf("checkpoint %d published a chain of %d, reader limit %d", i, len(mf.Deltas), maxChainLen)
 			}
@@ -1120,7 +1120,7 @@ func chainLimitRun(t *testing.T, long bool) {
 		// one checkpoint past a full chain must rebase, then fill again
 		mustTx(t, m, "t1", "c", fmt.Sprint(rows), insertStmt(rows, "x"))
 		rows++
-		if _, mf := checkpointNow(t, ten); len(mf.Deltas) != 0 {
+		if _, mf := checkpointFold(t, ten); len(mf.Deltas) != 0 {
 			t.Fatalf("checkpoint past the limit: chain %d, want a rebase", len(mf.Deltas))
 		}
 		fill()
@@ -1298,7 +1298,7 @@ func TestDeltaRecoveryWindow(t *testing.T) {
 	fs := NewFakeStore()
 	m, _ := newTestManagerOpts(t, fs, "a", chainOpts)
 	chainTenant(t, m, 3*deltaFetchParallel, 0)
-	local, mf := checkpointNow(t, m.LocalTenant("t1"))
+	local, mf := checkpointFold(t, m.LocalTenant("t1"))
 	if len(mf.Deltas) <= 2*deltaFetchParallel {
 		t.Fatalf("chain %d", len(mf.Deltas))
 	}

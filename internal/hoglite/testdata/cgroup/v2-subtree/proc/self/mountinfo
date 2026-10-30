@@ -1,0 +1,2 @@
+22 1 8:1 / / rw,relatime - ext4 /dev/sda1 rw
+29 23 0:26 /slice/parent /sys/fs/cgroup rw,nosuid shared:4 - cgroup2 cgroup2 rw,nsdelegate

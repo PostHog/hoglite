@@ -59,6 +59,30 @@ type Metrics struct {
 	DeltaStoredBytes atomic.Int64
 	Rebases          atomic.Int64
 	CheckpointMs     atomic.Int64
+	// pod-wide query admission (TenantOpts.PodMaxQueries): queries that
+	// hold a slot, and queries waiting for one
+	QueriesInflight atomic.Int64
+	QueriesWaiting  atomic.Int64
+	// read results that wait for durability (reads.go): results parked on
+	// the tenant actors, bytes held in the pod park budget (including
+	// results on their way to the actor), and workers waiting for budget
+	ParkedReads atomic.Int64
+	ParkedBytes atomic.Int64
+	ParkWaiting atomic.Int64
+	// query guards (guards.go): reads and write transactions stopped at
+	// their deadline, and queries refused for a too large result
+	ReadTimeouts   atomic.Int64
+	WriteTimeouts  atomic.Int64
+	ResultTooLarge atomic.Int64
+	// failed sqlite handle lookups (guards.go connHandle): each one is a
+	// query or write that only the driver's own checks can stop
+	InterruptMisses atomic.Int64
+	// statements that failed with SQLITE_NOMEM at the SQLite heap limit
+	// (memory.go)
+	OutOfMemory atomic.Int64
+	// per-tenant execution accounting of the tenants that share this
+	// Metrics (usage.go)
+	usage usageTracker
 }
 
 // ewmaUpdate folds a sample into an atomic EWMA with alpha=1/8.
@@ -136,6 +160,7 @@ type Manager struct {
 	// without deltas: the format gate stops at format 1. Tests only.
 	legacyReadForTest bool
 	s1ReadForTest     bool
+	qlim              *queryLimiter // bounds admitted queries across all tenants
 
 	maxOpen int // soft cap on simultaneously open tenants
 
@@ -184,6 +209,12 @@ func NewManagerSat(store Backend, prefix, id, class, baseDir string, opts Tenant
 	if metrics.Logger == nil {
 		m.metrics.Logger = log.New(io.Discard, "", 0)
 	}
+	if err := interruptSupport(); err != nil {
+		m.metrics.Logger.Printf("WARNING: sqlite interrupt unavailable (%v): query deadlines and cancels cannot stop a statement after its first row; check the modernc.org/sqlite version", err)
+	}
+	if err := SQLiteMemStatus(); err != nil {
+		m.metrics.Logger.Printf("WARNING: %v: the sqlite heap limits have no effect, so a large query can grow the process to the OOM killer", err)
+	}
 	m.leaseStop = make(chan struct{})
 	// 8 concurrent drains per pod: enough to absorb release bursts without
 	// turning them into S3 storms
@@ -194,12 +225,15 @@ func NewManagerSat(store Backend, prefix, id, class, baseDir string, opts Tenant
 	// near 100 MiB (550 MiB worst case) in a failover burst. Claims (4 lanes) are the slower stage, so
 	// this does not limit takeover throughput.
 	m.decodeSem = make(chan struct{}, 32)
+	m.qlim = newQueryLimiter(opts, m.metrics)
+	m.metrics.usage.configure(opts.UsageTopN, opts.UsageInterval, opts.UsageHalfLife)
 	// the first heartbeat is synchronous: no tenant may start before the
 	// write gate has a clock
 	m.heartbeatLease()
 	go m.leaseLoop()
 	go m.evictLoop()
 	go m.watchdogLoop()
+	go m.metrics.usage.loop(m.leaseStop)
 	m.ctrl = ctrl
 	if ctrl.Enabled {
 		go m.reclassLoop() // standard: promote hot; whale: demote cold
@@ -591,9 +625,10 @@ func (m *Manager) createTenant(ctx context.Context, tid, class string) (*Tenant,
 	if err == nil {
 		t.ckptSem = m.ckptSem
 		t.claimSem = m.claimSem
+		t.qlim = m.qlim
 	}
 	if err != nil {
-		return nil, err
+		return nil, memErr(err, m.metrics)
 	}
 	t.onClose = m.noteClosed
 	t.onPoison = m.notePoisoned
@@ -647,6 +682,15 @@ func (m *Manager) takeOver(ctx context.Context, tid string, mf *Manifest, etag s
 	if err == nil {
 		t.ckptSem = m.ckptSem
 		t.claimSem = m.claimSem
+		t.qlim = m.qlim
+	}
+	if err != nil && isNoMem(err) {
+		// SQLITE_NOMEM at the heap limit is memory pressure, not a broken
+		// cache: a second download of the base and chain would not help
+		// and would add load. Fail the claim as a memory error (507). The
+		// manifest is untouched, and the cooldown damps request retries.
+		coolFailedClaim()
+		return nil, memErr(err, m.metrics)
 	}
 	if err != nil {
 		// local cache may be corrupt (disk, partial write): wipe and
@@ -665,10 +709,11 @@ func (m *Manager) takeOver(ctx context.Context, tid string, mf *Manifest, etag s
 		if err == nil {
 			t.ckptSem = m.ckptSem
 			t.claimSem = m.claimSem
+			t.qlim = m.qlim
 		}
 		if err != nil {
 			coolFailedClaim()
-			return nil, err
+			return nil, memErr(err, m.metrics)
 		}
 	}
 	t.onClose = m.noteClosed
@@ -1185,6 +1230,9 @@ func (m *Manager) Stats() map[string]any {
 		"checkpoint_ms": m.metrics.CheckpointMs.Load(),
 		"acquires":      m.metrics.Acquires.Load(), "checkpoints": m.metrics.Checkpoints.Load(),
 		"proxied": m.metrics.Proxied.Load(), "evictions": m.metrics.Evictions.Load(),
-		"dedup_hits": m.metrics.DedupHits.Load(),
+		"dedup_hits":       m.metrics.DedupHits.Load(),
+		"sqlite_interrupt": interruptSupport() == nil,
+		"memory":           memoryInfo(m.metrics),
+		"usage":            m.metrics.usage.info(),
 	}
 }

@@ -8,8 +8,9 @@ package main
 //   - changes holds the typed change rows. It is the conflict-scan
 //     index: (object_id, snapshot_id) makes the scan O(window).
 //   - snapshots.changes_json is a denormalized copy for listings.
-//   - dvs holds ONE live deletion vector per data file. A supersession
-//     overwrites the row and bumps epoch. History is not kept.
+//   - dvs keeps the history of deletion vectors: one row per data file
+//     and epoch. A supersession inserts a new row with the next epoch.
+//     The live vector of a file is the row with the highest epoch.
 //   - offsets holds consumer positions. They are monotonic.
 var bootstrap = []stmt{
 	{SQL: `CREATE TABLE IF NOT EXISTS meta(

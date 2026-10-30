@@ -97,6 +97,34 @@ type apiError struct {
 	// structured guard failure detail (typed refusals downstream)
 	GuardIndex int    `json:"guard_index,omitempty"`
 	GuardKind  string `json:"guard_kind,omitempty"`
+	// Code names a query guard refusal: query_timeout, result_too_large,
+	// out_of_memory
+	Code string `json:"code,omitempty"`
+}
+
+// guardStatus maps a query guard refusal to its HTTP status. Both are
+// deterministic for the same request and data, so neither uses 503, the
+// status that clients retry. 409 and 422 also keep their meaning (guard
+// failure, SQL error): the REST adapter acts on both. A timed-out write
+// rolled back and wrote no dedup receipt, so a later retry runs it again.
+//
+// SQLITE_NOMEM at the SQLite heap limit (memory.go) is 507 with code
+// out_of_memory. It is not 503 either: a query that alone needs more than
+// the limit fails the same way on every retry, and a retry loop keeps the
+// pod at its memory limit for every tenant. Before the cap it was a plain
+// SQL error (422 for /tx, 409 for /query), which the REST adapter reads as
+// a constraint or guard failure. The statement rolled back; a write wrote
+// no dedup receipt.
+func guardStatus(err error) (int, apiError, bool) {
+	switch {
+	case errors.Is(err, ErrOutOfMemory):
+		return 507, apiError{Error: err.Error(), Code: "out_of_memory"}, true
+	case errors.Is(err, ErrQueryTimeout):
+		return 504, apiError{Error: err.Error(), Code: "query_timeout"}, true
+	case errors.Is(err, ErrResultTooLarge):
+		return 413, apiError{Error: err.Error(), Code: "result_too_large"}, true
+	}
+	return 0, apiError{}, false
 }
 
 func (s *Server) wrap(h func(http.ResponseWriter, *http.Request) (int, any)) http.HandlerFunc {
@@ -121,7 +149,20 @@ func decodeBody(r *http.Request, v any) error {
 	return dec.Decode(v)
 }
 
+// acquireError is the body for a failed acquisition. A guard refusal
+// (for example SQLITE_NOMEM while the tenant opens) keeps its code, so
+// clients see out_of_memory as they do for a query.
+func acquireError(err error) apiError {
+	if _, ae, ok := guardStatus(err); ok {
+		return ae
+	}
+	return apiError{Error: err.Error()}
+}
+
 func errCode(err error) int {
+	if code, _, ok := guardStatus(err); ok {
+		return code
+	}
 	switch {
 	case errors.Is(err, ErrNoTenant):
 		return 404
@@ -169,7 +210,30 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) (int, any
 	fmt.Fprintf(&b, "hoglite_swept_objects_total %d\n", m.SweptObjects.Load())
 	fmt.Fprintf(&b, "hoglite_open_tenants %d\n", s.mgr.OpenCount())
 	fmt.Fprintf(&b, "hoglite_inflight_segments %d\n", m.InflightSegs.Load())
+	fmt.Fprintf(&b, "hoglite_queries_inflight %d\n", m.QueriesInflight.Load())
+	fmt.Fprintf(&b, "hoglite_queries_waiting %d\n", m.QueriesWaiting.Load())
+	fmt.Fprintf(&b, "hoglite_parked_reads %d\n", m.ParkedReads.Load())
+	fmt.Fprintf(&b, "hoglite_parked_read_bytes %d\n", m.ParkedBytes.Load())
+	fmt.Fprintf(&b, "hoglite_parked_reads_waiting %d\n", m.ParkWaiting.Load())
 	fmt.Fprintf(&b, "hoglite_commit_latency_ewma_us %d\n", m.CommitEwmaUs.Load())
+	fmt.Fprintf(&b, "hoglite_read_timeouts_total %d\n", m.ReadTimeouts.Load())
+	fmt.Fprintf(&b, "hoglite_write_timeouts_total %d\n", m.WriteTimeouts.Load())
+	fmt.Fprintf(&b, "hoglite_result_too_large_total %d\n", m.ResultTooLarge.Load())
+	interruptOK := 0
+	if interruptSupport() == nil {
+		interruptOK = 1
+	}
+	fmt.Fprintf(&b, "hoglite_sqlite_interrupt_available %d\n", interruptOK)
+	fmt.Fprintf(&b, "hoglite_interrupt_handle_misses_total %d\n", m.InterruptMisses.Load())
+	sqUsed, sqHW := SQLiteMemory()
+	sqHard, sqSoft := SQLiteHeapLimits()
+	fmt.Fprintf(&b, "hoglite_sqlite_memory_used_bytes %d\n", sqUsed)
+	fmt.Fprintf(&b, "hoglite_sqlite_memory_highwater_bytes %d\n", sqHW)
+	fmt.Fprintf(&b, "hoglite_sqlite_heap_limit_bytes %d\n", sqHard)
+	fmt.Fprintf(&b, "hoglite_sqlite_soft_heap_limit_bytes %d\n", sqSoft)
+	fmt.Fprintf(&b, "hoglite_go_memory_limit_bytes %d\n", goMemoryLimit())
+	fmt.Fprintf(&b, "hoglite_out_of_memory_total %d\n", m.OutOfMemory.Load())
+	writeUsageMetrics(&b, &m.usage)
 	// saturation: max(commit-latency ratio, inflight ratio); 1.0 = at
 	// operating limit. This is the HPA target metric.
 	fmt.Fprintf(&b, "hoglite_saturation %.4f\n", s.mgr.Saturation())
@@ -205,7 +269,7 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) (int, any)
 				return 200, map[string]any{"tenant": tid, "owner": mf.OwnerAddr, "existing": true}
 			}
 		}
-		return errCode(err), apiError{Error: err.Error()}
+		return errCode(err), acquireError(err)
 	}
 	return 200, map[string]any{"tenant": tid, "owner": s.mgr.ID()}
 }
@@ -338,7 +402,7 @@ func (s *Server) localOrProxy(w http.ResponseWriter, r *http.Request, tid string
 	t, err := s.mgr.Acquire(ctx, tid, false)
 	if err != nil {
 		code := errCode(err)
-		ae := apiError{Error: err.Error()}
+		ae := acquireError(err)
 		if mf2, _, e2 := s.mgr.store.GetManifest(ctx, tid); e2 == nil && mf2 != nil {
 			// always the routable address, never the fencing identity
 			if mf2.OwnerAddr != "" {
@@ -414,8 +478,12 @@ func (s *Server) handleTx(w http.ResponseWriter, r *http.Request) (int, any) {
 		return 400, apiError{Error: "client and txid required"}
 	}
 	w.Header().Set("x-hw-owner", s.mgr.ID())
-	results, dup, err := t.SubmitTx(req)
+	results, dup, err := t.SubmitTxCtx(r.Context(), req)
 	if err != nil {
+		if code, ae, ok := guardStatus(err); ok {
+			ae.Owner = s.mgr.ID()
+			return code, ae
+		}
 		var ef *ExpectFailedError
 		switch {
 		case errors.As(err, &ef):
@@ -423,7 +491,8 @@ func (s *Server) handleTx(w http.ResponseWriter, r *http.Request) (int, any) {
 			// caller re-prepares; retrying the same payload is pointless
 			return 409, apiError{Error: "expect_failed: " + err.Error(), Owner: s.mgr.ID(),
 				GuardIndex: ef.Index + 1, GuardKind: ef.Guard}
-		case errors.Is(err, ErrNotOwner), errors.Is(err, ErrClosed):
+		case errors.Is(err, ErrNotOwner), errors.Is(err, ErrClosed), errors.Is(err, ErrReadPreempted),
+			errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 			return 503, apiError{Error: err.Error(), Owner: s.mgr.ID()} // transient: retry
 		default:
 			// transient infra errors (segment PUT timeouts, S3 throttling,
@@ -465,8 +534,16 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) (int, any) 
 		return 400, apiError{Error: err.Error()}
 	}
 	w.Header().Set("x-hw-owner", s.mgr.ID())
-	res, err := t.SubmitQuery(st)
+	res, err := t.SubmitQueryCtx(r.Context(), st)
 	if err != nil {
+		if code, ae, ok := guardStatus(err); ok {
+			ae.Owner = s.mgr.ID()
+			return code, ae
+		}
+		if errors.Is(err, ErrNotOwner) || errors.Is(err, ErrClosed) || errors.Is(err, ErrReadPreempted) ||
+			errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return 503, apiError{Error: err.Error(), Owner: s.mgr.ID()} // transient: retry
+		}
 		return 409, apiError{Error: err.Error()}
 	}
 	return 200, res

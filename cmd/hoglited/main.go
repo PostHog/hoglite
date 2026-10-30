@@ -45,8 +45,33 @@ func main() {
 		satInflight = flag.Float64("sat-inflight-cap", 128, "in-flight segment cap for the saturation metric")
 		compress    = flag.Bool("compress", envOr("HL_COMPRESS", "true") != "false", "publish new generations zstd-compressed (base and every WAL segment; applies from the next checkpoint per tenant; reads accept both). Pods of a build without compression support cannot take over a compressed tenant: set false while such pods may still run, then enable in a second rollout")
 		deltaCkpt   = flag.Bool("delta-checkpoints", envOr("HL_DELTA_CHECKPOINTS", "true") != "false", "checkpoints upload page deltas instead of full bases (needs -compress; applies from the next checkpoint per tenant; reads accept both). Pods of a build without delta support cannot take over such a tenant: set false while such pods may still run, then enable in a second rollout")
+		maxQueries  = flag.Int("max-queries", 0, "pod-wide cap on queries admitted at once across all tenants (0 = 2 x GOMAXPROCS, min 4)")
+		maxReaders  = flag.Int("max-readers", 4, "concurrent read snapshots per tenant")
+		maxParked   = flag.Int64("max-parked-bytes", 0, "pod-wide cap on estimated bytes of read results that wait for durability (0 = max-queries x max-result-bytes; negative = off; a single result above the cap parks alone, so set it to at least max-result-bytes for a strict cap)")
+		queryTO     = flag.Duration("query-timeout", 5*time.Second, "execution deadline of a read (/query, read-only /tx); negative = off")
+		writeTO     = flag.Duration("write-timeout", 10*time.Second, "execution deadline of a write transaction; it holds the tenant actor; negative = off")
+		maxRows     = flag.Int("max-result-rows", 100_000, "max rows per read response (/query, read-only /tx); negative = off")
+		maxBytes    = flag.Int64("max-result-bytes", 64<<20, "max estimated bytes per response, reads and write transactions; negative = off")
+		memFrac     = flag.Float64("mem-fraction", 0.9, "share of the cgroup memory limit for the Go soft limit plus the SQLite hard heap limit (GOMEMLIMIT in the environment wins for Go)")
+		sqliteFrac  = flag.Float64("sqlite-heap-fraction", 0.4, "share of the cgroup memory limit for the SQLite hard heap limit")
+		sqliteHard  = flag.Int64("sqlite-heap-limit", 0, "SQLite hard heap limit in bytes, process wide (0 = -sqlite-heap-fraction of the cgroup limit, negative = off)")
+		sqliteSoft  = flag.Int64("sqlite-soft-heap-limit", 0, "SQLite soft heap limit in bytes (0 = 80% of the hard limit, negative = the hard limit)")
+		cacheKiB    = flag.Int("sqlite-cache-kib", 0, "page cache bound per SQLite connection in KiB (0 = default, negative = SQLite default)")
+		usageTopN   = flag.Int("usage-top-n", 20, "tenants with the most read plus write time that get their own series in /metrics (negative = none)")
+		usageEvery  = flag.Duration("usage-interval", 10*time.Second, "sample period of the per-tenant usage rates")
+		usageHalf   = flag.Duration("usage-half-life", time.Minute, "half-life of the decayed per-tenant usage rates")
 	)
 	flag.Parse()
+	// memory caps first: before any tenant opens (memory.go). A cap that
+	// cannot be set stops the start; -sqlite-heap-limit=-1 opts out of
+	// the SQLite cap.
+	plan, err := hoglite.StartMemoryCaps(hoglite.MemoryConfig{
+		Fraction: *memFrac, SQLiteFraction: *sqliteFrac, SQLiteHard: *sqliteHard, SQLiteSoft: *sqliteSoft})
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Print(plan)
+	log.Print(hoglite.EffectiveMemory())
 	if *bucket == "" {
 		log.Fatal("-bucket / HL_BUCKET required")
 	}
@@ -149,6 +174,25 @@ func main() {
 	opts.Compress = *compress
 	if !*deltaCkpt {
 		opts.DeltaMaxChain = 0
+	}
+	if *maxQueries > 0 {
+		opts.PodMaxQueries = *maxQueries
+	}
+	if *maxReaders > 0 {
+		opts.MaxReaders = *maxReaders
+	}
+	opts.PodMaxParkedBytes = *maxParked
+	// zero keeps the default, negative turns a guard off (TenantOpts)
+	opts.QueryTimeout = *queryTO
+	opts.WriteTimeout = *writeTO
+	opts.MaxResultRows = *maxRows
+	opts.MaxResultBytes = *maxBytes
+	opts.CacheKiB = *cacheKiB
+	opts.UsageTopN = *usageTopN
+	opts.UsageInterval = *usageEvery
+	opts.UsageHalfLife = *usageHalf
+	if opts.WriteTimeout < 0 || opts.WriteTimeout >= 60*time.Second {
+		log.Printf("WARNING: -write-timeout %v: a write holds the tenant actor; the actor watchdog fails a tenant over after about 70s without progress", opts.WriteTimeout)
 	}
 	ctrl := hoglite.ControllerOpts{Enabled: *whaleRate > 0, ScanEvery: 15 * time.Second,
 		WhaleThreshold: *whaleRate, SustainedScans: 2, Dwell: 5 * time.Minute}

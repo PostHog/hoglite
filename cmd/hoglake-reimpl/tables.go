@@ -405,6 +405,10 @@ func listFiles(w http.ResponseWriter, r *http.Request) {
 		f.write(w)
 		return
 	}
+	if r.URL.Query().Get("limit") == "" && r.URL.Query().Get("after") == "" {
+		listAllFiles(w, c, snap, ns, tbl)
+		return
+	}
 	limit := ""
 	keyset := ""
 	// NOT INDEXED: the planner otherwise picks files_table
@@ -477,9 +481,10 @@ func listFiles(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, out)
 }
 
-// scanPlan pairs each data file with its live deletion vector.
-// Approximation: dvs keeps only the newest vector per file. A pinned
-// read sees that vector when it began at or before the pin, else none.
+// scanPlan pairs each data file with its live deletion vector at the
+// pin: of the rows that began at or before the pin, the one with the
+// highest epoch. dvs keeps the history, so a time-travel read gets the
+// vector of its snapshot.
 func scanPlan(w http.ResponseWriter, r *http.Request) {
 	c, ns, tbl := r.PathValue("c"), r.PathValue("ns"), r.PathValue("t")
 	snap, f := travel(r, c)
@@ -495,30 +500,57 @@ func scanPlan(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	res, err := hlQuery(c, atSnap+`SELECT `+fileCols+`, `+dvCols+`
-		FROM s, tables t LEFT JOIN files f ON f.table_id = t.id AND f.begin_snapshot <= s.id
-		LEFT JOIN dvs d ON d.data_file_id = f.id AND d.begin_snapshot <= s.id
-			AND d.epoch = (SELECT MAX(d2.epoch) FROM dvs d2
-				WHERE d2.data_file_id = f.id AND d2.begin_snapshot <= s.id)
-		WHERE`+tableAt+`ORDER BY f.begin_snapshot, f.row_id_start, f.id`, snapArg(snap), ns, tbl)
+	tid, pin, ok, err := resolveTableAt(c, snap, ns, tbl)
 	if err != nil {
 		apiErr(w, 500, err.Error())
 		return
 	}
-	if len(res.Rows) == 0 {
+	if !ok {
 		apiErr(w, 404, "table not found")
 		return
 	}
+	// the newest vector of each file at the pin
+	rows, err := pageAll(c, filePage(tid, -1, pin, `, `+dvCols,
+		` LEFT JOIN dvs d ON d.data_file_id = f.id AND d.begin_snapshot <= ?
+			AND d.epoch = (SELECT MAX(d2.epoch) FROM dvs d2
+				WHERE d2.data_file_id = f.id AND d2.begin_snapshot <= ?)`, pin, pin))
+	if err != nil {
+		apiErr(w, 500, err.Error())
+		return
+	}
+	sortRows(rows, fileOrder)
 	out := []map[string]any{}
-	for _, row := range res.Rows {
-		if row[0] == nil {
-			continue
-		}
+	for _, row := range rows {
 		sf := map[string]any{"data_file": fileJSON(row[:8])}
 		if row[8] != nil {
 			sf["delete_file"] = dvJSON(row[8:])
 		}
 		out = append(out, sf)
+	}
+	writeJSON(w, 200, out)
+}
+
+// listAllFiles answers listFiles without limit and after: every file of
+// the table at snap, in id order, read in internal pages.
+func listAllFiles(w http.ResponseWriter, c string, snap *int64, ns, tbl string) {
+	tid, pin, ok, err := resolveTableAt(c, snap, ns, tbl)
+	if err != nil {
+		apiErr(w, 500, err.Error())
+		return
+	}
+	if !ok {
+		apiErr(w, 404, "table not found")
+		return
+	}
+	rows, err := pageAll(c, filePage(tid, -1, pin, "", ""))
+	if err != nil {
+		apiErr(w, 500, err.Error())
+		return
+	}
+	sortRows(rows, func(row []any) [3]int64 { return [3]int64{i64(row[0])} })
+	out := make([]map[string]any, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, fileJSON(row))
 	}
 	writeJSON(w, 200, out)
 }
@@ -536,8 +568,8 @@ func splitComma(s string) []string {
 }
 
 // changes is the changefeed plan for (from_snapshot, to_snapshot].
-// Files come from the live incarnation. DVs are the live vectors that
-// began in the window (superseded vectors are not kept).
+// Files come from the live incarnation. DVs are all vectors that began
+// in the window, superseded ones included (dvs keeps the history).
 func changes(w http.ResponseWriter, r *http.Request) {
 	c, ns, tbl := r.PathValue("c"), r.PathValue("ns"), r.PathValue("t")
 	q := r.URL.Query()
@@ -579,26 +611,31 @@ func changes(w http.ResponseWriter, r *http.Request) {
 		apiErr(w, 422, "from_snapshot is after to_snapshot")
 		return
 	}
-	files, err := hlQuery(c, `SELECT `+fileCols+` FROM files f
-		WHERE f.table_id=? AND f.begin_snapshot > ? AND f.begin_snapshot <= ?
-		ORDER BY f.begin_snapshot, f.row_id_start, f.id`, tid, from, upper)
+	files, err := pageAll(c, filePage(tid, from, upper, "", ""))
 	if err != nil {
 		apiErr(w, 500, err.Error())
 		return
 	}
-	dvs, err := hlQuery(c, `SELECT `+dvCols+` FROM dvs d
-		WHERE d.table_id=? AND d.begin_snapshot > ? AND d.begin_snapshot <= ?
-		ORDER BY d.begin_snapshot, d.data_file_id, d.epoch`, tid, from, upper)
+	sortRows(files, fileOrder)
+	// dvCols, then epoch and rowid for the order and the keyset
+	dvs, err := pageAll(c, pageQuery{
+		sel:     `SELECT ` + dvCols + `, d.epoch, d.rowid FROM dvs d WHERE d.table_id = ? AND d.begin_snapshot <= ?`,
+		args:    []any{tid, upper},
+		snapCol: "d.begin_snapshot", idCol: "d.rowid", lo: from,
+		key: func(row []any) (int64, int64) { return i64(row[5]), i64(row[7]) },
+	})
 	if err != nil {
 		apiErr(w, 500, err.Error())
 		return
 	}
-	fo := make([]map[string]any, 0, len(files.Rows))
-	for _, row := range files.Rows {
+	// (begin_snapshot, data_file_id, epoch)
+	sortRows(dvs, func(row []any) [3]int64 { return [3]int64{i64(row[5]), i64(row[1]), i64(row[6])} })
+	fo := make([]map[string]any, 0, len(files))
+	for _, row := range files {
 		fo = append(fo, fileJSON(row))
 	}
-	do := make([]map[string]any, 0, len(dvs.Rows))
-	for _, row := range dvs.Rows {
+	do := make([]map[string]any, 0, len(dvs))
+	for _, row := range dvs {
 		do = append(do, dvJSON(row))
 	}
 	writeJSON(w, 200, map[string]any{
