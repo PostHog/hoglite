@@ -94,6 +94,11 @@ func (s *Sweeper) sweepTenant(ctx context.Context, tid string) {
 	if err != nil || mf == nil {
 		return
 	}
+	// a newer format may add object kinds this build does not know, and
+	// the gen parse below would misjudge them: leave such tenants alone
+	if s.mgr.formatGate(tid, mf) != nil {
+		return
+	}
 	// never sweep a tenant whose owner's pod lease is live: the owner may
 	// be mid-claim (base uploaded before CAS) or mid-checkpoint. Orphans
 	// of live tenants are collected after they go idle (release) or dead
@@ -130,16 +135,28 @@ func (s *Sweeper) sweepTenant(ctx context.Context, tid string) {
 	if err != nil {
 		return
 	}
+	// the base and every delta the manifest names are live, whatever gen
+	// their keys carry: a chain base and its deltas stay in use while
+	// later gens append to the chain
+	live := map[string]bool{}
+	for _, k := range manifestObjects(mf) {
+		live[k] = true
+	}
 	var garbage []string
 	for _, k := range keys {
 		if !strings.HasPrefix(k, liveInstance) {
 			garbage = append(garbage, k) // dead instance dir
 			continue
 		}
+		if live[k] {
+			continue
+		}
 		// only strictly-older generations are safe to delete. A claim
 		// candidate is always gen > current (acquisition bumps gen), and a
 		// current-gen object may be mid-checkpoint. Parse the gen from the
-		// key and delete only gen < manifest gen.
+		// key and delete only gen < manifest gen. An unnamed base or delta
+		// of an older gen can never become live again: a chain only gains
+		// objects of newer gens.
 		g := keyGen(k, liveInstance)
 		if g >= 0 && g < mf.Gen {
 			garbage = append(garbage, k)
@@ -164,8 +181,17 @@ func (s *Sweeper) sweepTenant(ctx context.Context, tid string) {
 }
 
 func manifestEqual(a, b *Manifest) bool {
+	if len(a.Deltas) != len(b.Deltas) {
+		return false
+	}
+	for i := range a.Deltas {
+		if a.Deltas[i] != b.Deltas[i] {
+			return false
+		}
+	}
 	return a.Epoch == b.Epoch && a.Gen == b.Gen && a.Instance == b.Instance &&
-		a.Owner == b.Owner && a.OwnerUntilMs == b.OwnerUntilMs && a.BaseKey == b.BaseKey
+		a.Owner == b.Owner && a.OwnerUntilMs == b.OwnerUntilMs && a.BaseKey == b.BaseKey &&
+		a.Format == b.Format
 }
 
 // keyGen parses the generation from a base or wal key, anchored to the
@@ -176,14 +202,15 @@ func keyGen(key, instancePrefix string) int64 {
 		return -1
 	}
 	rel := strings.TrimPrefix(key, instancePrefix)
-	// layout: base/<gen>-<epoch>[-<attempt>].db  or  wal/<gen>/<epoch>/<off>.seg
+	// layout: base/<gen>-<epoch>[-<attempt>].db, wal/<gen>/<epoch>/<off>.seg
+	// or ckpt/<gen>-<epoch>[-<attempt>].{base,delta}
 	parts := strings.Split(rel, "/")
 	if len(parts) < 2 {
 		return -1
 	}
 	var g string
 	switch parts[0] {
-	case "base":
+	case "base", "ckpt":
 		g, _, _ = strings.Cut(parts[1], "-")
 	case "wal":
 		g = parts[1]

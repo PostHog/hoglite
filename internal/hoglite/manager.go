@@ -43,6 +43,22 @@ type Metrics struct {
 	// ack) across the pod. It is the primary autoscaling signal: it rises
 	// as soon as S3 queueing starts, well before client-visible timeouts.
 	CommitEwmaUs atomic.Int64
+
+	// Stored (possibly compressed) bytes PUT for segments and base images.
+	// SegBytes is the raw WAL byte count; raw vs stored gives the ratio.
+	SegStoredBytes  atomic.Int64
+	BaseBytes       atomic.Int64 // raw base image bytes uploaded
+	BaseStoredBytes atomic.Int64
+
+	// Page-delta checkpoints (format 2). DeltaCheckpoints counts
+	// checkpoints that uploaded a delta or no object at all; Rebases counts
+	// full bases that start a new chain. CheckpointMs is the total time of
+	// the fold, upload and CAS of every checkpoint (writes wait meanwhile).
+	DeltaCheckpoints atomic.Int64
+	DeltaBytes       atomic.Int64 // raw delta bytes uploaded
+	DeltaStoredBytes atomic.Int64
+	Rebases          atomic.Int64
+	CheckpointMs     atomic.Int64
 }
 
 // ewmaUpdate folds a sample into an atomic EWMA with alpha=1/8.
@@ -113,6 +129,13 @@ type Manager struct {
 	ckptSem       chan struct{} // bounds concurrent checkpoint drains pod-wide
 	claimSem      chan struct{} // claims get their own lane: slow release
 	// checkpoints must never starve a takeover
+	decodeSem chan struct{} // bounds concurrent decoding materializations pod-wide
+	// legacyReadForTest makes this manager read like a build from before
+	// compression: every object raw, no format gate, no delta chain.
+	// s1ReadForTest makes it read like the build with compression but
+	// without deltas: the format gate stops at format 1. Tests only.
+	legacyReadForTest bool
+	s1ReadForTest     bool
 
 	maxOpen int // soft cap on simultaneously open tenants
 
@@ -144,6 +167,7 @@ func NewManager(store Backend, prefix, id, class, baseDir string, opts TenantOpt
 
 // NewManagerSat additionally sets the saturation-metric budgets.
 func NewManagerSat(store Backend, prefix, id, class, baseDir string, opts TenantOpts, maxOpen int, metrics *Metrics, ctrl ControllerOpts, satCommitBudgetUs, satInflightCap float64) *Manager {
+	normalizeDeltaOpts(&opts)
 	// fencing identity is unique per boot, even when the routing id is a
 	// stable pod name that a replacement pod will reuse. The self-lease
 	// fast path only ever matches THIS process's own manifest writes.
@@ -165,6 +189,11 @@ func NewManagerSat(store Backend, prefix, id, class, baseDir string, opts Tenant
 	// turning them into S3 storms
 	m.ckptSem = make(chan struct{}, 8)
 	m.claimSem = make(chan struct{}, 4)
+	// an active decoder holds about 3.2 MiB for our frames (measured; up
+	// to about 17 MiB for a hostile header): 32 slots cap decoder memory
+	// near 100 MiB (550 MiB worst case) in a failover burst. Claims (4 lanes) are the slower stage, so
+	// this does not limit takeover throughput.
+	m.decodeSem = make(chan struct{}, 32)
 	// the first heartbeat is synchronous: no tenant may start before the
 	// write gate has a clock
 	m.heartbeatLease()
@@ -509,6 +538,12 @@ func (m *Manager) Acquire(ctx context.Context, tid string, create bool) (*Tenant
 				return lt, nil
 			}
 		}
+		// a tenant written by a newer build: refuse before touching any of
+		// its objects. The check sits after the liveness wait, so a tenant
+		// that a live newer peer owns still answers ErrBusy (re-route).
+		if err := m.formatGate(tid, mf); err != nil {
+			return nil, err
+		}
 		// lease expired or free: take over
 		t, err := m.takeOver(ctx, tid, mf, etag)
 		if errors.Is(err, ErrCAS) || errors.Is(err, errStaleGen) {
@@ -594,7 +629,7 @@ func (m *Manager) takeOver(ctx context.Context, tid string, mf *Manifest, etag s
 		return nil, err
 	}
 	if err := m.materializeLocked(ctx, tid, mf, dir); err != nil {
-		if !errors.Is(err, errStaleGen) {
+		if !errors.Is(err, errStaleGen) && !errors.Is(err, errDecodeSlotWait) {
 			coolFailedClaim()
 		}
 		return nil, err
@@ -621,7 +656,7 @@ func (m *Manager) takeOver(ctx context.Context, tid string, mf *Manifest, etag s
 			return nil, err2
 		}
 		if err := m.materialize(ctx, tid, mf, dir); err != nil {
-			if !errors.Is(err, errStaleGen) {
+			if !errors.Is(err, errStaleGen) && !errors.Is(err, errDecodeSlotWait) {
 				coolFailedClaim()
 			}
 			return nil, err
@@ -666,22 +701,80 @@ func (m *Manager) materialize(ctx context.Context, tid string, mf *Manifest, dir
 
 var errStaleGen = errors.New("generation objects changed during recovery")
 
-// materializeLocked downloads the base image and replays the contiguous
-// segment run into dir.
+// errDecodeSlotWait: the caller's context ended while all decode slots
+// were busy. Nothing touched the store, so no claim cooldown follows.
+var errDecodeSlotWait = errors.New("waiting for a decode slot")
+
+// formatGate refuses a manifest whose format this build cannot read.
+func (m *Manager) formatGate(tid string, mf *Manifest) error {
+	switch {
+	case m.legacyReadForTest:
+		return nil // the build before compression has no gate
+	case m.s1ReadForTest:
+		return checkManifestFormatMax(tid, mf, manifestFormatZstd)
+	}
+	return checkManifestFormat(tid, mf)
+}
+
+// materializeLocked downloads the base image, applies the delta chain and
+// replays the contiguous segment run into dir.
 func (m *Manager) materializeLocked(ctx context.Context, tid string, mf *Manifest, dir string) error {
+	format := mf.Format
+	chain := format == manifestFormatChain
+	if m.legacyReadForTest {
+		format = manifestFormatRaw // emulate a build from before compression
+		chain = false              // ... which does not know deltas
+	} else if err := m.formatGate(tid, mf); err != nil {
+		return err
+	} else if m.s1ReadForTest {
+		chain = false
+	}
+	// a delta list outside a chain generation (or a chain without a size)
+	// is a manifest no writer of this build produces: refuse it
+	if !m.legacyReadForTest && !m.s1ReadForTest {
+		if (format != manifestFormatChain && len(mf.Deltas) > 0) || (chain && mf.BaseSize <= 0) {
+			return fmt.Errorf("inconsistent manifest for %s: format %d, %d deltas, base size %d", tid, format, len(mf.Deltas), mf.BaseSize)
+		}
+	}
+	if format != manifestFormatRaw {
+		// decoders hold memory while they run: bound how many
+		// materializations decode at once, pod-wide. This slot is held only
+		// here, never together with the claim or checkpoint semaphores.
+		select {
+		case m.decodeSem <- struct{}{}:
+			defer func() { <-m.decodeSem }()
+		case <-ctx.Done():
+			return fmt.Errorf("%w: %w", errDecodeSlotWait, ctx.Err())
+		}
+	}
 	dbPath := filepath.Join(dir, "db.sqlite")
 	walPath := filepath.Join(dir, "db.sqlite-wal")
 
-	base, err := os.OpenFile(dbPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+	base, err := os.OpenFile(dbPath, os.O_CREATE|os.O_TRUNC|os.O_RDWR, 0o644) // read too: the chain checks the header
 	if err != nil {
 		return err
 	}
-	if err := m.store.GetObjectTo(ctx, mf.BaseKey, base); err != nil {
+	// the generation format says how every object of the generation is
+	// stored; there is no content sniffing. A zstd base streams through
+	// the decoder to disk, never whole into memory.
+	_, stored, err := fetchObjectTo(ctx, m.store, mf.BaseKey, base, format, maxBaseRawBytes)
+	if err != nil {
 		base.Close()
 		if errors.Is(err, ErrNotFound) {
 			return errStaleGen
 		}
 		return fmt.Errorf("fetch base: %w", err)
+	}
+	if chain {
+		if stored != mf.BaseSize {
+			base.Close()
+			return fmt.Errorf("fetch base: %w: stored size %d, manifest says %d", ErrCorruptObject, stored, mf.BaseSize)
+		}
+		// base + deltas in order = the state at the start of this gen
+		if err := applyChain(ctx, m.store, tid, mf, dir, base); err != nil {
+			base.Close()
+			return err
+		}
 	}
 	if err := base.Close(); err != nil {
 		return err
@@ -702,21 +795,42 @@ func (m *Manager) materializeLocked(ctx context.Context, tid string, mf *Manifes
 		if s.Offset < expect {
 			continue // duplicate offset from an older epoch; newer sorted first
 		}
-		data, err := m.store.GetObject(ctx, s.Key)
-		if err != nil {
-			wal.Close()
-			if errors.Is(err, ErrNotFound) {
-				// the winner of a concurrent claim already GC'd this gen:
-				// our manifest read is stale; restart from a fresh read
-				return errStaleGen
+		var n int64
+		if format == manifestFormatRaw {
+			data, err := m.store.GetObject(ctx, s.Key)
+			if err == nil {
+				_, err = wal.Write(data)
 			}
-			return fmt.Errorf("fetch segment %s: %w", s.Key, err)
+			n = int64(len(data))
+			if err != nil {
+				wal.Close()
+				if errors.Is(err, ErrNotFound) {
+					// the winner of a concurrent claim already GC'd this gen:
+					// our manifest read is stale; restart from a fresh read
+					return errStaleGen
+				}
+				return fmt.Errorf("fetch segment %s: %w", s.Key, err)
+			}
+		} else {
+			// streams to the WAL file: a segment of any size up to the
+			// writer's limit decodes without holding it in memory
+			n, _, err = fetchDecodedTo(ctx, m.store, s.Key, wal, maxSegmentRawBytes)
+			if err != nil {
+				wal.Close()
+				if errors.Is(err, ErrNotFound) {
+					return errStaleGen
+				}
+				if errors.Is(err, ErrCorruptObject) {
+					// corruption in an immutable object, exactly like a
+					// broken checksum chain below: same error class
+					return fmt.Errorf("wal replay incomplete: segment %s: %w (corruption in stored segments)", s.Key, err)
+				}
+				return fmt.Errorf("fetch segment %s: %w", s.Key, err)
+			}
 		}
-		if _, err := wal.Write(data); err != nil {
-			wal.Close()
-			return err
-		}
-		expect += int64(len(data))
+		// contiguity runs on RAW lengths: keys carry raw WAL offsets, and
+		// the stored size of a compressed segment is smaller
+		expect += n
 	}
 	wal.Close()
 	if expect == 0 {
@@ -727,12 +841,21 @@ func (m *Manager) materializeLocked(ctx context.Context, tid string, mf *Manifes
 	// commit boundaries, so the checksum chain must end exactly at EOF.
 	// A short parse means corruption in supposedly immutable objects —
 	// refuse rather than publish a truncated replacement over history.
-	raw, err := os.ReadFile(walPath)
+	// The check streams: one frame in memory, whatever the WAL size.
+	wf, err := os.Open(walPath)
 	if err != nil {
 		return err
 	}
-	if end := walCommitEnd(raw); end != int64(len(raw)) {
-		return fmt.Errorf("wal replay incomplete: parsed %d of %d bytes (corruption in stored segments)", end, len(raw))
+	defer wf.Close()
+	end, err := walCommitEndReader(wf)
+	if err != nil {
+		return err
+	}
+	if fi, err := wf.Stat(); err != nil || fi.Size() != expect {
+		return fmt.Errorf("wal replay: file size does not match %d segment bytes (%v)", expect, err)
+	}
+	if end != expect {
+		return fmt.Errorf("wal replay incomplete: parsed %d of %d bytes (corruption in stored segments)", end, expect)
 	}
 	return nil
 }
@@ -1055,7 +1178,12 @@ func (m *Manager) Stats() map[string]any {
 		"replica": m.id, "class": m.class, "prefix": m.prefix, "open_tenants": n, "tenant_ids": ids,
 		"commits": m.metrics.Commits.Load(), "queries": m.metrics.Queries.Load(),
 		"seg_puts": m.metrics.SegPuts.Load(), "seg_bytes": m.metrics.SegBytes.Load(),
-		"acquires": m.metrics.Acquires.Load(), "checkpoints": m.metrics.Checkpoints.Load(),
+		"seg_stored_bytes": m.metrics.SegStoredBytes.Load(),
+		"base_bytes":       m.metrics.BaseBytes.Load(), "base_stored_bytes": m.metrics.BaseStoredBytes.Load(),
+		"delta_checkpoints": m.metrics.DeltaCheckpoints.Load(), "delta_bytes": m.metrics.DeltaBytes.Load(),
+		"delta_stored_bytes": m.metrics.DeltaStoredBytes.Load(), "rebases": m.metrics.Rebases.Load(),
+		"checkpoint_ms": m.metrics.CheckpointMs.Load(),
+		"acquires":      m.metrics.Acquires.Load(), "checkpoints": m.metrics.Checkpoints.Load(),
 		"proxied": m.metrics.Proxied.Load(), "evictions": m.metrics.Evictions.Load(),
 		"dedup_hits": m.metrics.DedupHits.Load(),
 	}

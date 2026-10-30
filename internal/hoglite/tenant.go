@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -30,6 +31,25 @@ type TenantOpts struct {
 	PutTimeout     time.Duration // per-attempt S3 PUT timeout
 	SkewMargin     time.Duration // acquirer waits lease + this; owner stops PUTs lease/3 early
 	IdleRelease    time.Duration // release ownership after this much write-idle time (0 = never)
+	// Compress makes the next generation a zstd generation (base and
+	// every segment are zstd frames). A change applies at the next
+	// checkpoint; the current generation keeps its format. Readers accept
+	// both formats regardless of this flag. Turn it off for the first
+	// rollout from a build without compression support, so pods of the old
+	// build can still take over tenants during the rolling deploy.
+	Compress bool
+	// DeltaMaxChain turns on page-delta checkpoints (needs Compress): a
+	// checkpoint uploads only the pages changed since the previous one,
+	// and recovery applies the deltas to the base in order. After this
+	// many deltas the next checkpoint uploads a full base and starts a new
+	// chain. 0 turns deltas off: every checkpoint uploads a full base, in
+	// format 0 or 1, which builds without delta support can read. Values
+	// above the reader limit (1024) are clamped to it.
+	DeltaMaxChain int
+	// DeltaMaxRatio also starts a new chain when the stored bytes of all
+	// deltas would exceed this fraction of the stored base. Recovery then
+	// downloads at most (1 + DeltaMaxRatio) times the base.
+	DeltaMaxRatio float64
 }
 
 func DefaultOpts() TenantOpts {
@@ -44,6 +64,16 @@ func DefaultOpts() TenantOpts {
 		PutTimeout:     5 * time.Second,
 		SkewMargin:     3500 * time.Millisecond, // must exceed max PUT duration
 		IdleRelease:    60 * time.Second,
+		Compress:       true,
+		// Chain cap: recovery fetches the stored deltas 8 at a time, so 32
+		// deltas cost 4 GET round trips. With small deltas the chain then
+		// saves about 32/(1+ratio) full uploads per rebase.
+		DeltaMaxChain: 32,
+		// Ratio 0.5: recovery downloads at most 1.5x the base. A higher
+		// ratio saves fewer uploads than it adds to every cold acquire:
+		// with deltas of size d, a rebase cycle uploads base*(1+r) over
+		// r*base/d+1 checkpoints.
+		DeltaMaxRatio: 0.5,
 	}
 }
 
@@ -246,6 +276,12 @@ type Tenant struct {
 
 	claimAttempt string // per-acquisition nonce: the claim's base key suffix
 
+	// dbBytes is the size of the local database file after the last
+	// checkpoint (or materialize). Between checkpoints SQLite writes only
+	// the WAL, so a different size means the delta assumption broke; the
+	// next checkpoint then uploads a full base.
+	dbBytes int64
+
 	onClose  func(*Tenant) // manager removes us from its registry
 	onPoison func(*Tenant) // manager publishes the re-acquire cooldown; runs BEFORE done closes
 
@@ -287,6 +323,9 @@ func openTenant(id string, dir string, mf *Manifest, etag string, store Backend,
 		ctlCh:   make(chan func(), 64),
 		done:    make(chan struct{}),
 		metrics: metrics,
+	}
+	if fi, err := os.Stat(t.dbPath); err == nil {
+		t.dbBytes = fi.Size() // before SQLite opens it: base + chain as materialized
 	}
 	registerAuthorizerOnce()
 	dsn := fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=wal_autocheckpoint(0)"+
@@ -986,6 +1025,16 @@ func (t *Tenant) cutSegment() {
 		t.failLocked(fmt.Errorf("%w: cannot flush inside lease margin", ErrNotOwner))
 		return
 	}
+	// the generation format, fixed when the generation was published,
+	// decides the segment form; the Compress flag only affects the next
+	// generation. A zstd generation never takes a raw segment, and no
+	// reader accepts a zstd segment above maxSegmentRawBytes: fail before
+	// any ack of this batch rather than publish an unreadable object.
+	format := t.mf.Format
+	if format != manifestFormatRaw && end-t.submittedOff > maxSegmentRawBytes {
+		t.failLocked(fmt.Errorf("%w: batch of %d bytes, limit %d", errSegmentTooLarge, end-t.submittedOff, maxSegmentRawBytes))
+		return
+	}
 	select {
 	case t.sem <- struct{}{}:
 	default:
@@ -1016,7 +1065,13 @@ func (t *Tenant) cutSegment() {
 	t.metrics.SegBytes.Add(int64(len(data)))
 	t.metrics.InflightSegs.Add(1)
 	go func() {
-		var err error
+		// compress off the actor, once per segment (not per attempt). The
+		// key keeps the RAW WAL offset; recovery uses decoded lengths.
+		stored, err := segmentObject(s.data, format)
+		if err != nil {
+			goto done // checked on the actor already; never PUT it
+		}
+		t.metrics.SegStoredBytes.Add(int64(len(stored)))
 		for attempt := 0; ; attempt++ {
 			// The write fence is re-read PER ATTEMPT, not captured at cut
 			// time: while the pod lease keeps heartbeating, the deadline
@@ -1056,7 +1111,7 @@ func (t *Tenant) cutSegment() {
 			default:
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), attemptTimeout)
-			err = t.store.PutSegment(ctx, s.key, s.data)
+			err = t.store.PutSegment(ctx, s.key, stored)
 			cancel()
 			if err == nil {
 				break
@@ -1151,6 +1206,56 @@ func (t *Tenant) putBaseWithStallCancel(key string, f *os.File, size int64, stal
 		t.progressMs.Store(time.Now().UnixMilli())
 	}}
 	return t.store.PutBase(pctx, key, pr, size)
+}
+
+// prepareBaseUpload returns the file and size to upload as the base image
+// and the format of the new generation. The format covers the base and
+// every segment of the generation, so it is decided here, once.
+//
+// With compression on it writes one zstd frame to a temp file next to the
+// database and returns manifestFormatZstd. The reads bump progressMs, so
+// a long compression of a large base does not look like a wedged actor.
+// Any compression failure (for example a full disk), or a base above the
+// reader limit, gives the raw file and manifestFormatRaw: a raw
+// generation is always valid, and a checkpoint must not fail for an
+// optimization. Never a raw base in a zstd generation.
+func (t *Tenant) prepareBaseUpload(f *os.File, size int64) (*os.File, int64, int, func()) {
+	noop := func() {}
+	if !t.opts.Compress {
+		return f, size, manifestFormatRaw, noop
+	}
+	logf := func(format string, args ...any) {
+		if t.metrics.Logger != nil {
+			t.metrics.Logger.Printf(format, args...)
+		}
+	}
+	if size > maxBaseRawBytes {
+		logf("tenant %s: base of %d bytes exceeds the zstd limit (raw generation)", t.ID, size)
+		return f, size, manifestFormatRaw, noop
+	}
+	tmp, err := os.CreateTemp(t.dir, "base-*.zst")
+	if err != nil {
+		logf("tenant %s: base compress: %v (raw generation)", t.ID, err)
+		return f, size, manifestFormatRaw, noop
+	}
+	var once sync.Once
+	cleanup := func() {
+		once.Do(func() {
+			tmp.Close()
+			os.Remove(tmp.Name())
+		})
+	}
+	var last atomic.Int64
+	src := &progressReader{f: f, lastNs: &last, onRead: func() {
+		t.progressMs.Store(time.Now().UnixMilli())
+	}}
+	stored, err := compressStream(tmp, src, size, maxBaseRawBytes)
+	if err != nil {
+		cleanup()
+		logf("tenant %s: base compress: %v (raw generation)", t.ID, err)
+		return f, size, manifestFormatRaw, noop
+	}
+	return tmp, stored, manifestFormatZstd, cleanup
 }
 
 // writeDeadline is the absolute fence for data-plane PUTs: the pod lease
@@ -1318,54 +1423,75 @@ func (t *Tenant) checkpointLocked(newClass string) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	t.progressMs.Store(time.Now().UnixMilli()) // upload block can be long
-	if _, err := t.db.ExecContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
+	ckptStart := time.Now()
+	// a delta lists the pages of the committed WAL: plan it before the
+	// WAL is truncated (nil: this checkpoint uploads a full base)
+	plan := t.planDelta()
+	dbSize, plan, err := t.foldWAL(ctx, plan)
+	if err != nil {
 		t.failLocked(fmt.Errorf("wal checkpoint: %w", err))
 		return false
 	}
 	newGen := t.mf.Gen + 1
-	newBaseKey := baseKey(t.prefix, t.ID, t.mf.Instance, newGen, t.mf.Epoch)
-	if t.claimAttempt != "" {
-		// acquisition claims upload to a per-attempt key: a racing acquirer
-		// with the same gen+epoch can never overwrite our base, and vice
-		// versa. The winner's CAS names its exact object.
-		newBaseKey = baseKeyAttempt(t.prefix, t.ID, t.mf.Instance, newGen, t.mf.Epoch, t.claimAttempt)
-	}
 	f, err := os.Open(t.dbPath)
 	if err != nil {
 		t.failLocked(err)
 		return false
 	}
-	fi, _ := f.Stat()
 	t.progressMs.Store(time.Now().UnixMilli())
+	// compress once into a temp file, then upload that file: retries and
+	// SDK rewinds need a seekable body, and the base can be GBs, so it
+	// never sits in memory
+	up := t.prepareCheckpointUpload(f, dbSize, plan, newGen)
+	defer up.cleanup()
 	// Progress-bounded upload: an attempt is canceled only when no bytes
 	// move for stallTimeout, never for being merely slow — a multi-GB base
 	// on a degraded link must still finish (a fixed 20s cap
 	// made large tenants permanently uncheckpointable).
 	var putErr error
-	for attempt := 0; attempt < 4; attempt++ {
-		if _, serr := f.Seek(0, 0); serr != nil {
+	for attempt := 0; up.key != "" && attempt < 4; attempt++ {
+		if _, serr := up.file.Seek(0, 0); serr != nil {
 			f.Close()
-			t.failLocked(fmt.Errorf("base seek: %w", serr))
+			t.failLocked(fmt.Errorf("checkpoint object seek: %w", serr))
 			return false
 		}
-		putErr = t.putBaseWithStallCancel(newBaseKey, f, fi.Size(), 10*time.Second)
+		putErr = t.putBaseWithStallCancel(up.key, up.file, up.size, 10*time.Second)
 		t.progressMs.Store(time.Now().UnixMilli())
 		if putErr == nil {
 			break
 		}
 	}
+	up.cleanup() // free the temp file before the CAS phase
 	if putErr != nil {
 		f.Close()
-		t.failLocked(fmt.Errorf("base put: %w", putErr))
+		t.failLocked(fmt.Errorf("checkpoint put %s: %w", up.key, putErr))
 		return false
 	}
 	f.Close()
+	if up.delta {
+		t.metrics.DeltaCheckpoints.Add(1)
+		t.metrics.DeltaBytes.Add(up.raw)
+		t.metrics.DeltaStoredBytes.Add(up.size)
+	} else {
+		t.metrics.BaseBytes.Add(up.raw)
+		t.metrics.BaseStoredBytes.Add(up.size)
+		if up.format == manifestFormatChain {
+			t.metrics.Rebases.Add(1)
+		}
+	}
+	oldMf := t.mf
 	oldGen := t.mf.Gen
-	oldBase := t.mf.BaseKey
 	oldIID := t.mf.Instance
 	nm := *t.mf
 	nm.Gen = newGen
-	nm.BaseKey = newBaseKey
+	nm.BaseKey = up.baseKey
+	nm.BaseSize = up.baseSize
+	nm.Deltas = up.deltas
+	// the new generation holds only objects this incarnation writes (the
+	// base or delta above and the segments cut after this CAS; cutSegment
+	// reads t.mf.Format) plus, in a chain gen, the chain it extends. All
+	// of them are zstd in a chain gen. So the format follows the upload.
+	nm.Format = up.format
 	if newClass != "" {
 		nm.Class = newClass
 		t.classHint.Store(newClass)
@@ -1394,10 +1520,12 @@ func (t *Tenant) checkpointLocked(newClass string) bool {
 			// ambiguous attempt that actually landed. Re-read the manifest
 			// before touching the base we uploaded: only delete it when the
 			// manifest does NOT name it (we genuinely lost).
+			// The claim uploaded only up.key: the base and deltas of the
+			// chain it extends belong to the winner too, never delete them.
 			if t.claimAttempt != "" {
-				if cur, _, rerr := t.store.GetManifest(casCtx, t.ID); rerr == nil && cur != nil && cur.BaseKey != newBaseKey {
+				if cur, _, rerr := t.store.GetManifest(casCtx, t.ID); rerr == nil && cur != nil && up.key != "" && !manifestNames(cur, up.key) {
 					ctx2, cancel2 := context.WithTimeout(context.Background(), 15*time.Second)
-					_ = t.store.DeleteObjects(ctx2, newBaseKey)
+					_ = t.store.DeleteObjects(ctx2, up.key)
 					cancel2()
 				}
 				t.claimAttempt = ""
@@ -1419,6 +1547,7 @@ func (t *Tenant) checkpointLocked(newClass string) bool {
 	t.claimAttempt = ""
 	t.etag = etag
 	t.mf = &nm
+	t.dbBytes = dbSize
 	t.submittedOff = 0
 	t.durableOff = 0
 	t.segsSinceC = 0
@@ -1455,17 +1584,24 @@ func (t *Tenant) checkpointLocked(newClass string) bool {
 		t.wal = f2
 	}
 	t.metrics.Checkpoints.Add(1)
-	go func(oldBase, oldIID string, oldGen int64) {
+	t.metrics.CheckpointMs.Add(time.Since(ckptStart).Milliseconds())
+	// after the CAS only: the segments of the old gen, and the old base and
+	// deltas that the new manifest no longer names (all of them after a
+	// rebase, none after a delta)
+	obsolete := obsoleteObjects(oldMf, &nm)
+	go func(obsolete []string, oldIID string, oldGen int64) {
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
-		keys := []string{oldBase}
+		keys := obsolete
 		if segs, err := t.store.ListSegments(ctx, t.ID, oldIID, oldGen); err == nil {
 			for _, sg := range segs {
 				keys = append(keys, sg.Key)
 			}
 		}
-		_ = t.store.DeleteObjects(ctx, keys...)
-	}(oldBase, oldIID, oldGen)
+		if len(keys) > 0 {
+			_ = t.store.DeleteObjects(ctx, keys...)
+		}
+	}(obsolete, oldIID, oldGen)
 	return true
 }
 
@@ -1601,5 +1737,6 @@ func (t *Tenant) DebugStatus() map[string]any {
 		"wal_submitted_bytes": t.submittedOff, "durable_watermark": t.durableOff,
 		"pending_acks": len(t.pending), "inflight_segments": len(t.segs),
 		"segments_since_checkpoint": t.segsSinceC, "alive": t.Alive(),
+		"format": t.mf.Format, "delta_chain": len(t.mf.Deltas),
 	}
 }

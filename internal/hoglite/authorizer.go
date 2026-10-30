@@ -16,6 +16,7 @@ package hoglite
 import (
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"modernc.org/sqlite"
 	sqlite3 "modernc.org/sqlite/lib"
@@ -43,7 +44,14 @@ func registerAuthorizerOnce() {
 	})
 }
 
+// authorizerOffForTest lets tests run statements that users cannot (for
+// example VACUUM, which shrinks the file). Tests only.
+var authorizerOffForTest atomic.Bool
+
 func authorizer(action sqlite.AuthorizerActionCode, a1, a2, db, tv string) sqlite.AuthorizerReturnCode {
+	if authorizerOffForTest.Load() {
+		return sqlite3.SQLITE_OK
+	}
 	switch action {
 	case sqlite.AuthPragma:
 		if !allowedPragmas[strings.ToLower(a1)] {
