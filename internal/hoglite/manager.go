@@ -622,7 +622,7 @@ func (m *Manager) createTenant(ctx context.Context, tid, class string) (*Tenant,
 		t.qlim = m.qlim
 	}
 	if err != nil {
-		return nil, err
+		return nil, memErr(err, m.metrics)
 	}
 	t.onClose = m.noteClosed
 	t.onPoison = m.notePoisoned
@@ -678,6 +678,14 @@ func (m *Manager) takeOver(ctx context.Context, tid string, mf *Manifest, etag s
 		t.claimSem = m.claimSem
 		t.qlim = m.qlim
 	}
+	if err != nil && isNoMem(err) {
+		// SQLITE_NOMEM at the heap limit is memory pressure, not a broken
+		// cache: a second download of the base and chain would not help
+		// and would add load. Fail the claim as a memory error (507). The
+		// manifest is untouched, and the cooldown damps request retries.
+		coolFailedClaim()
+		return nil, memErr(err, m.metrics)
+	}
 	if err != nil {
 		// local cache may be corrupt (disk, partial write): wipe and
 		// rebuild from S3 once before giving up
@@ -699,7 +707,7 @@ func (m *Manager) takeOver(ctx context.Context, tid string, mf *Manifest, etag s
 		}
 		if err != nil {
 			coolFailedClaim()
-			return nil, err
+			return nil, memErr(err, m.metrics)
 		}
 	}
 	t.onClose = m.noteClosed

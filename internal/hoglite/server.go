@@ -149,6 +149,16 @@ func decodeBody(r *http.Request, v any) error {
 	return dec.Decode(v)
 }
 
+// acquireError is the body for a failed acquisition. A guard refusal
+// (for example SQLITE_NOMEM while the tenant opens) keeps its code, so
+// clients see out_of_memory as they do for a query.
+func acquireError(err error) apiError {
+	if _, ae, ok := guardStatus(err); ok {
+		return ae
+	}
+	return apiError{Error: err.Error()}
+}
+
 func errCode(err error) int {
 	if code, _, ok := guardStatus(err); ok {
 		return code
@@ -256,7 +266,7 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) (int, any)
 				return 200, map[string]any{"tenant": tid, "owner": mf.OwnerAddr, "existing": true}
 			}
 		}
-		return errCode(err), apiError{Error: err.Error()}
+		return errCode(err), acquireError(err)
 	}
 	return 200, map[string]any{"tenant": tid, "owner": s.mgr.ID()}
 }
@@ -389,7 +399,7 @@ func (s *Server) localOrProxy(w http.ResponseWriter, r *http.Request, tid string
 	t, err := s.mgr.Acquire(ctx, tid, false)
 	if err != nil {
 		code := errCode(err)
-		ae := apiError{Error: err.Error()}
+		ae := acquireError(err)
 		if mf2, _, e2 := s.mgr.store.GetManifest(ctx, tid); e2 == nil && mf2 != nil {
 			// always the routable address, never the fencing identity
 			if mf2.OwnerAddr != "" {

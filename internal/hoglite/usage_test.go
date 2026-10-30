@@ -725,11 +725,15 @@ func TestUsageFailedPinCharged(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Millisecond)
 	defer cancel()
 	res := recvRead(t, goQuery(ctx, ten, "SELECT 1"), 3*time.Second)
-	held.Close()
 	if res.err == nil {
 		t.Fatal("read without a connection succeeded")
 	}
+	// The caller returns at its deadline, maybe before the actor leaves
+	// the connection wait. Keep the connection until the pin has ended:
+	// a connection freed earlier can win against the canceled context,
+	// and the read then runs and counts an operation.
 	waitFor(t, "pin ended", func() bool { return ten.readers.count() == 0 })
+	held.Close()
 	d := usageDelta(met.usage.totals(), before)
 	if d.Ops[kindRead] != 0 || d.ExecNs[kindRead] < int64(50*time.Millisecond) {
 		t.Fatalf("failed pin: ops %d, %v", d.Ops[kindRead], time.Duration(d.ExecNs[kindRead]))
