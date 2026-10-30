@@ -772,3 +772,29 @@ func BenchmarkPointRead(b *testing.B) {
 	}
 	b.StopTimer()
 }
+
+// BenchmarkPointReadParallel is BenchmarkPointRead from GOMAXPROCS
+// goroutines on one tenant. It shows contention on the shared per-tenant
+// state of the read path (the actor pin, the usage counters).
+func BenchmarkPointReadParallel(b *testing.B) {
+	fs := NewFakeStore()
+	o := testOpts()
+	o.MaxReaders = 16
+	m := NewManager(fs, "fake", "a", "standard", b.TempDir(), o, 1000, &Metrics{}, ControllerOpts{})
+	defer m.ShutdownAll()
+	ten, err := m.Acquire(context.Background(), "t", true)
+	if err != nil {
+		b.Fatal(err)
+	}
+	st := Statement{SQL: "SELECT 1"}
+	b.ReportAllocs()
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			if _, err := ten.SubmitQuery(st); err != nil {
+				b.Error(err)
+				return
+			}
+		}
+	})
+}

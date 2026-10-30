@@ -56,6 +56,9 @@ func main() {
 		sqliteHard  = flag.Int64("sqlite-heap-limit", 0, "SQLite hard heap limit in bytes, process wide (0 = -sqlite-heap-fraction of the cgroup limit, negative = off)")
 		sqliteSoft  = flag.Int64("sqlite-soft-heap-limit", 0, "SQLite soft heap limit in bytes (0 = 80% of the hard limit, negative = the hard limit)")
 		cacheKiB    = flag.Int("sqlite-cache-kib", 0, "page cache bound per SQLite connection in KiB (0 = default, negative = SQLite default)")
+		usageTopN   = flag.Int("usage-top-n", 20, "tenants with the most read plus write time that get their own series in /metrics (negative = none)")
+		usageEvery  = flag.Duration("usage-interval", 10*time.Second, "sample period of the per-tenant usage rates")
+		usageHalf   = flag.Duration("usage-half-life", time.Minute, "half-life of the decayed per-tenant usage rates")
 	)
 	flag.Parse()
 	// memory caps first: before any tenant opens (memory.go). A cap that
@@ -183,6 +186,9 @@ func main() {
 	opts.MaxResultRows = *maxRows
 	opts.MaxResultBytes = *maxBytes
 	opts.CacheKiB = *cacheKiB
+	opts.UsageTopN = *usageTopN
+	opts.UsageInterval = *usageEvery
+	opts.UsageHalfLife = *usageHalf
 	if opts.WriteTimeout < 0 || opts.WriteTimeout >= 60*time.Second {
 		log.Printf("WARNING: -write-timeout %v: a write holds the tenant actor; the actor watchdog fails a tenant over after about 70s without progress", opts.WriteTimeout)
 	}

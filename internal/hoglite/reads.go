@@ -47,7 +47,8 @@ type pinnedRead struct {
 	ar      *activeRead
 	basis   int64
 	gen     int64
-	durable bool // basis <= durableOff at pin time
+	durable bool          // basis <= durableOff at pin time
+	pinTime time.Duration // actor time of the pin, charged with the read
 }
 
 // submitRead admits w, queues it for the actor and waits for its outcome.
@@ -170,6 +171,7 @@ func (t *Tenant) deliverRead(w *readWork, o readOutcome) {
 // correct read of committed state that linearizes at the pin. No write of
 // a later owner can precede the pin: a new owner waits out the lease.
 func (t *Tenant) pinRead(w *readWork, basis int64) {
+	pinStart := time.Now()
 	ctx, cancel := context.WithCancelCause(w.ctx)
 	ar := t.readers.add(cancel)
 	if ar == nil {
@@ -187,6 +189,7 @@ func (t *Tenant) pinRead(w *readWork, basis int64) {
 		err = memErr(err, t.metrics)
 		cancel(nil)
 		t.readers.remove(ar)
+		t.usage.addTime(kindRead, time.Since(pinStart))
 		t.replyRead(w, readOutcome{err: err})
 	}
 	// The reader slot of w guarantees a free pool connection, so this does
@@ -234,7 +237,7 @@ func (t *Tenant) pinRead(w *readWork, basis int64) {
 		return
 	}
 	pr := &pinnedRead{w: w, ctx: ctx, cancel: cancel, conn: conn, db: h, tx: tx, ar: ar,
-		basis: basis, gen: t.mf.Gen, durable: basis <= t.durableOff}
+		basis: basis, gen: t.mf.Gen, durable: basis <= t.durableOff, pinTime: time.Since(pinStart)}
 	// A free worker takes the read; start one only when every free worker
 	// is already spoken for. The send never blocks: each queued pin holds
 	// a reader slot, and pinCh has room for MaxReaders.
@@ -333,7 +336,10 @@ func (t *Tenant) readWorker(pr *pinnedRead) {
 	}
 	ctx, cancel := withDeadline(pr.ctx, t.opts.QueryTimeout, "read")
 	it := watchInterrupt(ctx, pr.db)
-	out := t.execRead(ctx, pr.tx, pr.w)
+	start := time.Now()
+	lim := t.newResultLimit(false)
+	out := t.execRead(ctx, pr.tx, pr.w, lim)
+	t.usage.charge(kindRead, pr.pinTime+time.Since(start), lim)
 	// no interrupt may reach the ROLLBACK or the next user of conn
 	it.stop()
 	if out.err != nil {
@@ -405,8 +411,7 @@ func (t *Tenant) drainReadDone() {
 // ctx ends when the client goes away, the read deadline passes, a
 // checkpoint preempts the read or the tenant closes. The result limit
 // covers the whole response.
-func (t *Tenant) execRead(ctx context.Context, tx *sql.Tx, w *readWork) readOutcome {
-	lim := t.newResultLimit(false)
+func (t *Tenant) execRead(ctx context.Context, tx *sql.Tx, w *readWork, lim *resultLimit) readOutcome {
 	if w.tx {
 		res, err := execTxStatements(ctx, tx, w.stmts, lim)
 		return readOutcome{results: res, err: err}

@@ -65,6 +65,13 @@ type TenantOpts struct {
 	// Zero selects the default, a negative value keeps the SQLite
 	// default (2000 KiB). See memory.go.
 	CacheKiB int
+	// Usage accounting (usage.go); read by the Manager, not per tenant.
+	// UsageTopN tenants appear in /metrics (zero selects the default, a
+	// negative value lists none). UsageInterval is the sample period,
+	// UsageHalfLife the decay of the rates; zero selects the default.
+	UsageTopN     int
+	UsageInterval time.Duration
+	UsageHalfLife time.Duration
 }
 
 func DefaultOpts() TenantOpts {
@@ -97,6 +104,9 @@ func DefaultOpts() TenantOpts {
 		MaxResultRows:  defaultMaxResultRows,
 		MaxResultBytes: defaultMaxResultBytes,
 		CacheKiB:       defaultCacheKiB,
+		UsageTopN:      defaultUsageTopN,
+		UsageInterval:  defaultUsageInterval,
+		UsageHalfLife:  defaultUsageHalfLife,
 	}
 }
 
@@ -353,6 +363,8 @@ type Tenant struct {
 	classHint   atomic.Value // string: manifest class, actor-owned write
 	lastUsedMs  atomic.Int64 // both actor and manager read/write
 
+	usage tenantUsage // execution accounting (usage.go)
+
 	metrics *Metrics
 }
 
@@ -464,6 +476,7 @@ func openTenant(id string, dir string, mf *Manifest, etag string, store Backend,
 	t.lastUsedMs.Store(time.Now().UnixMilli())
 	t.progressMs.Store(time.Now().UnixMilli()) // watchdog baseline: wedged-before-first-tick counts
 	t.classHint.Store(mf.Class)
+	metrics.usage.register(&t.usage, id, time.Now())
 	go t.run()
 	return t, nil
 }
@@ -835,6 +848,10 @@ func (t *Tenant) leaseExpiring() bool {
 }
 
 func (t *Tenant) applyTx(req TxRequest) (o txOutcome) {
+	// usage accounting: the whole transaction, including the rollback in
+	// the deferred cleanup below (this defer runs last)
+	var lim *resultLimit
+	defer func(start time.Time) { t.usage.charge(kindWrite, time.Since(start), lim) }(time.Now())
 	if t.leaseExpiring() {
 		o.err = ErrNotOwner
 		return o
@@ -900,7 +917,8 @@ func (t *Tenant) applyTx(req TxRequest) (o txOutcome) {
 		}
 	}()
 	it := watchInterrupt(ctx, h)
-	o = t.runTx(ctx, tx, req, o)
+	lim = t.newResultLimit(!o.readOnly)
+	o = t.runTx(ctx, tx, req, lim, o)
 	if h := t.txHook; h != nil {
 		h()
 	}
@@ -984,8 +1002,8 @@ func endOpenTx(c *sql.Conn, h uintptr) error {
 }
 
 // runTx executes the dedup lookup, the statements and the dedup receipt
-// of req inside tx. ctx carries the write deadline.
-func (t *Tenant) runTx(ctx context.Context, tx *sql.Tx, req TxRequest, o txOutcome) txOutcome {
+// of req inside tx. ctx carries the write deadline, lim the result budget.
+func (t *Tenant) runTx(ctx context.Context, tx *sql.Tx, req TxRequest, lim *resultLimit, o txOutcome) txOutcome {
 	if req.Client != "" && req.TxID != "" && !o.readOnly {
 		var raw, fp string
 		err := tx.QueryRowContext(ctx, `SELECT result, reqfp FROM _hw_dedup WHERE client=? AND txid=?`,
@@ -1010,7 +1028,7 @@ func (t *Tenant) runTx(ctx context.Context, tx *sql.Tx, req TxRequest, o txOutco
 			return o
 		}
 	}
-	if o.results, o.err = execTxStatements(ctx, tx, req.Stmts, t.newResultLimit(!o.readOnly)); o.err != nil {
+	if o.results, o.err = execTxStatements(ctx, tx, req.Stmts, lim); o.err != nil {
 		return o
 	}
 	if req.Client != "" && req.TxID != "" && !o.readOnly {
@@ -1106,6 +1124,7 @@ func forbiddenTXSQL(sqlText string) bool {
 }
 
 func execStatement(ctx context.Context, tx *sql.Tx, st Statement, lim *resultLimit) (QueryResult, error) {
+	lim.startStmt()
 	if !singleStatement(st.SQL) {
 		return QueryResult{}, errors.New("one statement per Statement")
 	}
@@ -1162,6 +1181,7 @@ func checkQuerySQL(sqlText string) error {
 // runQuery executes one checked /query statement inside a pinned read
 // transaction on the query_only connection.
 func runQuery(ctx context.Context, tx *sql.Tx, st Statement, lim *resultLimit) (QueryResult, error) {
+	lim.startStmt()
 	rows, err := tx.QueryContext(ctx, st.SQL, normalizeArgs(st.Args)...)
 	if err != nil {
 		return QueryResult{}, err
@@ -1635,6 +1655,8 @@ func (t *Tenant) maybeCheckpoint() {
 // manager while we drain, so a slow drain cannot lapse the lease.
 // Actor-loop only.
 func (t *Tenant) checkpointLocked(newClass string) bool {
+	// usage accounting: actor time of the checkpoint, uploads included
+	defer func(start time.Time) { t.usage.charge(kindCheckpoint, time.Since(start), nil) }(time.Now())
 	t.progressMs.Store(time.Now().UnixMilli())
 	t.cutSegment()
 	// bound concurrent checkpoints pod-wide: a mass idle release must not
@@ -2023,6 +2045,8 @@ func (t *Tenant) finishClose() {
 	t.dead = true
 	t.db.Close()
 	t.closeReaders()
+	// after the reads drained: their time is in the counters now
+	t.metrics.usage.retire(&t.usage)
 	t.wal.Close()
 	// publish the poison cooldown BEFORE done closes: once done is closed,
 	// LocalTenant can drop us from the registry and an Acquire can start
@@ -2063,5 +2087,6 @@ func (t *Tenant) DebugStatus() map[string]any {
 		"segments_since_checkpoint": t.segsSinceC, "alive": t.Alive(),
 		"format": t.mf.Format, "delta_chain": len(t.mf.Deltas),
 		"active_reads": t.readers.count(),
+		"usage":        t.usageStatus(),
 	}
 }

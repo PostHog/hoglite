@@ -220,6 +220,7 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) (int, any
 	fmt.Fprintf(&b, "hoglite_sqlite_soft_heap_limit_bytes %d\n", sqSoft)
 	fmt.Fprintf(&b, "hoglite_go_memory_limit_bytes %d\n", goMemoryLimit())
 	fmt.Fprintf(&b, "hoglite_out_of_memory_total %d\n", m.OutOfMemory.Load())
+	writeUsageMetrics(&b, &m.usage)
 	// saturation: max(commit-latency ratio, inflight ratio); 1.0 = at
 	// operating limit. This is the HPA target metric.
 	fmt.Fprintf(&b, "hoglite_saturation %.4f\n", s.mgr.Saturation())

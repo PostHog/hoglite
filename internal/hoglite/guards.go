@@ -202,11 +202,15 @@ func (it *interrupter) stop() {
 
 // resultLimit is the row and byte budget of one response: one /query
 // result, or all results of one /tx together. A zero field means no limit.
+//
+// It also counts the statements, rows and bytes of the response for the
+// usage accounting (usage.go), also when the limits are off.
 type resultLimit struct {
 	maxRows  int
 	maxBytes int64
 	rows     int
 	bytes    int64
+	stmts    int
 }
 
 // newResultLimit returns the budget of one response. A write transaction
@@ -237,6 +241,14 @@ const (
 	valueCost  = 32 // interface value; JSON of a float64 is at most 24+1 bytes
 	timeCost   = 8  // RFC 3339 nano timestamp: 30 bytes + quotes + separator
 )
+
+// startStmt counts one statement of the response for the usage
+// accounting. It runs before the statement, so a failed one counts too.
+func (l *resultLimit) startStmt() {
+	if l != nil {
+		l.stmts++
+	}
+}
 
 // addResult charges the container and the column names of one statement
 // result, also when it has no rows.

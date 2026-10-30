@@ -74,6 +74,9 @@ type Metrics struct {
 	// statements that failed with SQLITE_NOMEM at the SQLite heap limit
 	// (memory.go)
 	OutOfMemory atomic.Int64
+	// per-tenant execution accounting of the tenants that share this
+	// Metrics (usage.go)
+	usage usageTracker
 }
 
 // ewmaUpdate folds a sample into an atomic EWMA with alpha=1/8.
@@ -217,12 +220,14 @@ func NewManagerSat(store Backend, prefix, id, class, baseDir string, opts Tenant
 	// this does not limit takeover throughput.
 	m.decodeSem = make(chan struct{}, 32)
 	m.qlim = newQueryLimiter(opts.PodMaxQueries, m.metrics)
+	m.metrics.usage.configure(opts.UsageTopN, opts.UsageInterval, opts.UsageHalfLife)
 	// the first heartbeat is synchronous: no tenant may start before the
 	// write gate has a clock
 	m.heartbeatLease()
 	go m.leaseLoop()
 	go m.evictLoop()
 	go m.watchdogLoop()
+	go m.metrics.usage.loop(m.leaseStop)
 	m.ctrl = ctrl
 	if ctrl.Enabled {
 		go m.reclassLoop() // standard: promote hot; whale: demote cold
@@ -1214,5 +1219,6 @@ func (m *Manager) Stats() map[string]any {
 		"dedup_hits":       m.metrics.DedupHits.Load(),
 		"sqlite_interrupt": interruptSupport() == nil,
 		"memory":           memoryInfo(m.metrics),
+		"usage":            m.metrics.usage.info(),
 	}
 }
