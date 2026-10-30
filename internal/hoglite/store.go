@@ -31,6 +31,32 @@ type Manifest struct {
 	BaseKey      string `json:"base_key"`
 	Class        string `json:"class"`
 	UpdatedMs    int64  `json:"updated_ms"`
+	// Format names the newest object encoding the current generation may
+	// contain. A build refuses a tenant whose Format is above
+	// maxManifestFormat instead of misreading it. Absent (0) means raw
+	// objects only, as written by builds before compression.
+	Format int `json:"format,omitempty"`
+}
+
+// Manifest formats. Bump maxManifestFormat with any change that an older
+// reader would misread (new object types, new codecs).
+const (
+	manifestFormatRaw  = 0 // raw base image and raw WAL segments
+	manifestFormatZstd = 1 // objects may be zstd frames (see codec.go)
+	maxManifestFormat  = manifestFormatZstd
+)
+
+// ErrUnsupportedFormat means the tenant was written by a newer build whose
+// object format this build cannot read. Refusing is the only safe answer:
+// a claim would publish a base built from a misread history.
+var ErrUnsupportedFormat = errors.New("tenant uses a newer storage format")
+
+// checkManifestFormat refuses manifests from a newer format.
+func checkManifestFormat(tid string, m *Manifest) error {
+	if m.Format > maxManifestFormat {
+		return fmt.Errorf("%w: %s has format %d, this build reads up to %d", ErrUnsupportedFormat, tid, m.Format, maxManifestFormat)
+	}
+	return nil
 }
 
 type Store struct {
@@ -373,8 +399,11 @@ func (s *Store) GetObjectTo(ctx context.Context, key string, w io.Writer) error 
 type SegMeta struct {
 	Key    string
 	Epoch  int64
-	Offset int64
-	Size   int64
+	Offset int64 // byte offset of the segment in the RAW WAL
+	// Size is the STORED object size from LIST. For a compressed segment it
+	// is not the raw WAL length: never use it for contiguity. Recovery uses
+	// the decoded length instead.
+	Size int64
 }
 
 // ListSegments returns all segments of one WAL incarnation, sorted by offset.

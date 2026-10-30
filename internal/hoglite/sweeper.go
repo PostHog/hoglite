@@ -94,6 +94,11 @@ func (s *Sweeper) sweepTenant(ctx context.Context, tid string) {
 	if err != nil || mf == nil {
 		return
 	}
+	// a newer format may add object kinds this build does not know, and
+	// the gen parse below would misjudge them: leave such tenants alone
+	if checkManifestFormat(tid, mf) != nil {
+		return
+	}
 	// never sweep a tenant whose owner's pod lease is live: the owner may
 	// be mid-claim (base uploaded before CAS) or mid-checkpoint. Orphans
 	// of live tenants are collected after they go idle (release) or dead

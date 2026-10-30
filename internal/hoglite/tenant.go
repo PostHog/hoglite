@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -30,6 +31,11 @@ type TenantOpts struct {
 	PutTimeout     time.Duration // per-attempt S3 PUT timeout
 	SkewMargin     time.Duration // acquirer waits lease + this; owner stops PUTs lease/3 early
 	IdleRelease    time.Duration // release ownership after this much write-idle time (0 = never)
+	// Compress stores new segments and base images as zstd frames. Readers
+	// accept both forms regardless of this flag. Turn it off for the first
+	// rollout from a build without compression support, so pods of the old
+	// build can still take over tenants during the rolling deploy.
+	Compress bool
 }
 
 func DefaultOpts() TenantOpts {
@@ -44,6 +50,7 @@ func DefaultOpts() TenantOpts {
 		PutTimeout:     5 * time.Second,
 		SkewMargin:     3500 * time.Millisecond, // must exceed max PUT duration
 		IdleRelease:    60 * time.Second,
+		Compress:       true,
 	}
 }
 
@@ -1015,7 +1022,12 @@ func (t *Tenant) cutSegment() {
 	t.metrics.SegPuts.Add(1)
 	t.metrics.SegBytes.Add(int64(len(data)))
 	t.metrics.InflightSegs.Add(1)
+	compress := t.opts.Compress
 	go func() {
+		// compress off the actor, once per segment (not per attempt). The
+		// key keeps the RAW WAL offset; recovery uses decoded lengths.
+		stored := segmentObject(s.data, compress)
+		t.metrics.SegStoredBytes.Add(int64(len(stored)))
 		var err error
 		for attempt := 0; ; attempt++ {
 			// The write fence is re-read PER ATTEMPT, not captured at cut
@@ -1056,7 +1068,7 @@ func (t *Tenant) cutSegment() {
 			default:
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), attemptTimeout)
-			err = t.store.PutSegment(ctx, s.key, s.data)
+			err = t.store.PutSegment(ctx, s.key, stored)
 			cancel()
 			if err == nil {
 				break
@@ -1151,6 +1163,47 @@ func (t *Tenant) putBaseWithStallCancel(key string, f *os.File, size int64, stal
 		t.progressMs.Store(time.Now().UnixMilli())
 	}}
 	return t.store.PutBase(pctx, key, pr, size)
+}
+
+// prepareBaseUpload returns the file and size to upload as the base image.
+// With compression on it writes one zstd frame to a temp file next to the
+// database. The reads bump progressMs, so a long compression of a large
+// base does not look like a wedged actor. Any compression failure (for
+// example a full disk) falls back to the raw file: raw is always a valid
+// base, and a checkpoint must not fail for an optimization.
+func (t *Tenant) prepareBaseUpload(f *os.File, size int64) (*os.File, int64, func()) {
+	noop := func() {}
+	if !t.opts.Compress {
+		return f, size, noop
+	}
+	logf := func(format string, args ...any) {
+		if t.metrics.Logger != nil {
+			t.metrics.Logger.Printf(format, args...)
+		}
+	}
+	tmp, err := os.CreateTemp(t.dir, "base-*.zst")
+	if err != nil {
+		logf("tenant %s: base compress: %v (uploading raw)", t.ID, err)
+		return f, size, noop
+	}
+	var once sync.Once
+	cleanup := func() {
+		once.Do(func() {
+			tmp.Close()
+			os.Remove(tmp.Name())
+		})
+	}
+	var last atomic.Int64
+	src := &progressReader{f: f, lastNs: &last, onRead: func() {
+		t.progressMs.Store(time.Now().UnixMilli())
+	}}
+	stored, err := compressStream(tmp, src, size)
+	if err != nil {
+		cleanup()
+		logf("tenant %s: base compress: %v (uploading raw)", t.ID, err)
+		return f, size, noop
+	}
+	return tmp, stored, cleanup
 }
 
 // writeDeadline is the absolute fence for data-plane PUTs: the pod lease
@@ -1337,35 +1390,49 @@ func (t *Tenant) checkpointLocked(newClass string) bool {
 	}
 	fi, _ := f.Stat()
 	t.progressMs.Store(time.Now().UnixMilli())
+	// compress once into a temp file, then upload that file: retries and
+	// SDK rewinds need a seekable body, and the base can be GBs, so it
+	// never sits in memory
+	upload, uploadSize, cleanupUpload := t.prepareBaseUpload(f, fi.Size())
+	defer cleanupUpload()
 	// Progress-bounded upload: an attempt is canceled only when no bytes
 	// move for stallTimeout, never for being merely slow — a multi-GB base
 	// on a degraded link must still finish (a fixed 20s cap
 	// made large tenants permanently uncheckpointable).
 	var putErr error
 	for attempt := 0; attempt < 4; attempt++ {
-		if _, serr := f.Seek(0, 0); serr != nil {
+		if _, serr := upload.Seek(0, 0); serr != nil {
 			f.Close()
 			t.failLocked(fmt.Errorf("base seek: %w", serr))
 			return false
 		}
-		putErr = t.putBaseWithStallCancel(newBaseKey, f, fi.Size(), 10*time.Second)
+		putErr = t.putBaseWithStallCancel(newBaseKey, upload, uploadSize, 10*time.Second)
 		t.progressMs.Store(time.Now().UnixMilli())
 		if putErr == nil {
 			break
 		}
 	}
+	cleanupUpload() // free the temp file before the CAS phase
 	if putErr != nil {
 		f.Close()
 		t.failLocked(fmt.Errorf("base put: %w", putErr))
 		return false
 	}
 	f.Close()
+	t.metrics.BaseBytes.Add(fi.Size())
+	t.metrics.BaseStoredBytes.Add(uploadSize)
 	oldGen := t.mf.Gen
 	oldBase := t.mf.BaseKey
 	oldIID := t.mf.Instance
 	nm := *t.mf
 	nm.Gen = newGen
 	nm.BaseKey = newBaseKey
+	// the new generation holds only objects this incarnation writes, so
+	// the format follows our own write setting
+	nm.Format = manifestFormatRaw
+	if t.opts.Compress {
+		nm.Format = manifestFormatZstd
+	}
 	if newClass != "" {
 		nm.Class = newClass
 		t.classHint.Store(newClass)

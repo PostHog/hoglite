@@ -43,6 +43,12 @@ type Metrics struct {
 	// ack) across the pod. It is the primary autoscaling signal: it rises
 	// as soon as S3 queueing starts, well before client-visible timeouts.
 	CommitEwmaUs atomic.Int64
+
+	// Stored (possibly compressed) bytes PUT for segments and base images.
+	// SegBytes is the raw WAL byte count; raw vs stored gives the ratio.
+	SegStoredBytes  atomic.Int64
+	BaseBytes       atomic.Int64 // raw base image bytes uploaded
+	BaseStoredBytes atomic.Int64
 }
 
 // ewmaUpdate folds a sample into an atomic EWMA with alpha=1/8.
@@ -509,6 +515,12 @@ func (m *Manager) Acquire(ctx context.Context, tid string, create bool) (*Tenant
 				return lt, nil
 			}
 		}
+		// a tenant written by a newer build: refuse before touching any of
+		// its objects. The check sits after the liveness wait, so a tenant
+		// that a live newer peer owns still answers ErrBusy (re-route).
+		if err := checkManifestFormat(tid, mf); err != nil {
+			return nil, err
+		}
 		// lease expired or free: take over
 		t, err := m.takeOver(ctx, tid, mf, etag)
 		if errors.Is(err, ErrCAS) || errors.Is(err, errStaleGen) {
@@ -669,6 +681,9 @@ var errStaleGen = errors.New("generation objects changed during recovery")
 // materializeLocked downloads the base image and replays the contiguous
 // segment run into dir.
 func (m *Manager) materializeLocked(ctx context.Context, tid string, mf *Manifest, dir string) error {
+	if err := checkManifestFormat(tid, mf); err != nil {
+		return err
+	}
 	dbPath := filepath.Join(dir, "db.sqlite")
 	walPath := filepath.Join(dir, "db.sqlite-wal")
 
@@ -676,7 +691,9 @@ func (m *Manager) materializeLocked(ctx context.Context, tid string, mf *Manifes
 	if err != nil {
 		return err
 	}
-	if err := m.store.GetObjectTo(ctx, mf.BaseKey, base); err != nil {
+	// the base may be raw (older build) or one zstd frame; it streams
+	// through the decoder to disk, never whole into memory
+	if _, _, err := fetchDecodedTo(ctx, m.store, mf.BaseKey, base, maxStreamRawBytes); err != nil {
 		base.Close()
 		if errors.Is(err, ErrNotFound) {
 			return errStaleGen
@@ -702,7 +719,7 @@ func (m *Manager) materializeLocked(ctx context.Context, tid string, mf *Manifes
 		if s.Offset < expect {
 			continue // duplicate offset from an older epoch; newer sorted first
 		}
-		data, err := m.store.GetObject(ctx, s.Key)
+		stored, err := m.store.GetObject(ctx, s.Key)
 		if err != nil {
 			wal.Close()
 			if errors.Is(err, ErrNotFound) {
@@ -712,10 +729,20 @@ func (m *Manager) materializeLocked(ctx context.Context, tid string, mf *Manifes
 			}
 			return fmt.Errorf("fetch segment %s: %w", s.Key, err)
 		}
+		// a segment that does not decode is corruption in an immutable
+		// object, exactly like a broken checksum chain below: refuse the
+		// claim with the same error class
+		data, err := decodeBlob(stored, maxBlobRawBytes)
+		if err != nil {
+			wal.Close()
+			return fmt.Errorf("wal replay incomplete: segment %s: %w (corruption in stored segments)", s.Key, err)
+		}
 		if _, err := wal.Write(data); err != nil {
 			wal.Close()
 			return err
 		}
+		// contiguity runs on RAW lengths: keys carry raw WAL offsets, and
+		// the stored size of a compressed segment is smaller
 		expect += int64(len(data))
 	}
 	wal.Close()
@@ -1055,6 +1082,8 @@ func (m *Manager) Stats() map[string]any {
 		"replica": m.id, "class": m.class, "prefix": m.prefix, "open_tenants": n, "tenant_ids": ids,
 		"commits": m.metrics.Commits.Load(), "queries": m.metrics.Queries.Load(),
 		"seg_puts": m.metrics.SegPuts.Load(), "seg_bytes": m.metrics.SegBytes.Load(),
+		"seg_stored_bytes": m.metrics.SegStoredBytes.Load(),
+		"base_bytes":       m.metrics.BaseBytes.Load(), "base_stored_bytes": m.metrics.BaseStoredBytes.Load(),
 		"acquires": m.metrics.Acquires.Load(), "checkpoints": m.metrics.Checkpoints.Load(),
 		"proxied": m.metrics.Proxied.Load(), "evictions": m.metrics.Evictions.Load(),
 		"dedup_hits": m.metrics.DedupHits.Load(),
