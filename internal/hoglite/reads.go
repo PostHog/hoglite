@@ -71,17 +71,16 @@ func (t *Tenant) submitRead(ctx context.Context, w *readWork) readOutcome {
 		}
 		return readOutcome{err: err}
 	}
-	var once sync.Once
-	w.release = func() {
-		once.Do(func() {
-			t.qlim.release()
-			<-t.readSlots
-		})
-	}
+	// The queue can be full while the actor is busy (checkpoint upload).
+	// A canceled or timed-out caller must not wait here with its slots: w
+	// was not queued, so this goroutine still owns them.
 	select {
 	case t.readCh <- w:
+	case <-ctx.Done():
+		t.releaseSlots(w)
+		return readOutcome{err: ctx.Err()}
 	case <-t.done:
-		w.release()
+		t.releaseSlots(w)
 		return readOutcome{err: t.deadError()}
 	}
 	select {
@@ -92,7 +91,7 @@ func (t *Tenant) submitRead(ctx context.Context, w *readWork) readOutcome {
 		// the actor or the worker owns it; the canceled ctx stops the
 		// query and the owner returns the slots.
 		if w.taken.CompareAndSwap(false, true) {
-			w.release()
+			t.releaseSlots(w)
 		}
 		return readOutcome{err: ctx.Err()}
 	case <-t.done:
@@ -103,15 +102,23 @@ func (t *Tenant) submitRead(ctx context.Context, w *readWork) readOutcome {
 		}
 		// a send that raced the close can sit in readCh forever
 		if w.taken.CompareAndSwap(false, true) {
-			w.release()
+			t.releaseSlots(w)
 		}
 		return readOutcome{err: t.deadError()}
 	}
 }
 
+// releaseSlots returns the admission slots of w. Idempotent.
+func (t *Tenant) releaseSlots(w *readWork) {
+	if w.released.CompareAndSwap(false, true) {
+		t.qlim.release()
+		<-t.readSlots
+	}
+}
+
 // replyRead answers a read that never reached a worker.
 func (t *Tenant) replyRead(w *readWork, o readOutcome) {
-	w.release()
+	t.releaseSlots(w)
 	w.reply <- o
 }
 
@@ -173,8 +180,18 @@ func (t *Tenant) pinRead(w *readWork, basis int64) {
 	// not wait. The timeout only bounds the actor if that accounting is
 	// ever wrong.
 	cctx, ccancel := context.WithTimeout(ctx, time.Second)
+	defer ccancel()
+	if t.probe == nil {
+		// prepared once; database/sql then keeps it per connection, so a
+		// pin does not parse SQL
+		p, err := t.roDB.PrepareContext(cctx, `SELECT 1 FROM sqlite_master LIMIT 1`)
+		if err != nil {
+			abort(err)
+			return
+		}
+		t.probe = p
+	}
 	conn, err := t.roDB.Conn(cctx)
-	ccancel()
 	if err != nil {
 		abort(err)
 		return
@@ -189,8 +206,11 @@ func (t *Tenant) pinRead(w *readWork, basis int64) {
 		abort(err)
 		return
 	}
+	// The probe also runs with Background: it reads one schema page and
+	// cannot wait for a lock (only this actor writes or checkpoints), and
+	// a cancelable context costs two goroutines per statement.
 	var one int
-	err = tx.QueryRowContext(ctx, `SELECT 1 FROM sqlite_master LIMIT 1`).Scan(&one)
+	err = tx.StmtContext(context.Background(), t.probe).QueryRowContext(context.Background()).Scan(&one)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		tx.Rollback()
 		conn.Close()
@@ -199,10 +219,39 @@ func (t *Tenant) pinRead(w *readWork, basis int64) {
 	}
 	pr := &pinnedRead{w: w, ctx: ctx, cancel: cancel, conn: conn, tx: tx, ar: ar,
 		basis: basis, gen: t.mf.Gen, durable: basis <= t.durableOff}
-	go t.readWorker(pr)
+	// an idle worker takes the read at once; otherwise start one
+	select {
+	case t.pinCh <- pr:
+	default:
+		go t.readWorkerLoop(pr)
+	}
 }
 
-// readWorker runs a pinned read off the actor.
+// readWorkerIdle is how long an idle reader worker waits for the next
+// pin before it exits. Reuse keeps the grown goroutine stack: SQLite runs
+// deep, and a new goroutine pays the stack growth again on each read.
+const readWorkerIdle = 2 * time.Second
+
+// readWorkerLoop runs pr, then serves further pins until it is idle for
+// readWorkerIdle or the tenant closes. A worker starts only when no idle
+// one waits, so the workers never outnumber the reads that ran at once.
+func (t *Tenant) readWorkerLoop(pr *pinnedRead) {
+	idle := time.NewTimer(readWorkerIdle)
+	defer idle.Stop()
+	for {
+		t.readWorker(pr)
+		idle.Reset(readWorkerIdle)
+		select {
+		case pr = <-t.pinCh:
+		case <-idle.C:
+			return
+		case <-t.done:
+			return
+		}
+	}
+}
+
+// readWorker runs one pinned read off the actor.
 func (t *Tenant) readWorker(pr *pinnedRead) {
 	if h := t.readHook; h != nil {
 		h(pr.ctx)
@@ -220,7 +269,7 @@ func (t *Tenant) readWorker(pr *pinnedRead) {
 	pr.cancel(nil)
 	// the snapshot is closed: a waiting checkpoint or close may proceed
 	t.readers.remove(pr.ar)
-	pr.w.release()
+	t.releaseSlots(pr.w)
 	t.lastUsedMs.Store(time.Now().UnixMilli())
 	if pr.durable {
 		t.deliverRead(pr.w, out)

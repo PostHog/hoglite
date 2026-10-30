@@ -131,6 +131,13 @@ type txOutcome struct {
 // allReadOnly is the STRICT classifier for the no-durability fast path:
 // only statements that cannot write. isQuerySQL is about "returns rows"
 // (INSERT..RETURNING, writable WITH) and must not be reused here.
+//
+// Guards do not change the class. A guard does not write, and every prefix
+// accepted here is also isQuerySQL, so ExpectAffected on a read compares
+// the row count of the pinned snapshot. Such a transaction gets no dedup
+// receipt: a retry executes the read again, as for every read-only /tx.
+// A misclassified write cannot slip through: the reader path runs on a
+// query_only connection, and SQLite refuses the write.
 func allReadOnly(stmts []Statement) bool {
 	if len(stmts) == 0 {
 		return false
@@ -144,7 +151,7 @@ func allReadOnly(stmts []Statement) bool {
 			// a CTE can wrap INSERT/UPDATE/DELETE .. RETURNING
 			readPrefix = !sqlContainsDML(ls)
 		}
-		if !readPrefix || st.ExpectAffected != nil {
+		if !readPrefix {
 			return false
 		}
 	}
@@ -187,8 +194,8 @@ type readWork struct {
 	// taken decides who returns the admission slots: the first party to
 	// set it (the actor on receipt, or the submitter that gives up) owns
 	// the release.
-	taken   atomic.Bool
-	release func() // returns the admission slots; idempotent
+	taken    atomic.Bool
+	released atomic.Bool // admission slots returned (releaseSlots)
 }
 
 type readOutcome struct {
@@ -278,6 +285,8 @@ type Tenant struct {
 	readSlots chan struct{}         // per-tenant read admission: one token per roDB connection
 	qlim      *queryLimiter         // pod-wide query admission (manager-owned; nil = unbounded)
 	readers   readerSet             // pinned read snapshots (open read transactions on roDB)
+	pinCh     chan *pinnedRead      // unbuffered: hands a pin to an idle reader worker
+	probe     *sql.Stmt             // pin probe prepared on roDB; actor-loop only
 	readDone  chan readResult       // worker outcomes whose basis was not yet durable at pin time
 	readHook  func(context.Context) // test hook: runs in the worker after the pin
 	// ckptDeferUntil delays size-triggered checkpoints after one was
@@ -360,10 +369,13 @@ func openTenant(id string, dir string, mf *Manifest, etag string, store Backend,
 		sem:     make(chan struct{}, opts.Inflight),
 		writeCh: make(chan *txWork, 4096),
 		readCh:  make(chan *readWork, 4096),
-		// buffered to the reader cap: a finishing worker never waits for a
-		// busy actor (e.g. one inside a checkpoint)
+		// A worker sends here only after it closed its snapshot and returned
+		// its slots, so a full buffer parks a goroutine but holds no
+		// snapshot: a checkpoint drain cannot wait on it. The buffer only
+		// makes that park rare.
 		readDone:  make(chan readResult, opts.MaxReaders),
 		readSlots: make(chan struct{}, opts.MaxReaders),
+		pinCh:     make(chan *pinnedRead),
 		ctlCh:     make(chan func(), 64),
 		done:      make(chan struct{}),
 		metrics:   metrics,

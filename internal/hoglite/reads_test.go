@@ -3,7 +3,9 @@ package hoglite
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -537,4 +539,236 @@ func TestReadOnlyTxOffActor(t *testing.T) {
 	if !errors.As(err, &ef) || ef.Index != 0 {
 		t.Fatalf("guard on the reader path: %v", err)
 	}
+}
+
+// A read-only /tx with ExpectAffected is still a read: it takes the reader
+// path (admission, pinned snapshot, off the actor) and gets no dedup
+// receipt. Before the fix it ran on the actor and ignored the limiter.
+func TestGuardedReadOnlyTxOffActor(t *testing.T) {
+	fs := NewFakeStore()
+	o := testOpts()
+	o.PodMaxQueries = 1
+	m := newReadTestManager(t, fs, o, &Metrics{})
+	defer m.ShutdownAll()
+	mustCreate(t, m, "t1")
+	makeSchema(t, m, "t1")
+	mustTx(t, m, "t1", "c", "d1", insertStmt(1, "v"))
+	ten, _ := m.Acquire(context.Background(), "t1", false)
+	one := int64(1)
+	guarded := func(txid string) TxRequest {
+		return TxRequest{Client: "c", TxID: txid, Stmts: []Statement{
+			{SQL: `SELECT k FROM kv`, ExpectAffected: &one}}}
+	}
+
+	// 1. a full pod limiter holds it back until its context ends
+	if err := m.qlim.acquire(context.Background(), ten.done); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	_, _, err := ten.SubmitTxCtx(ctx, guarded("g0"))
+	cancel()
+	m.qlim.release()
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("guarded read with a full pod limiter: %v", err)
+	}
+
+	// 2. off the actor, on the snapshot pinned before the next write
+	hook, pinned, gate := blockingHook()
+	ten.readHook = hook
+	type txRes struct {
+		res []QueryResult
+		err error
+	}
+	done := make(chan txRes, 1)
+	go func() {
+		res, _, err := ten.SubmitTxCtx(context.Background(), guarded("g1"))
+		done <- txRes{res, err}
+	}()
+	waitPinned(t, pinned)
+	t0 := time.Now()
+	mustTx(t, m, "t1", "c", "d2", insertStmt(2, "v"))
+	if d := time.Since(t0); d > 2*time.Second {
+		t.Fatalf("write behind a guarded read-only tx took %v", d)
+	}
+	close(gate)
+	var r txRes
+	select {
+	case r = <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("guarded read-only tx never returned")
+	}
+	if r.err != nil || len(r.res) != 1 || r.res[0].Affected != 1 {
+		t.Fatalf("guarded read-only tx: %+v %v", r.res, r.err)
+	}
+	ten.readHook = nil
+
+	// 3. the guard compares the row count of the current snapshot (2 rows)
+	_, _, err = ten.SubmitTx(guarded("g2"))
+	var ef *ExpectFailedError
+	if !errors.As(err, &ef) || ef.Index != 0 {
+		t.Fatalf("ExpectAffected on the reader path: %v", err)
+	}
+
+	// 4. no dedup receipt: nothing was written for the reads
+	n := onActor(ten, func() int {
+		var n int
+		if err := ten.db.QueryRow(`SELECT COUNT(*) FROM _hw_dedup WHERE txid LIKE 'g%'`).Scan(&n); err != nil {
+			return -1
+		}
+		return n
+	})
+	if n != 0 {
+		t.Fatalf("guarded reads left %d dedup receipts", n)
+	}
+}
+
+// A caller whose context ends while the read queue is full must return at
+// once and give back its slots: it was never queued.
+func TestCanceledReadQueueSend(t *testing.T) {
+	fs := NewFakeStore()
+	met := &Metrics{}
+	m := newReadTestManager(t, fs, testOpts(), met)
+	defer m.ShutdownAll()
+	mustCreate(t, m, "t")
+	ten, _ := m.Acquire(context.Background(), "t", false)
+	ten.Freeze()
+	// fill the queue with entries a submitter already gave up on; the
+	// actor skips them after Unfreeze
+	for len(ten.readCh) < cap(ten.readCh) {
+		w := &readWork{}
+		w.taken.Store(true)
+		ten.readCh <- w
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	read := goQuery(ctx, ten, "SELECT 1")
+	select {
+	case r := <-read:
+		if !errors.Is(r.err, context.DeadlineExceeded) {
+			ten.Unfreeze()
+			t.Fatalf("read with a full queue: %v", r.err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Errorf("canceled read stuck on the full queue; tenant slots %d pod slots %d",
+			len(ten.readSlots), len(m.qlim.slots))
+		ten.Unfreeze()
+		<-read
+		return
+	}
+	if len(ten.readSlots) != 0 || len(m.qlim.slots) != 0 || met.QueriesInflight.Load() != 0 {
+		ten.Unfreeze()
+		t.Fatalf("slots leaked: tenant %d pod %d inflight %d",
+			len(ten.readSlots), len(m.qlim.slots), met.QueriesInflight.Load())
+	}
+	ten.Unfreeze()
+	if _, err := ten.SubmitQuery(Statement{SQL: "SELECT 1"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The checkpoint must check the busy column of wal_checkpoint, not only
+// the error. A snapshot outside the reader set (never expected, simulated
+// here) makes TRUNCATE incomplete; publishing a base then would lose the
+// frames it could not fold. The tenant must fail-stop instead.
+func TestCheckpointBusyFailsStop(t *testing.T) {
+	fs := NewFakeStore()
+	m := newTestManager(t, fs, "a")
+	defer m.ShutdownAll()
+	mustCreate(t, m, "t")
+	makeSchema(t, m, "t")
+	ten, _ := m.Acquire(context.Background(), "t", false)
+	mustTx(t, m, "t", "c", "one", insertStmt(1, "one"))
+	conn, err := ten.roDB.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	tx, err := conn.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	var n int
+	if err = tx.QueryRow("SELECT COUNT(*) FROM kv").Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	mustTx(t, m, "t", "c", "two", insertStmt(2, "two"))
+	gen := onActor(ten, func() int64 {
+		ten.db.Exec("PRAGMA busy_timeout=0")
+		return ten.mf.Gen
+	})
+	if checkpointNow(ten) {
+		t.Fatal("checkpoint accepted a busy TRUNCATE")
+	}
+	if ten.Alive() || ten.mf.Gen != gen {
+		t.Fatalf("busy checkpoint went on: alive=%v gen=%d (was %d)", ten.Alive(), ten.mf.Gen, gen)
+	}
+	if !strings.Contains(fmt.Sprint(ten.deadErr), "busy") {
+		t.Fatalf("unexpected failure: %v", ten.deadErr)
+	}
+}
+
+// A read that waits for its tenant slot must not hold a pod slot: another
+// tenant must still get the spare pod slot while that waiter is blocked.
+func TestTenantWaiterHoldsNoPodSlot(t *testing.T) {
+	fs := NewFakeStore()
+	o := testOpts()
+	o.MaxReaders = 1
+	o.PodMaxQueries = 2
+	met := &Metrics{}
+	m := newReadTestManager(t, fs, o, met)
+	defer m.ShutdownAll()
+	mustCreate(t, m, "a")
+	mustCreate(t, m, "b")
+	a, _ := m.Acquire(context.Background(), "a", false)
+	b, _ := m.Acquire(context.Background(), "b", false)
+	hook, pinned, gate := blockingHook()
+	a.readHook = hook
+	first := goQuery(context.Background(), a, "SELECT 1")
+	waitPinned(t, pinned)
+	ctx, cancel := context.WithCancel(context.Background())
+	waiting := goQuery(ctx, a, "SELECT 1")
+	// let the waiter reach admission (a short sleep can only weaken the
+	// test, never make it fail on correct code)
+	time.Sleep(50 * time.Millisecond)
+	inflight := met.QueriesInflight.Load()
+	bctx, bcancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	_, err := b.SubmitQueryCtx(bctx, Statement{SQL: "SELECT 1"})
+	bcancel()
+	cancel()
+	<-waiting
+	close(gate)
+	<-first
+	if inflight != 1 {
+		t.Fatalf("tenant waiter holds a pod slot: inflight %d, want 1", inflight)
+	}
+	if err != nil {
+		t.Fatalf("tenant waiter took the spare pod slot; other tenant failed: %v", err)
+	}
+}
+
+// BenchmarkPointRead measures the fixed cost of one trivial read through
+// admission, pin and worker (from the Q1 review).
+func BenchmarkPointRead(b *testing.B) {
+	fs := NewFakeStore()
+	m := NewManager(fs, "fake", "a", "standard", b.TempDir(), testOpts(), 1000, &Metrics{}, ControllerOpts{})
+	defer m.ShutdownAll()
+	ten, err := m.Acquire(context.Background(), "t", true)
+	if err != nil {
+		b.Fatal(err)
+	}
+	st := Statement{SQL: "SELECT 1"}
+	for i := 0; i < 5; i++ {
+		if _, err := ten.SubmitQuery(st); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := ten.SubmitQuery(st); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.StopTimer()
 }
