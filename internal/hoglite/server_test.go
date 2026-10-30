@@ -195,3 +195,145 @@ func TestDeleteTenant(t *testing.T) {
 		t.Fatal("manifest survived delete")
 	}
 }
+
+func TestReleaseRoutesToOwner(t *testing.T) {
+	c := newTestCluster(t, "a", "b")
+	if code, out, _ := c.do(t, "a", "PUT", "/v1/tenants/rt", map[string]any{}); code != 200 {
+		t.Fatalf("create: %d %v", code, out)
+	}
+	// Release via the NON-owner must route to the owner, exactly like /tx:
+	// a lifecycle caller behind a Service cannot know which pod owns the
+	// tenant, and a 409 here made multi-pod catalog drops mostly fail.
+	code, out, _ := c.do(t, "b", "POST", "/v1/t/rt/release", nil)
+	if code != 200 {
+		t.Fatalf("release via non-owner: %d %v", code, out)
+	}
+	// The release really happened on the owner: ownership is gone, so a
+	// delete anywhere proceeds without the live-owner refusal.
+	code, out, _ = c.do(t, "b", "DELETE", "/v1/tenants/rt", nil)
+	if code != 200 {
+		t.Fatalf("delete after routed release: %d %v", code, out)
+	}
+	// A release with no live owner anywhere is idempotently OK, so a
+	// retried drop does not have to distinguish "released by the owner"
+	// from "already released".
+	if code, out, _ := c.do(t, "b", "POST", "/v1/t/rt/release", nil); code != 200 {
+		t.Fatalf("release of unowned tenant: %d %v", code, out)
+	}
+}
+
+func TestDeleteRoutesToOwner(t *testing.T) {
+	c := newTestCluster(t, "a", "b")
+	if code, out, _ := c.do(t, "a", "PUT", "/v1/tenants/dr", map[string]any{}); code != 200 {
+		t.Fatalf("create: %d %v", code, out)
+	}
+	// Delete via the NON-owner routes to the owner, exactly like /tx and
+	// /release. The deletion executes AT the owner (which stops its own
+	// actor first); without routing, a lifecycle caller behind a Service
+	// could only delete when the load balancer happened to land on the
+	// owning pod — the old 409 made multi-pod catalog drops mostly fail.
+	code, out, _ := c.do(t, "b", "DELETE", "/v1/tenants/dr", nil)
+	if code != 200 {
+		t.Fatalf("delete via non-owner: %d %v", code, out)
+	}
+	// The delete really happened on the owner: the durable state is gone...
+	mf, _, _ := c.fs.GetManifest(context.Background(), "dr")
+	if mf != nil {
+		t.Fatal("manifest survived routed delete")
+	}
+	// ...and the owner's local actor was stopped, not orphaned.
+	if c.mgrs["a"].LocalTenant("dr") != nil {
+		t.Fatal("owner kept the tenant after routed delete")
+	}
+	// Deleting the gone tenant again is idempotently OK (the drop flow
+	// retries the delete on transient failures).
+	if code, out, _ := c.do(t, "b", "DELETE", "/v1/tenants/dr", nil); code != 200 {
+		t.Fatalf("re-delete of deleted tenant: %d %v", code, out)
+	}
+}
+
+func TestDeleteUnroutableOwnerHints421(t *testing.T) {
+	c := newTestCluster(t, "a", "b")
+	if code, out, _ := c.do(t, "a", "PUT", "/v1/tenants/du", map[string]any{}); code != 200 {
+		t.Fatalf("create: %d %v", code, out)
+	}
+	// A pod whose peer table cannot reach the live owner cannot proxy the
+	// delete: it must answer 421 with the owner hint so the caller can
+	// route to the owner itself (the same contract as /tx and /release).
+	noPeers := httptest.NewServer(NewServer(c.mgrs["b"], map[string]string{}).Handler())
+	defer noPeers.Close()
+	req, _ := http.NewRequest("DELETE", noPeers.URL+"/v1/tenants/du", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("delete via unroutable peer: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 421 {
+		t.Fatalf("expected 421, got %d", resp.StatusCode)
+	}
+	var out map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	owner, _ := out["owner"].(string)
+	if owner == "" || owner == "b" {
+		t.Fatalf("421 without a usable owner hint: %v", out)
+	}
+	// And the tenant survived the refusal.
+	if mf, _, _ := c.fs.GetManifest(context.Background(), "du"); mf == nil {
+		t.Fatal("tenant deleted despite the 421")
+	}
+}
+
+func TestRoutedReleasePreservesClass(t *testing.T) {
+	c := newTestCluster(t, "a", "b")
+	// A reclassing release must behave identically whether it lands on the
+	// owner directly or is routed there: the query string is part of the
+	// request, and a proxied release that dropped ?class= would silently
+	// degrade a reclass into a plain release.
+	for _, via := range []string{"a", "b"} {
+		tid := "rc-" + via
+		if code, out, _ := c.do(t, "a", "PUT", "/v1/tenants/"+tid, map[string]any{}); code != 200 {
+			t.Fatalf("create %s: %d %v", tid, code, out)
+		}
+		code, out, _ := c.do(t, via, "POST", "/v1/t/"+tid+"/release?class=large", nil)
+		mf, _, err := c.fs.GetManifest(context.Background(), tid)
+		if err != nil || mf == nil {
+			t.Fatalf("manifest after release via %s: %v", via, err)
+		}
+		if code != 200 || mf.Class != "large" {
+			t.Fatalf("release via %s lost the class: status=%d class=%q out=%v", via, code, mf.Class, out)
+		}
+	}
+}
+
+func TestUnreadableManifestFailsClosed(t *testing.T) {
+	c := newTestCluster(t, "a", "b")
+	if code, out, _ := c.do(t, "a", "PUT", "/v1/tenants/um", map[string]any{}); code != 200 {
+		t.Fatalf("create: %d %v", code, out)
+	}
+	// Corrupt the manifest so ownership reads error out. RELEASE must not
+	// answer an idempotent 200 (the caller would proceed to delete), and
+	// DELETE must not purge on a guess: both fail with 500.
+	c.fs.mu.Lock()
+	good := c.fs.objects[c.fs.manifestKey("um")]
+	c.fs.objects[c.fs.manifestKey("um")] = []byte("{not json")
+	c.fs.mu.Unlock()
+	if code, out, _ := c.do(t, "b", "POST", "/v1/t/um/release", nil); code != 500 {
+		t.Fatalf("release on unreadable manifest: %d %v", code, out)
+	}
+	if code, out, _ := c.do(t, "b", "DELETE", "/v1/tenants/um", nil); code != 500 {
+		t.Fatalf("delete on unreadable manifest: %d %v", code, out)
+	}
+	// Assert BEFORE restoring the bytes: restoring a purged manifest would
+	// otherwise hide deletion even if the handler still answered 500.
+	c.fs.mu.Lock()
+	corrupt, exists := c.fs.objects[c.fs.manifestKey("um")]
+	c.fs.mu.Unlock()
+	if !exists || !bytes.Equal(corrupt, []byte("{not json")) {
+		t.Fatal("tenant was modified while its manifest was unreadable")
+	}
+	c.fs.mu.Lock()
+	c.fs.objects[c.fs.manifestKey("um")] = good
+	c.fs.mu.Unlock()
+}
