@@ -31,10 +31,12 @@ type Manifest struct {
 	BaseKey      string `json:"base_key"`
 	Class        string `json:"class"`
 	UpdatedMs    int64  `json:"updated_ms"`
-	// Format names the newest object encoding the current generation may
-	// contain. A build refuses a tenant whose Format is above
-	// maxManifestFormat instead of misreading it. Absent (0) means raw
-	// objects only, as written by builds before compression.
+	// Format is the encoding of EVERY object of the current generation
+	// (base and segments; see codec.go). The checkpoint that publishes a
+	// generation sets it, and it does not change within the generation.
+	// A build refuses a tenant whose Format is above maxManifestFormat
+	// instead of misreading it. Absent (0) means raw objects only, as
+	// written by builds before compression.
 	Format int `json:"format,omitempty"`
 }
 
@@ -42,7 +44,7 @@ type Manifest struct {
 // reader would misread (new object types, new codecs).
 const (
 	manifestFormatRaw  = 0 // raw base image and raw WAL segments
-	manifestFormatZstd = 1 // objects may be zstd frames (see codec.go)
+	manifestFormatZstd = 1 // base and every segment are one zstd frame each (see codec.go)
 	maxManifestFormat  = manifestFormatZstd
 )
 

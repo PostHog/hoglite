@@ -3,12 +3,16 @@ package hoglite
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 // Integration tests for zstd object compression (S1). They run the real
@@ -36,6 +40,10 @@ func setCompress(t *testing.T, m *Manager, tid string, on bool) {
 	ten.ctlCh <- func() { ten.opts.Compress = on; close(done) }
 	<-done
 }
+
+// isZstd reports whether a stored object starts with the zstd frame magic
+// (test inspection only: production code never sniffs).
+func isZstd(b []byte) bool { return len(b) >= 4 && string(b[:4]) == zstdMagic }
 
 type objForms struct{ raw, zst int }
 
@@ -115,14 +123,15 @@ func TestCompressedObjectsRoundTrip(t *testing.T) {
 	}
 }
 
-// TestMixedRawAndCompressedSegmentsRecovery: one generation holds raw
-// segments (old build) followed by compressed ones. Recovery must chain
-// them on RAW offsets: a compressed segment's stored size is smaller than
-// the WAL range its key names.
-func TestMixedRawAndCompressedSegmentsRecovery(t *testing.T) {
+// TestGenFormatSticksAcrossFlagFlip: the format belongs to the
+// generation. A flag flip mid-generation does not change the form of the
+// next segments; only the next checkpoint follows the new flag. Recovery
+// chains the zstd segments on RAW lengths (their stored sizes do not
+// chain).
+func TestGenFormatSticksAcrossFlagFlip(t *testing.T) {
+	ctx := context.Background()
 	fs := NewFakeStore()
 	m, _ := newTestManagerOpts(t, fs, "a", func(o *TenantOpts) {
-		o.Compress = false
 		o.CheckpointByte = 64 << 20 // keep every segment in one gen
 		o.MaxSegments = 1000
 	})
@@ -130,18 +139,17 @@ func TestMixedRawAndCompressedSegmentsRecovery(t *testing.T) {
 	makeSchema(t, m, "t1")
 	pad := strings.Repeat("x", 3000)
 	for i := 0; i < 4; i++ {
-		mustTx(t, m, "t1", "c", fmt.Sprintf("r%d", i), insertStmt(int64(i), pad))
+		mustTx(t, m, "t1", "c", fmt.Sprintf("a%d", i), insertStmt(int64(i), pad))
 	}
-	setCompress(t, m, "t1", true)
+	setCompress(t, m, "t1", false) // mid-gen: no effect until the next checkpoint
 	for i := 4; i < 8; i++ {
-		mustTx(t, m, "t1", "c", fmt.Sprintf("z%d", i), insertStmt(int64(i), pad))
+		mustTx(t, m, "t1", "c", fmt.Sprintf("b%d", i), insertStmt(int64(i), pad))
 	}
 	forms, mf := segForms(t, fs, "t1")
-	if forms.raw == 0 || forms.zst == 0 {
-		t.Fatalf("want mixed segments, got %+v", forms)
+	if forms.raw != 0 || forms.zst < 8 || mf.Format != manifestFormatZstd {
+		t.Fatalf("zstd gen after flip off: %+v format %d, want all zstd", forms, mf.Format)
 	}
-	// stored sizes no longer chain: proves recovery cannot use them
-	segs, _ := fs.ListSegments(context.Background(), "t1", mf.Instance, mf.Gen)
+	segs, _ := fs.ListSegments(ctx, "t1", mf.Instance, mf.Gen)
 	chained := true
 	for i := 1; i < len(segs); i++ {
 		if segs[i-1].Offset+segs[i-1].Size != segs[i].Offset {
@@ -153,59 +161,109 @@ func TestMixedRawAndCompressedSegmentsRecovery(t *testing.T) {
 	}
 	crashTenant(t, m, "t1")
 	waitLeaseExpiry()
-	m2 := newTestManager(t, fs, "b")
-	if n := countRows(t, m2, "t1"); n != 8 {
-		t.Fatalf("after recovery: %d rows, want 8", n)
-	}
-}
 
-// TestOldRawBaseWithCompressedSegments: a tenant last checkpointed by an
-// old build (raw base, no manifest format) gets compressed segments from a
-// new build and recovers on a third pod.
-func TestOldRawBaseWithCompressedSegments(t *testing.T) {
-	fs := NewFakeStore()
-	old, _ := newTestManagerOpts(t, fs, "old", rawOpts)
-	mustCreate(t, old, "t1")
-	makeSchema(t, old, "t1")
-	mustTx(t, old, "t1", "c", "o1", insertStmt(1, "from-old"))
-	if err := old.Release("t1", ""); err != nil {
-		t.Fatal(err)
-	}
-	if b := baseObject(t, fs, "t1"); !bytes.HasPrefix(b, []byte("SQLite format 3\x00")) {
-		t.Fatal("old base should be a raw SQLite file")
-	}
-	if mf, _, _ := fs.GetManifest(context.Background(), "t1"); mf.Format != manifestFormatRaw {
-		t.Fatalf("old manifest format %d", mf.Format)
-	}
-	// a compressing pod's claim checkpoint would rewrite the base
-	// compressed. So the claim runs with compression off and the codec
-	// flips afterwards: a raw base under compressed segments, the state a
-	// mixed deploy produces.
-	m, _ := newTestManagerOpts(t, fs, "mixed", func(o *TenantOpts) {
+	// the other direction: a raw gen stays raw after a flip on
+	m2, _ := newTestManagerOpts(t, fs, "b", func(o *TenantOpts) {
 		o.Compress = false
 		o.CheckpointByte = 64 << 20
 		o.MaxSegments = 1000
 	})
-	mustTx(t, m, "t1", "c", "o2", insertStmt(2, "claim")) // claim: raw base
-	setCompress(t, m, "t1", true)
-	for i := 3; i < 7; i++ {
-		mustTx(t, m, "t1", "c", fmt.Sprintf("n%d", i), insertStmt(int64(i), strings.Repeat("n", 2000)))
+	if n := countRows(t, m2, "t1"); n != 8 {
+		t.Fatalf("recovery of the zstd gen: %d rows, want 8", n)
+	}
+	if mf, _, _ := fs.GetManifest(ctx, "t1"); mf.Format != manifestFormatRaw || isZstd(baseObject(t, fs, "t1")) {
+		t.Fatalf("claim with compression off: format %d, want a raw gen", mf.Format)
+	}
+	setCompress(t, m2, "t1", true)
+	for i := 8; i < 12; i++ {
+		mustTx(t, m2, "t1", "c", fmt.Sprintf("c%d", i), insertStmt(int64(i), pad))
+	}
+	forms, mf = segForms(t, fs, "t1")
+	if forms.zst != 0 || forms.raw < 4 || mf.Format != manifestFormatRaw {
+		t.Fatalf("raw gen after flip on: %+v format %d, want all raw", forms, mf.Format)
+	}
+	// the next checkpoint follows the flag: a full zstd gen
+	if err := m2.Release("t1", ""); err != nil {
+		t.Fatal(err)
+	}
+	if mf, _, _ := fs.GetManifest(ctx, "t1"); mf.Format != manifestFormatZstd || !isZstd(baseObject(t, fs, "t1")) {
+		t.Fatalf("checkpoint after flip on: format %d, want a zstd gen", mf.Format)
+	}
+	m3 := newTestManager(t, fs, "c")
+	if n := countRows(t, m3, "t1"); n != 12 {
+		t.Fatalf("after reload: %d rows, want 12", n)
+	}
+}
+
+// TestLegacyRawGenerationRecovers: a generation an old build wrote (raw
+// base, raw segments, no manifest format) recovers on a new pod, whose
+// claim then publishes a zstd generation.
+func TestLegacyRawGenerationRecovers(t *testing.T) {
+	ctx := context.Background()
+	fs := NewFakeStore()
+	old, _ := newTestManagerOpts(t, fs, "old", func(o *TenantOpts) {
+		o.Compress = false
+		o.CheckpointByte = 64 << 20
+		o.MaxSegments = 1000
+	})
+	mustCreate(t, old, "t1")
+	makeSchema(t, old, "t1")
+	for i := 0; i < 5; i++ {
+		mustTx(t, old, "t1", "c", fmt.Sprintf("o%d", i), insertStmt(int64(i), strings.Repeat("o", 2000)))
+	}
+	forms, mf := segForms(t, fs, "t1")
+	if forms.zst != 0 || forms.raw == 0 || mf.Format != manifestFormatRaw {
+		t.Fatalf("old gen: %+v format %d", forms, mf.Format)
 	}
 	if b := baseObject(t, fs, "t1"); !bytes.HasPrefix(b, []byte("SQLite format 3\x00")) {
-		t.Fatal("base should still be raw")
+		t.Fatal("old base should be a raw SQLite file")
 	}
-	if forms, _ := segForms(t, fs, "t1"); forms.zst == 0 {
-		t.Fatalf("want compressed segments over the raw base, got %+v", forms)
+	// the JSON of an old manifest has no format field at all
+	raw, _ := json.Marshal(mf)
+	if strings.Contains(string(raw), "format") {
+		t.Fatalf("raw gen manifest carries a format field: %s", raw)
 	}
+	crashTenant(t, old, "t1")
+	waitLeaseExpiry()
+	m := newTestManager(t, fs, "new")
+	if n := countRows(t, m, "t1"); n != 5 {
+		t.Fatalf("after recovery: %d rows, want 5", n)
+	}
+	if mf, _, _ := fs.GetManifest(ctx, "t1"); mf.Format != manifestFormatZstd || !isZstd(baseObject(t, fs, "t1")) {
+		t.Fatal("new owner's claim should publish a zstd gen")
+	}
+}
+
+// TestIncompressibleSegmentsStayZstd: random payloads do not compress, yet
+// a zstd generation stores them as frames: never raw.
+func TestIncompressibleSegmentsStayZstd(t *testing.T) {
+	fs := NewFakeStore()
+	m, met := newTestManagerOpts(t, fs, "a", func(o *TenantOpts) {
+		o.CheckpointByte = 64 << 20
+		o.MaxSegments = 1000
+	})
+	mustCreate(t, m, "t1")
+	mustTx(t, m, "t1", "c", "schema", Statement{SQL: `CREATE TABLE r(k INTEGER PRIMARY KEY, v BLOB)`})
+	for i := 0; i < 4; i++ {
+		mustTx(t, m, "t1", "c", fmt.Sprintf("r%d", i), Statement{SQL: `INSERT INTO r VALUES (?, randomblob(200000))`, Args: []any{i}})
+	}
+	forms, mf := segForms(t, fs, "t1")
+	if forms.raw != 0 || forms.zst == 0 || mf.Format != manifestFormatZstd {
+		t.Fatalf("segments %+v format %d, want all zstd", forms, mf.Format)
+	}
+	if met.SegStoredBytes.Load() < met.SegBytes.Load()/2 {
+		t.Fatalf("payload was not incompressible: raw %d stored %d", met.SegBytes.Load(), met.SegStoredBytes.Load())
+	}
+	sum := mustQuery(t, m, "t1", `SELECT SUM(LENGTH(v)), hex(substr(v, 1000, 16)) FROM r WHERE k = 2`)
 	crashTenant(t, m, "t1")
 	waitLeaseExpiry()
-	m2 := newTestManager(t, fs, "new")
-	if n := countRows(t, m2, "t1"); n != 6 {
-		t.Fatalf("after recovery: %d rows, want 6", n)
+	m2 := newTestManager(t, fs, "b")
+	got := mustQuery(t, m2, "t1", `SELECT SUM(LENGTH(v)), hex(substr(v, 1000, 16)) FROM r WHERE k = 2`)
+	if fmt.Sprint(got.Rows) != fmt.Sprint(sum.Rows) {
+		t.Fatalf("after recovery: %v, want %v", got.Rows, sum.Rows)
 	}
-	// the new owner's claim rewrote the base compressed
-	if !isZstd(baseObject(t, fs, "t1")) {
-		t.Fatal("new owner's base should be compressed")
+	if n := mustQuery(t, m2, "t1", `SELECT COUNT(*) FROM r`); n.Rows[0][0] != int64(4) {
+		t.Fatalf("rows: %v", n.Rows)
 	}
 }
 
@@ -228,6 +286,15 @@ func TestCorruptCompressedSegmentRefuses(t *testing.T) {
 	for name, mut := range map[string]func([]byte) []byte{
 		"bitflip":  func(b []byte) []byte { c := append([]byte{}, b...); c[len(c)/2] ^= 0xFF; return c },
 		"truncate": func(b []byte) []byte { return b[:len(b)-8] },
+		// a raw segment in a zstd generation is corruption, not a legacy
+		// object: the generation format decides, never the content
+		"raw": func(b []byte) []byte {
+			d, err := decodeBlob(b, maxSegmentRawBytes)
+			if err != nil {
+				panic(err)
+			}
+			return d
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			fs := NewFakeStore()
@@ -324,32 +391,91 @@ func TestCheckpointReloadCompressed(t *testing.T) {
 }
 
 // TestBaseCompressFailureFallsBackRaw: when the temp file for the
-// compressed base cannot be created, the checkpoint uploads the raw file
-// instead of failing. Raw is always a valid base.
+// compressed base cannot be created, the checkpoint publishes a RAW
+// generation: raw base, Format 0, and raw segments after it. Never a raw
+// base in a zstd generation.
 func TestBaseCompressFailureFallsBackRaw(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root ignores directory permissions")
 	}
 	fs := NewFakeStore()
-	m := newTestManager(t, fs, "a")
+	m, _ := newTestManagerOpts(t, fs, "a", func(o *TenantOpts) {
+		o.CheckpointByte = 64 << 20
+		o.MaxSegments = 1000
+	})
 	mustCreate(t, m, "t1")
 	makeSchema(t, m, "t1")
 	mustTx(t, m, "t1", "c", "a", insertStmt(1, "v"))
+	ten, err := m.Acquire(context.Background(), "t1", false)
+	if err != nil {
+		t.Fatal(err)
+	}
 	dir := filepath.Join(m.baseDir, "t", "t1")
 	if err := os.Chmod(dir, 0o555); err != nil {
 		t.Fatal(err)
 	}
 	defer os.Chmod(dir, 0o755)
-	if err := m.Release("t1", ""); err != nil {
-		t.Fatal(err)
+	ok := make(chan bool, 1)
+	ten.ctlCh <- func() { ok <- ten.checkpointLocked("") }
+	if !<-ok {
+		t.Fatalf("checkpoint failed: %v", ten.deadErr)
 	}
 	os.Chmod(dir, 0o755)
 	if b := baseObject(t, fs, "t1"); !bytes.HasPrefix(b, []byte("SQLite format 3\x00")) {
 		t.Fatal("fallback base should be raw")
 	}
+	for i := 2; i < 5; i++ {
+		mustTx(t, m, "t1", "c", fmt.Sprintf("k%d", i), insertStmt(int64(i), strings.Repeat("v", 500)))
+	}
+	forms, mf := segForms(t, fs, "t1")
+	if mf.Format != manifestFormatRaw || forms.zst != 0 || forms.raw == 0 {
+		t.Fatalf("fallback gen: format %d segments %+v, want a raw gen", mf.Format, forms)
+	}
+	crashTenant(t, m, "t1")
+	waitLeaseExpiry()
+	m2 := newTestManager(t, fs, "b")
+	if n := countRows(t, m2, "t1"); n != 4 {
+		t.Fatalf("after reload: %d rows", n)
+	}
+}
+
+// TestOversizedSegmentRefusedBeforeAck: a batch above the shared segment
+// limit cannot go into a zstd generation. The tenant fails before it acks
+// the batch, and stores nothing a reader would refuse; acked history
+// survives.
+func TestOversizedSegmentRefusedBeforeAck(t *testing.T) {
+	defer func(v int64) { maxSegmentRawBytes = v }(maxSegmentRawBytes)
+	maxSegmentRawBytes = 1 << 20
+	fs := NewFakeStore()
+	m, _ := newTestManagerOpts(t, fs, "a", func(o *TenantOpts) {
+		o.CheckpointByte = 64 << 20
+		o.MaxSegments = 1000
+	})
+	mustCreate(t, m, "t1")
+	makeSchema(t, m, "t1")
+	mustTx(t, m, "t1", "c", "small", insertStmt(1, "kept"))
+	ten, err := m.Acquire(context.Background(), "t1", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = ten.SubmitTx(TxRequest{Client: "c", TxID: "big", Stmts: []Statement{
+		{SQL: `INSERT INTO kv VALUES (2, hex(randomblob(1048576)))`}}})
+	if !errors.Is(err, errSegmentTooLarge) {
+		t.Fatalf("want errSegmentTooLarge before ack, got %v", err)
+	}
+	mf, _, _ := fs.GetManifest(context.Background(), "t1")
+	segs, _ := fs.ListSegments(context.Background(), "t1", mf.Instance, mf.Gen)
+	for _, sg := range segs {
+		b, _ := fs.GetObject(context.Background(), sg.Key)
+		if _, err := decodeBlob(b, maxSegmentRawBytes); err != nil {
+			t.Fatalf("stored segment %s is unreadable: %v", sg.Key, err)
+		}
+	}
+	crashTenant(t, m, "t1")
+	waitLeaseExpiry()
 	m2 := newTestManager(t, fs, "b")
 	if n := countRows(t, m2, "t1"); n != 1 {
-		t.Fatalf("after reload: %d rows", n)
+		t.Fatalf("after recovery: %d rows, want only the acked one", n)
 	}
 }
 
@@ -388,98 +514,268 @@ func TestNewerManifestFormatRefused(t *testing.T) {
 	}
 }
 
-// oldBuildMaterialize is the materialize logic of the build before S1,
-// copied verbatim in behavior: raw base copy, raw segment bytes, and
-// contiguity on stored lengths. It shows what an OLD pod does with a
-// tenant written by a NEW pod during a rolling deploy.
-func oldBuildMaterialize(ctx context.Context, fs *FakeStore, tid string, mf *Manifest, dir string) error {
-	base, err := os.Create(filepath.Join(dir, "db.sqlite"))
-	if err != nil {
-		return err
-	}
-	if err := fs.GetObjectTo(ctx, mf.BaseKey, base); err != nil {
-		base.Close()
-		return err
-	}
-	base.Close()
-	segs, _ := fs.ListSegments(ctx, tid, mf.Instance, mf.Gen)
-	var wal []byte
-	for _, s := range segs {
-		if s.Offset > int64(len(wal)) {
-			break
-		}
-		if s.Offset < int64(len(wal)) {
-			continue
-		}
-		data, err := fs.GetObject(ctx, s.Key)
-		if err != nil {
-			return err
-		}
-		wal = append(wal, data...)
-	}
-	if len(wal) == 0 {
-		return nil
-	}
-	if err := os.WriteFile(filepath.Join(dir, "db.sqlite-wal"), wal, 0o644); err != nil {
-		return err
-	}
-	if end := walCommitEnd(wal); end != int64(len(wal)) {
-		return fmt.Errorf("wal replay incomplete: parsed %d of %d bytes (corruption in stored segments)", end, len(wal))
-	}
-	return nil
+// newLegacyManager emulates a pod of the build before compression (e1a0fc8)
+// as faithfully as a test in this tree can. Its materialize reads every
+// object raw and ignores Manifest.Format: that is the old code, line for
+// line (the raw branch of materializeLocked). It writes raw, as the old
+// build does. Everything after materialize (openTenant, the claim
+// checkpoint, the manifest CAS, old-generation deletion) is the unchanged
+// old code. The format gate in Acquire passes for format 1, so it does
+// not help here either.
+func newLegacyManager(t *testing.T, fs *FakeStore, id string) *Manager {
+	m, _ := newTestManagerOpts(t, fs, id, rawOpts)
+	m.legacyReadForTest = true
+	return m
 }
 
-// TestOldBuildRefusesCompressedTenant documents the rolling-deploy window:
-// an old pod that must take over a tenant written by a new pod fails
-// before its claim CAS, in both shapes the tenant can have. It never
-// publishes a base, so no history is lost; the tenant waits for a new pod.
-func TestOldBuildRefusesCompressedTenant(t *testing.T) {
+func snapshotObjects(fs *FakeStore) map[string]string {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+	out := make(map[string]string, len(fs.objects))
+	for k, v := range fs.objects {
+		out[k] = string(v)
+	}
+	return out
+}
+
+// TestOldBuildRefusesZstdGeneration: an old pod that must take over a
+// tenant whose current generation is zstd refuses before its claim CAS:
+// no manifest publication, no deletion, no change to any object. A new pod
+// then serves every acked row.
+//
+// "large-tx" is the reviewer's data-loss reproduction against e1a0fc8: a
+// zstd base, then one transaction that creates a table (page 1) and
+// writes a 64 MiB blob. The first S1 commit stored that segment raw (too
+// large to compress in memory); SQLite then read page 1 from the raw WAL,
+// the old pod opened the tenant, published a base without the "cold"
+// table and deleted the zstd base. In a zstd generation every segment is a
+// frame, so the old WAL check fails at byte 0. The case also proves that a
+// segment above 64 MiB recovers on a new pod.
+func TestOldBuildRefusesZstdGeneration(t *testing.T) {
 	ctx := context.Background()
+	shapes := map[string]struct {
+		hot     string // statement for the "hot" table; empty: none
+		release bool   // release (base only) instead of crash
+	}{
+		"base-only":      {release: true},
+		"segments":       {},
+		"large-tx":       {hot: `INSERT INTO hot VALUES (1, zeroblob(67108864))`},
+		"incompressible": {hot: `INSERT INTO hot VALUES (1, randomblob(300000))`},
+	}
+	for name, sh := range shapes {
+		t.Run(name, func(t *testing.T) {
+			fs := NewFakeStore()
+			m, _ := newTestManagerOpts(t, fs, "new", func(o *TenantOpts) {
+				o.CheckpointByte = 1 << 30
+				o.MaxSegments = 1000
+			})
+			mustCreate(t, m, "t1")
+			mustTx(t, m, "t1", "c", "schema", Statement{SQL: `CREATE TABLE cold(k INTEGER PRIMARY KEY, v BLOB)`})
+			mustTx(t, m, "t1", "c", "cold", Statement{SQL: `INSERT INTO cold VALUES (1, zeroblob(4096))`})
+			if sh.hot != "" {
+				// fold "cold" into a zstd base, then write the hot tx as
+				// the first segment of the next generation
+				if err := m.Release("t1", ""); err != nil {
+					t.Fatal(err)
+				}
+				mustTx(t, m, "t1", "c", "hot",
+					Statement{SQL: `CREATE TABLE hot(k INTEGER PRIMARY KEY, v BLOB)`},
+					Statement{SQL: sh.hot})
+			}
+			if sh.release {
+				if err := m.Release("t1", ""); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				crashTenant(t, m, "t1")
+				waitLeaseExpiry()
+			}
+			forms, mf := segForms(t, fs, "t1")
+			if mf.Format != manifestFormatZstd || forms.raw != 0 || !isZstd(baseObject(t, fs, "t1")) {
+				t.Fatalf("want a pure zstd gen: format %d segments %+v", mf.Format, forms)
+			}
+			if !sh.release && forms.zst == 0 {
+				t.Fatal("want segments")
+			}
+			if name == "large-tx" {
+				// one segment above 64 MiB (the old in-memory cap)
+				segs, _ := fs.ListSegments(ctx, "t1", mf.Instance, mf.Gen)
+				var largest int
+				for _, sg := range segs {
+					st, _ := fs.GetObject(ctx, sg.Key)
+					d, err := decodeBlob(st, maxSegmentRawBytes)
+					if err != nil {
+						t.Fatal(err)
+					}
+					largest = max(largest, len(d))
+				}
+				if largest <= 64<<20 {
+					t.Fatalf("largest segment %d bytes, want > 64 MiB", largest)
+				}
+			}
+
+			before := snapshotObjects(fs)
+			old := newLegacyManager(t, fs, "old")
+			if _, err := old.Acquire(ctx, "t1", false); err == nil {
+				t.Fatal("old build took over a zstd generation")
+			} else {
+				t.Logf("old build refused: %v", err)
+			}
+			after := snapshotObjects(fs)
+			if len(after) != len(before) {
+				t.Fatalf("old build changed the object set: %d -> %d objects", len(before), len(after))
+			}
+			for k, v := range before {
+				if after[k] != v {
+					t.Fatalf("old build changed or deleted %s", k)
+				}
+			}
+
+			m2 := newTestManager(t, fs, "new2")
+			res := mustQuery(t, m2, "t1", `SELECT COUNT(*), SUM(LENGTH(v)) FROM cold`)
+			if fmt.Sprint(res.Rows) != "[[1 4096]]" {
+				t.Fatalf("acked cold table after old refusal: %v", res.Rows)
+			}
+			if sh.hot != "" {
+				res := mustQuery(t, m2, "t1", `SELECT COUNT(*) FROM hot`)
+				if fmt.Sprint(res.Rows) != "[[1]]" {
+					t.Fatalf("hot table: %v", res.Rows)
+				}
+			}
+		})
+	}
+}
+
+// TestLegacyEmulationReadsRawGen: the legacy emulation is not a strawman.
+// It takes over a raw generation, as the old build does.
+func TestLegacyEmulationReadsRawGen(t *testing.T) {
 	fs := NewFakeStore()
-	m := newTestManager(t, fs, "new")
+	m, _ := newTestManagerOpts(t, fs, "a", rawOpts)
 	mustCreate(t, m, "t1")
 	makeSchema(t, m, "t1")
-	for i := 0; i < 3; i++ {
-		mustTx(t, m, "t1", "c", fmt.Sprintf("k%d", i), insertStmt(int64(i), strings.Repeat("q", 1000)))
+	mustTx(t, m, "t1", "c", "k", insertStmt(1, "v"))
+	crashTenant(t, m, "t1")
+	waitLeaseExpiry()
+	old := newLegacyManager(t, fs, "old")
+	if n := countRows(t, old, "t1"); n != 1 {
+		t.Fatalf("legacy emulation on a raw gen: %d rows", n)
 	}
-	mf, _, _ := fs.GetManifest(ctx, "t1")
+}
 
-	// shape 1: compressed base + compressed segments. The WAL replay check
-	// fails at byte 0 (zstd magic is not a WAL header).
-	dir := t.TempDir()
-	err := oldBuildMaterialize(ctx, fs, "t1", mf, dir)
-	if err == nil || !strings.Contains(err.Error(), "replay incomplete") {
-		t.Fatalf("old build with segments: want replay-incomplete refusal, got %v", err)
+// gateStore counts concurrent base downloads and can hold them.
+type gateStore struct {
+	*FakeStore
+	mu        sync.Mutex
+	cur, peak int
+	hold      chan struct{}
+}
+
+func (g *gateStore) GetObjectTo(ctx context.Context, key string, w io.Writer) error {
+	if strings.Contains(key, "/base/") || strings.Contains(key, ".db") {
+		g.mu.Lock()
+		g.cur++
+		g.peak = max(g.peak, g.cur)
+		g.mu.Unlock()
+		defer func() { g.mu.Lock(); g.cur--; g.mu.Unlock() }()
+		select {
+		case <-g.hold:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
+	return g.FakeStore.GetObjectTo(ctx, key, w)
+}
 
-	// shape 2: compressed base, no segments (right after a checkpoint or
-	// release). The old build's materialize succeeds, but SQLite refuses the
-	// file, so openTenant fails before any claim.
-	if err := m.Release("t1", ""); err != nil {
+// TestMaterializeDecodeLimit: decoding materializations are bounded
+// pod-wide, the wait obeys the caller's context, a raw generation does
+// not take a slot, and the slots never deadlock with the claim lanes
+// (more tenants than slots, all taken over at once).
+func TestMaterializeDecodeLimit(t *testing.T) {
+	ctx := context.Background()
+	fs := NewFakeStore()
+	src := newTestManager(t, fs, "src")
+	const n = 6
+	for i := 0; i < n; i++ {
+		tid := fmt.Sprintf("t%d", i)
+		mustCreate(t, src, tid)
+		makeSchema(t, src, tid)
+		mustTx(t, src, tid, "c", "k", insertStmt(1, "v"))
+		if err := src.Release(tid, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rawSrc, _ := newTestManagerOpts(t, fs, "rawsrc", rawOpts)
+	mustCreate(t, rawSrc, "raw")
+	if err := rawSrc.Release("raw", ""); err != nil {
 		t.Fatal(err)
 	}
-	mf, _, _ = fs.GetManifest(ctx, "t1")
-	if segs, _ := fs.ListSegments(ctx, "t1", mf.Instance, mf.Gen); len(segs) != 0 {
-		t.Fatalf("expected no segments after release, got %d", len(segs))
+	if mf, _, _ := fs.GetManifest(ctx, "raw"); mf.Format != manifestFormatRaw {
+		t.Fatal("want a raw gen")
 	}
-	dir2 := t.TempDir()
-	if err := oldBuildMaterialize(ctx, fs, "t1", mf, dir2); err != nil {
-		t.Fatalf("old materialize: %v", err)
+
+	gs := &gateStore{FakeStore: fs, hold: make(chan struct{})}
+	close(gs.hold) // downloads pass for now
+	m := NewManager(gs, "fake", "dst", "standard", t.TempDir(), testOpts(), 1000, &Metrics{}, ControllerOpts{})
+	m.decodeSem = make(chan struct{}, 2)
+
+	// all slots busy: a zstd takeover waits, and gives up with its context
+	m.decodeSem <- struct{}{}
+	m.decodeSem <- struct{}{}
+	cctx, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
+	_, err := m.Acquire(cctx, "t0", false)
+	cancel()
+	if !errors.Is(err, context.DeadlineExceeded) || !errors.Is(err, errDecodeSlotWait) {
+		t.Fatalf("want the context error while slots are busy, got %v", err)
 	}
-	ten, err := openTenant("t1", dir2, mf, "", fs, "fake", "old", "old", testOpts(), &Metrics{}, nil)
-	if err == nil {
-		ten.Crash()
-		t.Fatal("old build opened a compressed base as a database")
+	m.mu.Lock()
+	_, cooled := m.poisonedAt["t0"]
+	m.mu.Unlock()
+	if cooled {
+		t.Fatal("a slot wait must not start a claim cooldown")
 	}
-	if !strings.Contains(err.Error(), "not a database") {
-		t.Fatalf("want SQLite not-a-database error, got %v", err)
+	if mf, _, _ := fs.GetManifest(ctx, "t0"); mf.Owner != "" {
+		t.Fatalf("manifest moved: owner %q", mf.Owner)
 	}
-	// the manifest is untouched, and a new pod still serves the tenant
-	if after, _, _ := fs.GetManifest(ctx, "t1"); after.Epoch != mf.Epoch || after.BaseKey != mf.BaseKey {
-		t.Fatal("manifest moved")
+	// a raw gen needs no decoder, so no slot
+	if _, err := m.Acquire(ctx, "raw", false); err != nil {
+		t.Fatalf("raw gen with all slots busy: %v", err)
 	}
-	m2 := newTestManager(t, fs, "new2")
-	if n := countRows(t, m2, "t1"); n != 3 {
-		t.Fatalf("new pod after old refusal: %d rows", n)
+	<-m.decodeSem
+	<-m.decodeSem
+
+	// more takeovers than slots, held inside the download: at most two
+	// decode at once, and all finish (no deadlock with the claim lanes)
+	gs.hold = make(chan struct{})
+	var wg sync.WaitGroup
+	errs := make(chan error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(tid string) {
+			defer wg.Done()
+			if _, err := m.Acquire(ctx, tid, false); err != nil {
+				errs <- fmt.Errorf("%s: %w", tid, err)
+			}
+		}(fmt.Sprintf("t%d", i))
+	}
+	time.Sleep(300 * time.Millisecond)
+	gs.mu.Lock()
+	cur := gs.cur
+	gs.mu.Unlock()
+	if cur != 2 {
+		t.Fatalf("%d downloads in flight, want exactly the 2 slots", cur)
+	}
+	close(gs.hold)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
+	if gs.peak > 2 {
+		t.Fatalf("peak %d concurrent decoding materializations, limit 2", gs.peak)
+	}
+	for i := 0; i < n; i++ {
+		if c := countRows(t, m, fmt.Sprintf("t%d", i)); c != 1 {
+			t.Fatalf("t%d: %d rows", i, c)
+		}
 	}
 }

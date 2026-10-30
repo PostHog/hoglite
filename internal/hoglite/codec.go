@@ -1,23 +1,36 @@
 package hoglite
 
 // Object codec for data-plane objects: WAL segments, base images, and any
-// later object type (for example page deltas). Every stored object is
-// self-describing. A compressed object is exactly one zstd frame and starts
-// with the zstd frame magic. Any other object is raw bytes, as written by
-// builds before compression existed. Raw SQLite files start with
-// "SQLite format 3\x00" and raw WAL bytes start with a WAL header or a
-// frame header, so the two forms do not collide (see segmentObject for the
-// one theoretical collision and how the writer avoids it).
+// later object type (for example page deltas).
 //
-// Detection by content, not by key or manifest field, is deliberate. Keys
-// keep their old shape, so an old build lists and deletes new objects
-// exactly as before. A segment key suffix such as ".seg.zst" would make an
-// old build skip those segments, replay a short WAL and publish a base
-// without them: silent data loss. With content detection an old build
-// downloads zstd bytes it cannot parse and refuses the tenant loudly.
+// The codec is a property of the GENERATION, not of the object. The
+// manifest field Format names it, and it covers the base image and every
+// segment of that generation:
+//
+//   - manifestFormatRaw (0, absent): every object is raw bytes, as builds
+//     before compression wrote them. Readers never sniff the content.
+//   - manifestFormatZstd (1): every object is exactly one zstd frame.
+//     There is no raw fallback for size, incompressibility or any other
+//     reason. A raw object in such a generation is corruption.
+//
+// The writer fixes the format when it publishes a generation (checkpoint
+// CAS) and keeps it until the next one, whatever the Compress flag does
+// in between.
+//
+// Why no mixing: a build from before compression ignores Format and reads
+// every object raw. In a zstd generation it then always sees a base that
+// is not a SQLite file and a first segment that is not a WAL header, so it
+// refuses before its claim CAS. One raw segment over a compressed base
+// would let SQLite read page 1 from the raw WAL, so the old build would
+// open the tenant, fold a broken database and publish it (data loss).
+//
+// Keys do not change: segment offsets stay RAW WAL offsets. A key suffix
+// such as ".seg.zst" would make an old build skip those segments, replay
+// a short WAL and publish a base without them.
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -29,29 +42,31 @@ import (
 
 const zstdMagic = "\x28\xb5\x2f\xfd"
 
-// maxBlobRawBytes bounds the decoded size of an in-memory object
-// (segments; page deltas later). Writers store larger payloads raw, so a
-// compressed object above this size is never legitimate. The bound stops a
-// corrupt or hostile frame from allocating unbounded memory, and it can
-// never make a legitimate object unreadable.
-const maxBlobRawBytes = 64 << 20
+// Size limits. Writer and reader use the SAME constant for each object
+// type, so a writer never publishes an object that a reader refuses:
+//   - a segment above maxSegmentRawBytes cannot go into a zstd generation.
+//     The tenant fails before any ack of the batch (cutSegment).
+//   - a base above maxBaseRawBytes is published raw, in a raw generation
+//     (prepareBaseUpload).
+//
+// Readers stream every frame to disk through the decoder, so the limits
+// do not set memory use. They stop a corrupt or hostile frame from
+// filling the disk.
+var maxSegmentRawBytes int64 = 1 << 30 // a var only so tests can lower it
 
-// maxStreamRawBytes is a sanity ceiling for streamed objects (base
-// images). Streams go to disk, not memory. compressStream declares the
-// exact content size in the frame, and the reader holds the stream to it,
-// so the effective bound is the declared size.
-const maxStreamRawBytes = 4 << 40
+const maxBaseRawBytes = 4 << 40
 
-// streamWindow is the encoder window for streamed objects. The decoder
-// rejects frames that ask for more than maxStreamWindow, which bounds the
-// memory a corrupt frame header can demand.
+// codecWindow is the encoder window for every frame we write. The decoder
+// refuses frames that ask for more than maxDecodeWindow. A decoder holds
+// about two windows, so this bounds decoder memory per active stream
+// (3.2 MiB measured for our frames, about 17 MiB for a hostile header).
 const (
-	streamWindow    = 2 << 20 // 8 MiB gains <0.1% ratio and costs 12 MiB more per encoder
-	maxStreamWindow = 64 << 20
+	codecWindow     = 2 << 20 // 8 MiB gains <0.1% ratio and costs 12 MiB more per encoder
+	maxDecodeWindow = 8 << 20
 )
 
-// ErrCorruptObject marks a stored object that claims to be compressed but
-// does not decode, or decodes to an unexpected size.
+// ErrCorruptObject marks a stored object of a zstd generation that does
+// not decode, is not exactly one frame, or decodes to an unexpected size.
 var ErrCorruptObject = errors.New("corrupt compressed object")
 
 // Level choice, measured on the hoglake-reimpl schema model (single core):
@@ -64,34 +79,29 @@ var ErrCorruptObject = errors.New("corrupt compressed object")
 // at any of these sizes, so CPU matters more than the last 10% of ratio.
 // The base compresses on the tenant actor while writes wait, and the
 // default level saves only 1.4% there. Both use SpeedFastest.
-const (
-	blobLevel   = zstd.SpeedFastest
-	streamLevel = zstd.SpeedFastest
-)
+const codecLevel = zstd.SpeedFastest
 
-// blobCodec holds the shared block encoder and decoder. EncodeAll and
-// DecodeAll are safe for concurrent use. Each keeps an internal pool of at
-// most GOMAXPROCS states, so thousands of tenants share a few states and
-// creation cost is paid once per process.
-var blobCodec = sync.OnceValues(func() (*zstd.Encoder, *zstd.Decoder) {
-	enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(blobLevel), zstd.WithEncoderCRC(true))
+// blobEnc is the shared encoder for in-memory payloads. EncodeAll is safe
+// for concurrent use and keeps an internal pool of at most GOMAXPROCS
+// states, so thousands of tenants share a few states and creation cost is
+// paid once per process.
+var blobEnc = sync.OnceValue(func() *zstd.Encoder {
+	enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(codecLevel), zstd.WithEncoderCRC(true),
+		zstd.WithWindowSize(codecWindow))
 	if err != nil {
 		panic(err) // static options: cannot fail at run time
 	}
-	dec, err := zstd.NewReader(nil, zstd.WithDecoderConcurrency(0),
-		zstd.WithDecoderMaxMemory(maxBlobRawBytes))
-	if err != nil {
-		panic(err)
-	}
-	return enc, dec
+	return enc
 })
 
 // Streaming encoders and decoders are not safe for concurrent use, so each
 // stream borrows one from a pool. Concurrency 1 keeps them synchronous: no
-// background goroutines, so a dropped one leaks nothing.
+// background goroutines, so a dropped one leaks nothing. The pool does not
+// bound how many are active; the materialization semaphore in Manager
+// does that for readers, and the checkpoint semaphores do it for writers.
 var streamEncPool = sync.Pool{New: func() any {
-	enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(streamLevel), zstd.WithEncoderCRC(true),
-		zstd.WithEncoderConcurrency(1), zstd.WithWindowSize(streamWindow))
+	enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(codecLevel), zstd.WithEncoderCRC(true),
+		zstd.WithEncoderConcurrency(1), zstd.WithWindowSize(codecWindow))
 	if err != nil {
 		panic(err)
 	}
@@ -100,66 +110,28 @@ var streamEncPool = sync.Pool{New: func() any {
 
 var streamDecPool = sync.Pool{New: func() any {
 	dec, err := zstd.NewReader(nil, zstd.WithDecoderConcurrency(1),
-		zstd.WithDecoderMaxWindow(maxStreamWindow), zstd.WithDecoderMaxMemory(maxStreamWindow))
+		zstd.WithDecoderMaxWindow(maxDecodeWindow), zstd.WithDecoderMaxMemory(maxDecodeWindow))
 	if err != nil {
 		panic(err)
 	}
 	return dec
 }}
 
-// isZstd reports whether a stored object starts with the zstd frame magic.
-func isZstd(b []byte) bool { return len(b) >= 4 && string(b[:4]) == zstdMagic }
-
-// encodeBlob compresses an in-memory payload into one zstd frame with the
-// content size and a checksum. It returns ok=false when the payload is too
-// large for the reader bound; the caller then stores it raw.
-func encodeBlob(raw []byte) (out []byte, ok bool) {
-	if len(raw) > maxBlobRawBytes {
-		return nil, false
-	}
-	enc, _ := blobCodec()
-	return enc.EncodeAll(raw, make([]byte, 0, len(raw)/4+64)), true
+// encodeBlob compresses an in-memory payload into one zstd frame with a
+// checksum (and the content size, for payloads of 256 bytes or more). The
+// caller enforces the size limit of its object type before it calls.
+func encodeBlob(raw []byte) []byte {
+	return blobEnc().EncodeAll(raw, make([]byte, 0, len(raw)/4+64))
 }
 
-// decodeBlob returns the raw payload of a stored object. Raw objects pass
-// through unchanged. A compressed object must decode within maxRaw. When
-// the frame declares its content size (every frame above 255 bytes that
-// encodeBlob writes does), the bound is checked before decoding and the
-// decoded length must match it exactly.
+// decodeBlob decodes one zstd frame held in memory, with the same checks
+// as decompressStream. maxRaw is the limit of the object type.
 func decodeBlob(stored []byte, maxRaw int64) ([]byte, error) {
-	if !isZstd(stored) {
-		return stored, nil
+	var buf bytes.Buffer
+	if _, err := decompressStream(&buf, bytes.NewReader(stored), maxRaw); err != nil {
+		return nil, err
 	}
-	var h zstd.Header
-	if err := h.Decode(stored); err != nil {
-		return nil, fmt.Errorf("%w: header: %v", ErrCorruptObject, err)
-	}
-	if maxRaw > maxBlobRawBytes {
-		maxRaw = maxBlobRawBytes
-	}
-	if h.HasFCS && h.FrameContentSize > uint64(maxRaw) {
-		return nil, fmt.Errorf("%w: declared size %d exceeds limit %d", ErrCorruptObject, h.FrameContentSize, maxRaw)
-	}
-	var dst []byte
-	if h.HasFCS {
-		dst = make([]byte, 0, h.FrameContentSize)
-	}
-	// the shared decoder caps any output at maxBlobRawBytes, so a frame
-	// without a declared size cannot allocate beyond that either
-	_, dec := blobCodec()
-	out, err := dec.DecodeAll(stored, dst)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrCorruptObject, err)
-	}
-	if int64(len(out)) > maxRaw {
-		return nil, fmt.Errorf("%w: decoded %d bytes, limit %d", ErrCorruptObject, len(out), maxRaw)
-	}
-	if h.HasFCS && uint64(len(out)) != h.FrameContentSize {
-		// DecodeAll also decodes trailing frames. We write exactly one, so
-		// any size other than the declared one is corruption.
-		return nil, fmt.Errorf("%w: decoded %d bytes, frame declares %d", ErrCorruptObject, len(out), h.FrameContentSize)
-	}
-	return out, nil
+	return buf.Bytes(), nil
 }
 
 // countingWriter counts bytes that pass through to w.
@@ -176,8 +148,12 @@ func (c *countingWriter) Write(p []byte) (int, error) {
 
 // compressStream writes src (exactly rawSize bytes) to dst as one zstd
 // frame with content size and checksum, without buffering the payload in
-// memory. It returns the stored (compressed) byte count.
-func compressStream(dst io.Writer, src io.Reader, rawSize int64) (int64, error) {
+// memory. It refuses a payload above maxRaw, the reader limit of the
+// object type. It returns the stored (compressed) byte count.
+func compressStream(dst io.Writer, src io.Reader, rawSize, maxRaw int64) (int64, error) {
+	if rawSize > maxRaw {
+		return 0, fmt.Errorf("compress: %d bytes exceeds the reader limit %d", rawSize, maxRaw)
+	}
 	enc := streamEncPool.Get().(*zstd.Encoder)
 	cw := &countingWriter{w: dst}
 	enc.ResetContentSize(cw, rawSize)
@@ -198,64 +174,212 @@ func compressStream(dst io.Writer, src io.Reader, rawSize int64) (int64, error) 
 	return cw.n, nil
 }
 
-// decompressStream copies the raw payload of a stored object from src to
-// dst. Raw objects pass through unchanged. A compressed object must decode
-// within maxRaw. compressStream always declares the content size; then the
-// bound is checked up front and the decoded length must match exactly. It
-// returns the raw byte count.
+// decompressStream decodes exactly one zstd frame from src into dst and
+// returns the raw byte count. The object must start with the frame magic
+// (no raw passthrough: the generation format says the object is zstd),
+// hold exactly one frame and nothing after it (no second frame, empty
+// frame or skippable frame), and decode to at most maxRaw bytes. A frame
+// that declares its content size is checked against maxRaw before
+// decoding and must decode to exactly that size. Source errors keep their
+// identity; every other failure wraps ErrCorruptObject.
 func decompressStream(dst io.Writer, src io.Reader, maxRaw int64) (int64, error) {
 	se := &srcErrReader{r: src}
-	br := bufio.NewReaderSize(se, 64<<10)
-	magic, err := br.Peek(4)
+	fr := &frameReader{br: bufio.NewReaderSize(se, 64<<10)}
+	n, err := decodeFrame(dst, fr, maxRaw)
+	if err != nil && se.err != nil {
+		return n, se.err // transport failure, not corruption
+	}
+	return n, err
+}
+
+func decodeFrame(dst io.Writer, fr *frameReader, maxRaw int64) (int64, error) {
+	hdr, err := fr.br.Peek(zstd.HeaderMaxSize)
 	if err != nil && !errors.Is(err, io.EOF) {
 		return 0, err
 	}
-	if !isZstd(magic) {
-		return io.Copy(dst, br)
-	}
-	hdr, err := br.Peek(zstd.HeaderMaxSize)
-	if err != nil && !errors.Is(err, io.EOF) {
-		return 0, err
+	if len(hdr) < 4 || string(hdr[:4]) != zstdMagic {
+		return 0, fmt.Errorf("%w: no zstd frame magic", ErrCorruptObject)
 	}
 	var h zstd.Header
 	if err := h.Decode(hdr); err != nil {
 		return 0, fmt.Errorf("%w: header: %v", ErrCorruptObject, err)
 	}
-	if maxRaw > maxStreamRawBytes {
-		maxRaw = maxStreamRawBytes
-	}
 	if h.HasFCS && h.FrameContentSize > uint64(maxRaw) {
 		return 0, fmt.Errorf("%w: declared size %d exceeds limit %d", ErrCorruptObject, h.FrameContentSize, maxRaw)
 	}
-	want := int64(-1)
-	limit := maxRaw
+	want, limit := int64(-1), maxRaw
 	if h.HasFCS {
 		want = int64(h.FrameContentSize)
 		limit = want
 	}
 	dec := streamDecPool.Get().(*zstd.Decoder)
-	if err := dec.Reset(br); err != nil {
+	if err := dec.Reset(fr); err != nil {
 		dec.Close()
-		return 0, err
+		return 0, corruptf(fr, err)
 	}
-	// read one byte past the declared size: a longer stream (trailing
-	// frames) must fail instead of silently growing the file
+	// read one byte past the limit: a longer output fails instead of
+	// silently growing the file
 	n, err := io.Copy(dst, io.LimitReader(dec, limit+1))
 	if err != nil {
 		// a mid-stream error leaves decoder state undefined: drop it
 		dec.Close()
-		if se.err != nil {
-			return n, se.err
-		}
-		return n, fmt.Errorf("%w: %v", ErrCorruptObject, err)
+		return n, corruptf(fr, err)
 	}
+	_ = dec.Reset(nil) // release fr
+	streamDecPool.Put(dec)
 	if n > limit || (want >= 0 && n != want) {
-		dec.Close()
 		return n, fmt.Errorf("%w: decoded %d bytes, frame declares %d, limit %d", ErrCorruptObject, n, want, maxRaw)
 	}
-	_ = dec.Reset(nil) // release src
-	streamDecPool.Put(dec)
+	// the decoder stopped where frameReader said the frame ends; now the
+	// object must end there too
+	if !fr.done() {
+		return n, fmt.Errorf("%w: decoder stopped inside the frame", ErrCorruptObject)
+	}
+	if _, err := fr.br.Peek(1); err == nil {
+		return n, fmt.Errorf("%w: data after the frame", ErrCorruptObject)
+	} else if !errors.Is(err, io.EOF) {
+		return n, err
+	}
 	return n, nil
+}
+
+// corruptf wraps a decode failure. A framing error found by frameReader
+// is more precise than what the decoder makes of it, so it wins.
+func corruptf(fr *frameReader, err error) error {
+	if fr.err != nil && !errors.Is(fr.err, io.EOF) {
+		return fr.err
+	}
+	return fmt.Errorf("%w: %v", ErrCorruptObject, err)
+}
+
+// frameReader passes exactly one zstd frame from br to the decoder and
+// then reports io.EOF. It walks the frame layout of RFC 8878: frame
+// header, blocks until the last-block flag, then the optional 4-byte
+// checksum. So the decoder never sees a second frame, and the caller can
+// check that the object ends where the frame ends.
+type frameReader struct {
+	br    *bufio.Reader
+	left  int64 // bytes of the current section not yet passed on
+	state int
+	sum   bool  // frame has a content checksum
+	err   error // sticky
+}
+
+const (
+	frHeader = iota
+	frBlock
+	frChecksum
+	frEnd
+	frDone
+)
+
+const maxBlockBytes = 128 << 10 // Block_Maximum_Size, RFC 8878 3.1.1.2.3
+
+func (f *frameReader) done() bool { return f.state == frDone && f.left == 0 }
+
+func (f *frameReader) Read(p []byte) (int, error) {
+	for f.left == 0 {
+		if f.err != nil {
+			return 0, f.err
+		}
+		f.err = f.next()
+	}
+	if int64(len(p)) > f.left {
+		p = p[:f.left]
+	}
+	n, err := f.br.Read(p)
+	f.left -= int64(n)
+	if err != nil && f.left > 0 {
+		if errors.Is(err, io.EOF) {
+			err = fmt.Errorf("%w: truncated frame", ErrCorruptObject)
+		}
+		f.err = err
+		return n, err
+	}
+	return n, nil
+}
+
+// next computes the length of the next section and moves the state on.
+func (f *frameReader) next() error {
+	switch f.state {
+	case frHeader:
+		b, err := f.peek(5)
+		if err != nil {
+			return err
+		}
+		if string(b[:4]) != zstdMagic {
+			return fmt.Errorf("%w: no zstd frame magic", ErrCorruptObject)
+		}
+		fhd := b[4]
+		if fhd&(1<<3) != 0 {
+			return fmt.Errorf("%w: reserved header bit set", ErrCorruptObject)
+		}
+		if fhd&3 != 0 {
+			return fmt.Errorf("%w: dictionary frames are not used", ErrCorruptObject)
+		}
+		single := fhd&(1<<5) != 0
+		f.sum = fhd&(1<<2) != 0
+		n := int64(5)
+		if !single {
+			n++ // window descriptor
+		}
+		switch fhd >> 6 {
+		case 0:
+			if single {
+				n++
+			}
+		case 1:
+			n += 2
+		case 2:
+			n += 4
+		case 3:
+			n += 8
+		}
+		f.left, f.state = n, frBlock
+	case frBlock:
+		b, err := f.peek(3)
+		if err != nil {
+			return err
+		}
+		v := uint32(b[0]) | uint32(b[1])<<8 | uint32(b[2])<<16
+		last, typ, size := v&1 == 1, (v>>1)&3, int64(v>>3)
+		if size > maxBlockBytes {
+			return fmt.Errorf("%w: block size %d", ErrCorruptObject, size)
+		}
+		switch typ {
+		case 0, 2: // raw, compressed
+		case 1: // RLE: one byte repeated size times
+			size = 1
+		default:
+			return fmt.Errorf("%w: reserved block type", ErrCorruptObject)
+		}
+		f.left = 3 + size
+		if last {
+			f.state = frChecksum
+		}
+	case frChecksum:
+		if f.sum {
+			f.left = 4
+		}
+		f.state = frEnd
+	case frEnd:
+		f.state = frDone
+		return io.EOF
+	case frDone:
+		return io.EOF
+	}
+	return nil
+}
+
+func (f *frameReader) peek(n int) ([]byte, error) {
+	b, err := f.br.Peek(n)
+	if err == nil {
+		return b, nil
+	}
+	if errors.Is(err, io.EOF) {
+		return nil, fmt.Errorf("%w: truncated frame", ErrCorruptObject)
+	}
+	return nil, err
 }
 
 // srcErrReader remembers the first non-EOF error of the underlying
@@ -274,41 +398,45 @@ func (s *srcErrReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// segmentObject returns the bytes to store for one raw WAL segment.
-//
-// A raw object must never start with the zstd magic, or a reader would
-// take it for a frame. Raw WAL at offset 0 starts with the WAL magic. A
-// later segment starts with a frame header whose first field is a page
-// number; the magic would mean page 682,962,941 (a 2.6 TiB file at 4 KiB
-// pages). The writer still closes that gap: such a segment is always
-// compressed, whatever the flag says.
-func segmentObject(raw []byte, compress bool) []byte {
-	collides := isZstd(raw)
-	if !compress && !collides {
-		return raw
+// errSegmentTooLarge means a batch is too large for one segment of a zstd
+// generation: no reader would accept it.
+var errSegmentTooLarge = errors.New("segment exceeds the zstd segment limit")
+
+// segmentObject returns the bytes to store for one raw WAL segment in a
+// generation of the given format. A zstd generation gets one frame for
+// every segment, including incompressible ones: never raw (see the file
+// comment). It refuses a segment above maxSegmentRawBytes rather than
+// publish an object that recovery rejects.
+func segmentObject(raw []byte, format int) ([]byte, error) {
+	if format == manifestFormatRaw {
+		return raw, nil
 	}
-	enc, ok := encodeBlob(raw)
-	if !ok {
-		if collides {
-			// above the reader bound AND colliding: the reader refuses
-			// this frame loudly, which is still safer than a misread
-			e, _ := blobCodec()
-			return e.EncodeAll(raw, nil)
-		}
-		return raw
+	if int64(len(raw)) > maxSegmentRawBytes {
+		return nil, fmt.Errorf("%w: %d bytes, limit %d", errSegmentTooLarge, len(raw), maxSegmentRawBytes)
 	}
-	if len(enc) >= len(raw) && !collides {
-		return raw // incompressible: raw is smaller and cheaper to read
-	}
-	return enc
+	return encodeBlob(raw), nil
 }
 
 // errFetchAborted stops a download whose decoder already failed.
 var errFetchAborted = errors.New("fetch aborted by decoder")
 
-// fetchDecodedTo streams a stored object through decompressStream into w.
-// It returns the raw and stored byte counts. Store errors (for example
-// ErrNotFound) keep their identity; decode errors wrap ErrCorruptObject.
+// fetchObjectTo copies the raw payload of a stored object of a generation
+// with the given format into w. It returns the raw and stored byte counts.
+// A raw-format object is copied as it is, exactly as builds before
+// compression did. A zstd-format object must be one frame within maxRaw.
+// Store errors (for example ErrNotFound) keep their identity; decode
+// errors wrap ErrCorruptObject.
+func fetchObjectTo(ctx context.Context, store Backend, key string, w io.Writer, format int, maxRaw int64) (raw, stored int64, err error) {
+	if format == manifestFormatRaw {
+		cw := &countingWriter{w: w}
+		err := store.GetObjectTo(ctx, key, cw)
+		return cw.n, cw.n, err
+	}
+	return fetchDecodedTo(ctx, store, key, w, maxRaw)
+}
+
+// fetchDecodedTo streams a stored zstd object through decompressStream
+// into w. The compressed object never sits whole in memory.
 func fetchDecodedTo(ctx context.Context, store Backend, key string, w io.Writer, maxRaw int64) (raw, stored int64, err error) {
 	pr, pw := io.Pipe()
 	cnt := &countingWriter{w: pw}

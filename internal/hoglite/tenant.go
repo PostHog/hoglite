@@ -31,8 +31,10 @@ type TenantOpts struct {
 	PutTimeout     time.Duration // per-attempt S3 PUT timeout
 	SkewMargin     time.Duration // acquirer waits lease + this; owner stops PUTs lease/3 early
 	IdleRelease    time.Duration // release ownership after this much write-idle time (0 = never)
-	// Compress stores new segments and base images as zstd frames. Readers
-	// accept both forms regardless of this flag. Turn it off for the first
+	// Compress makes the next generation a zstd generation (base and
+	// every segment are zstd frames). A change applies at the next
+	// checkpoint; the current generation keeps its format. Readers accept
+	// both formats regardless of this flag. Turn it off for the first
 	// rollout from a build without compression support, so pods of the old
 	// build can still take over tenants during the rolling deploy.
 	Compress bool
@@ -993,6 +995,16 @@ func (t *Tenant) cutSegment() {
 		t.failLocked(fmt.Errorf("%w: cannot flush inside lease margin", ErrNotOwner))
 		return
 	}
+	// the generation format, fixed when the generation was published,
+	// decides the segment form; the Compress flag only affects the next
+	// generation. A zstd generation never takes a raw segment, and no
+	// reader accepts a zstd segment above maxSegmentRawBytes: fail before
+	// any ack of this batch rather than publish an unreadable object.
+	format := t.mf.Format
+	if format != manifestFormatRaw && end-t.submittedOff > maxSegmentRawBytes {
+		t.failLocked(fmt.Errorf("%w: batch of %d bytes, limit %d", errSegmentTooLarge, end-t.submittedOff, maxSegmentRawBytes))
+		return
+	}
 	select {
 	case t.sem <- struct{}{}:
 	default:
@@ -1022,13 +1034,14 @@ func (t *Tenant) cutSegment() {
 	t.metrics.SegPuts.Add(1)
 	t.metrics.SegBytes.Add(int64(len(data)))
 	t.metrics.InflightSegs.Add(1)
-	compress := t.opts.Compress
 	go func() {
 		// compress off the actor, once per segment (not per attempt). The
 		// key keeps the RAW WAL offset; recovery uses decoded lengths.
-		stored := segmentObject(s.data, compress)
+		stored, err := segmentObject(s.data, format)
+		if err != nil {
+			goto done // checked on the actor already; never PUT it
+		}
 		t.metrics.SegStoredBytes.Add(int64(len(stored)))
-		var err error
 		for attempt := 0; ; attempt++ {
 			// The write fence is re-read PER ATTEMPT, not captured at cut
 			// time: while the pod lease keeps heartbeating, the deadline
@@ -1165,26 +1178,35 @@ func (t *Tenant) putBaseWithStallCancel(key string, f *os.File, size int64, stal
 	return t.store.PutBase(pctx, key, pr, size)
 }
 
-// prepareBaseUpload returns the file and size to upload as the base image.
+// prepareBaseUpload returns the file and size to upload as the base image
+// and the format of the new generation. The format covers the base and
+// every segment of the generation, so it is decided here, once.
+//
 // With compression on it writes one zstd frame to a temp file next to the
-// database. The reads bump progressMs, so a long compression of a large
-// base does not look like a wedged actor. Any compression failure (for
-// example a full disk) falls back to the raw file: raw is always a valid
-// base, and a checkpoint must not fail for an optimization.
-func (t *Tenant) prepareBaseUpload(f *os.File, size int64) (*os.File, int64, func()) {
+// database and returns manifestFormatZstd. The reads bump progressMs, so
+// a long compression of a large base does not look like a wedged actor.
+// Any compression failure (for example a full disk), or a base above the
+// reader limit, gives the raw file and manifestFormatRaw: a raw
+// generation is always valid, and a checkpoint must not fail for an
+// optimization. Never a raw base in a zstd generation.
+func (t *Tenant) prepareBaseUpload(f *os.File, size int64) (*os.File, int64, int, func()) {
 	noop := func() {}
 	if !t.opts.Compress {
-		return f, size, noop
+		return f, size, manifestFormatRaw, noop
 	}
 	logf := func(format string, args ...any) {
 		if t.metrics.Logger != nil {
 			t.metrics.Logger.Printf(format, args...)
 		}
 	}
+	if size > maxBaseRawBytes {
+		logf("tenant %s: base of %d bytes exceeds the zstd limit (raw generation)", t.ID, size)
+		return f, size, manifestFormatRaw, noop
+	}
 	tmp, err := os.CreateTemp(t.dir, "base-*.zst")
 	if err != nil {
-		logf("tenant %s: base compress: %v (uploading raw)", t.ID, err)
-		return f, size, noop
+		logf("tenant %s: base compress: %v (raw generation)", t.ID, err)
+		return f, size, manifestFormatRaw, noop
 	}
 	var once sync.Once
 	cleanup := func() {
@@ -1197,13 +1219,13 @@ func (t *Tenant) prepareBaseUpload(f *os.File, size int64) (*os.File, int64, fun
 	src := &progressReader{f: f, lastNs: &last, onRead: func() {
 		t.progressMs.Store(time.Now().UnixMilli())
 	}}
-	stored, err := compressStream(tmp, src, size)
+	stored, err := compressStream(tmp, src, size, maxBaseRawBytes)
 	if err != nil {
 		cleanup()
-		logf("tenant %s: base compress: %v (uploading raw)", t.ID, err)
-		return f, size, noop
+		logf("tenant %s: base compress: %v (raw generation)", t.ID, err)
+		return f, size, manifestFormatRaw, noop
 	}
-	return tmp, stored, cleanup
+	return tmp, stored, manifestFormatZstd, cleanup
 }
 
 // writeDeadline is the absolute fence for data-plane PUTs: the pod lease
@@ -1393,7 +1415,7 @@ func (t *Tenant) checkpointLocked(newClass string) bool {
 	// compress once into a temp file, then upload that file: retries and
 	// SDK rewinds need a seekable body, and the base can be GBs, so it
 	// never sits in memory
-	upload, uploadSize, cleanupUpload := t.prepareBaseUpload(f, fi.Size())
+	upload, uploadSize, newFormat, cleanupUpload := t.prepareBaseUpload(f, fi.Size())
 	defer cleanupUpload()
 	// Progress-bounded upload: an attempt is canceled only when no bytes
 	// move for stallTimeout, never for being merely slow — a multi-GB base
@@ -1427,12 +1449,10 @@ func (t *Tenant) checkpointLocked(newClass string) bool {
 	nm := *t.mf
 	nm.Gen = newGen
 	nm.BaseKey = newBaseKey
-	// the new generation holds only objects this incarnation writes, so
-	// the format follows our own write setting
-	nm.Format = manifestFormatRaw
-	if t.opts.Compress {
-		nm.Format = manifestFormatZstd
-	}
+	// the new generation holds only objects this incarnation writes: the
+	// base above and the segments cut after this CAS (cutSegment reads
+	// t.mf.Format). So the format follows the base we uploaded.
+	nm.Format = newFormat
 	if newClass != "" {
 		nm.Class = newClass
 		t.classHint.Store(newClass)

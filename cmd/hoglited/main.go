@@ -43,7 +43,7 @@ func main() {
 		forceFormat = flag.Bool("force-format", false, "adopt a pre-marker prefix as the current format (dangerous: old-layout tenants are invisible)")
 		satCommitMs = flag.Float64("sat-commit-ms", 500, "commit-latency budget in ms for the saturation metric (1.0 = at limit)")
 		satInflight = flag.Float64("sat-inflight-cap", 128, "in-flight segment cap for the saturation metric")
-		compress    = flag.Bool("compress", envOr("HL_COMPRESS", "true") != "false", "store new WAL segments and base images zstd-compressed (reads accept both; set false for the first rollout from a build without compression support)")
+		compress    = flag.Bool("compress", envOr("HL_COMPRESS", "true") != "false", "publish new generations zstd-compressed (base and every WAL segment; applies from the next checkpoint per tenant; reads accept both). Pods of a build without compression support cannot take over a compressed tenant: set false while such pods may still run, then enable in a second rollout")
 	)
 	flag.Parse()
 	if *bucket == "" {

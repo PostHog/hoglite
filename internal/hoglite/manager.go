@@ -119,6 +119,10 @@ type Manager struct {
 	ckptSem       chan struct{} // bounds concurrent checkpoint drains pod-wide
 	claimSem      chan struct{} // claims get their own lane: slow release
 	// checkpoints must never starve a takeover
+	decodeSem chan struct{} // bounds concurrent decoding materializations pod-wide
+	// legacyReadForTest makes materialize read every object raw and skip
+	// the format gate, like a build from before compression. Tests only.
+	legacyReadForTest bool
 
 	maxOpen int // soft cap on simultaneously open tenants
 
@@ -171,6 +175,11 @@ func NewManagerSat(store Backend, prefix, id, class, baseDir string, opts Tenant
 	// turning them into S3 storms
 	m.ckptSem = make(chan struct{}, 8)
 	m.claimSem = make(chan struct{}, 4)
+	// an active decoder holds about 3.2 MiB for our frames (measured; up
+	// to about 17 MiB for a hostile header): 32 slots cap decoder memory
+	// near 100 MiB (550 MiB worst case) in a failover burst. Claims (4 lanes) are the slower stage, so
+	// this does not limit takeover throughput.
+	m.decodeSem = make(chan struct{}, 32)
 	// the first heartbeat is synchronous: no tenant may start before the
 	// write gate has a clock
 	m.heartbeatLease()
@@ -606,7 +615,7 @@ func (m *Manager) takeOver(ctx context.Context, tid string, mf *Manifest, etag s
 		return nil, err
 	}
 	if err := m.materializeLocked(ctx, tid, mf, dir); err != nil {
-		if !errors.Is(err, errStaleGen) {
+		if !errors.Is(err, errStaleGen) && !errors.Is(err, errDecodeSlotWait) {
 			coolFailedClaim()
 		}
 		return nil, err
@@ -633,7 +642,7 @@ func (m *Manager) takeOver(ctx context.Context, tid string, mf *Manifest, etag s
 			return nil, err2
 		}
 		if err := m.materialize(ctx, tid, mf, dir); err != nil {
-			if !errors.Is(err, errStaleGen) {
+			if !errors.Is(err, errStaleGen) && !errors.Is(err, errDecodeSlotWait) {
 				coolFailedClaim()
 			}
 			return nil, err
@@ -678,11 +687,29 @@ func (m *Manager) materialize(ctx context.Context, tid string, mf *Manifest, dir
 
 var errStaleGen = errors.New("generation objects changed during recovery")
 
+// errDecodeSlotWait: the caller's context ended while all decode slots
+// were busy. Nothing touched the store, so no claim cooldown follows.
+var errDecodeSlotWait = errors.New("waiting for a decode slot")
+
 // materializeLocked downloads the base image and replays the contiguous
 // segment run into dir.
 func (m *Manager) materializeLocked(ctx context.Context, tid string, mf *Manifest, dir string) error {
-	if err := checkManifestFormat(tid, mf); err != nil {
+	format := mf.Format
+	if m.legacyReadForTest {
+		format = manifestFormatRaw // emulate a build from before compression
+	} else if err := checkManifestFormat(tid, mf); err != nil {
 		return err
+	}
+	if format != manifestFormatRaw {
+		// decoders hold memory while they run: bound how many
+		// materializations decode at once, pod-wide. This slot is held only
+		// here, never together with the claim or checkpoint semaphores.
+		select {
+		case m.decodeSem <- struct{}{}:
+			defer func() { <-m.decodeSem }()
+		case <-ctx.Done():
+			return fmt.Errorf("%w: %w", errDecodeSlotWait, ctx.Err())
+		}
 	}
 	dbPath := filepath.Join(dir, "db.sqlite")
 	walPath := filepath.Join(dir, "db.sqlite-wal")
@@ -691,9 +718,10 @@ func (m *Manager) materializeLocked(ctx context.Context, tid string, mf *Manifes
 	if err != nil {
 		return err
 	}
-	// the base may be raw (older build) or one zstd frame; it streams
-	// through the decoder to disk, never whole into memory
-	if _, _, err := fetchDecodedTo(ctx, m.store, mf.BaseKey, base, maxStreamRawBytes); err != nil {
+	// the generation format says how every object of the generation is
+	// stored; there is no content sniffing. A zstd base streams through
+	// the decoder to disk, never whole into memory.
+	if _, _, err := fetchObjectTo(ctx, m.store, mf.BaseKey, base, format, maxBaseRawBytes); err != nil {
 		base.Close()
 		if errors.Is(err, ErrNotFound) {
 			return errStaleGen
@@ -719,31 +747,42 @@ func (m *Manager) materializeLocked(ctx context.Context, tid string, mf *Manifes
 		if s.Offset < expect {
 			continue // duplicate offset from an older epoch; newer sorted first
 		}
-		stored, err := m.store.GetObject(ctx, s.Key)
-		if err != nil {
-			wal.Close()
-			if errors.Is(err, ErrNotFound) {
-				// the winner of a concurrent claim already GC'd this gen:
-				// our manifest read is stale; restart from a fresh read
-				return errStaleGen
+		var n int64
+		if format == manifestFormatRaw {
+			data, err := m.store.GetObject(ctx, s.Key)
+			if err == nil {
+				_, err = wal.Write(data)
 			}
-			return fmt.Errorf("fetch segment %s: %w", s.Key, err)
-		}
-		// a segment that does not decode is corruption in an immutable
-		// object, exactly like a broken checksum chain below: refuse the
-		// claim with the same error class
-		data, err := decodeBlob(stored, maxBlobRawBytes)
-		if err != nil {
-			wal.Close()
-			return fmt.Errorf("wal replay incomplete: segment %s: %w (corruption in stored segments)", s.Key, err)
-		}
-		if _, err := wal.Write(data); err != nil {
-			wal.Close()
-			return err
+			n = int64(len(data))
+			if err != nil {
+				wal.Close()
+				if errors.Is(err, ErrNotFound) {
+					// the winner of a concurrent claim already GC'd this gen:
+					// our manifest read is stale; restart from a fresh read
+					return errStaleGen
+				}
+				return fmt.Errorf("fetch segment %s: %w", s.Key, err)
+			}
+		} else {
+			// streams to the WAL file: a segment of any size up to the
+			// writer's limit decodes without holding it in memory
+			n, _, err = fetchDecodedTo(ctx, m.store, s.Key, wal, maxSegmentRawBytes)
+			if err != nil {
+				wal.Close()
+				if errors.Is(err, ErrNotFound) {
+					return errStaleGen
+				}
+				if errors.Is(err, ErrCorruptObject) {
+					// corruption in an immutable object, exactly like a
+					// broken checksum chain below: same error class
+					return fmt.Errorf("wal replay incomplete: segment %s: %w (corruption in stored segments)", s.Key, err)
+				}
+				return fmt.Errorf("fetch segment %s: %w", s.Key, err)
+			}
 		}
 		// contiguity runs on RAW lengths: keys carry raw WAL offsets, and
 		// the stored size of a compressed segment is smaller
-		expect += int64(len(data))
+		expect += n
 	}
 	wal.Close()
 	if expect == 0 {
