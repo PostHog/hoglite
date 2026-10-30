@@ -8,9 +8,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"runtime/debug"
 	"runtime/metrics"
@@ -20,6 +24,7 @@ import (
 	"unsafe"
 
 	"modernc.org/libc"
+	"modernc.org/sqlite"
 	sqlite3 "modernc.org/sqlite/lib"
 )
 
@@ -320,6 +325,11 @@ func TestCgroupMemoryLimit(t *testing.T) {
 		{"v1-unlimited", 0, ""},
 		{"v1-nested", 768 << 20, "docker/abc/memory.limit_in_bytes"},
 		{"none", 0, ""},
+		// with mountinfo: the mount shows a subtree of the hierarchy
+		{"v2-subtree", 256 << 20, "sys/fs/cgroup/child/memory.max"}, // not the mount root (review of Q3)
+		{"v2-mountpoint", 384 << 20, "run/my cg/a/memory.max"},
+		{"v1-subtree", 128 << 20, "memory/worker/memory.limit_in_bytes"},
+		{"v2-dotdot", 640 << 20, "sys/fs/cgroup/memory.max"},
 	}
 	for _, c := range cases {
 		t.Run(c.dir, func(t *testing.T) {
@@ -595,5 +605,354 @@ func TestCheckpointNoMemSkips(t *testing.T) {
 	t.Cleanup(m2.ShutdownAll)
 	if n := countRows(t, m2, "t1"); n != 20 {
 		t.Fatalf("rows after recovery = %d", n)
+	}
+}
+
+// ---- review of Q3: gaps and guards that the tests above did not pin ----
+
+// disableLookaside turns off the lookaside allocator of connection h.
+// Lookaside serves small allocations (for example those of ROLLBACK and
+// BEGIN) outside the heap limit, so without this they do not fail.
+func disableLookaside(h uintptr) error {
+	tls := libc.NewTLS()
+	defer tls.Close()
+	va := libc.Xmalloc(tls, 24)
+	defer libc.Xfree(tls, va)
+	if rc := sqlite3.Xsqlite3_db_config(tls, h, sqlite3.SQLITE_DBCONFIG_LOOKASIDE, libc.VaList(va, uintptr(0), int32(0), int32(0))); rc != 0 {
+		return fmt.Errorf("disable lookaside: rc %d", rc)
+	}
+	return nil
+}
+
+// noLookasideForTest disables lookaside on every connection that a
+// tenant of this test opens (its files are below the test's temp dir).
+func noLookasideForTest(t *testing.T) {
+	name := strings.NewReplacer("/", "_", "#", "_").Replace(t.Name())
+	sqlite.RegisterConnectionHook(func(c sqlite.ExecQuerierContext, dsn string) error {
+		if !strings.Contains(dsn, name) {
+			return nil
+		}
+		v := reflect.ValueOf(c)
+		if v.Kind() != reflect.Pointer || !v.Elem().FieldByName("db").IsValid() {
+			return errNoHandle
+		}
+		return disableLookaside(uintptr(v.Elem().FieldByName("db").Uint()))
+	})
+}
+
+// NaN and infinite fractions fail every comparison; they must not pass
+// the range check and give a huge Go limit (review of Q3, finding 4).
+func TestPlanMemoryRejectsNonFinite(t *testing.T) {
+	for _, f := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} {
+		for _, c := range []MemoryConfig{{Fraction: f}, {SQLiteFraction: f}, {Fraction: f, SQLiteHard: 1 << 20}} {
+			for _, cg := range []int64{0, 1 << 30} {
+				for _, env := range []string{"", "1GiB"} {
+					if p, err := PlanMemory(cg, "fixture", env, c); err == nil {
+						t.Errorf("cg %d env %q config %+v: no error, plan %s", cg, env, c, p)
+					}
+				}
+			}
+		}
+	}
+	for _, c := range []MemoryConfig{{Fraction: -0.1}, {SQLiteFraction: -0.1}, {Fraction: 1.01}, {Fraction: 0.5, SQLiteFraction: 0.5}} {
+		if _, err := PlanMemory(0, "", "", c); err == nil {
+			t.Errorf("config %+v: no error", c)
+		}
+	}
+}
+
+// Without memory counting, a plan with SQLite limits fails, and the Go
+// limit and the SQLite limits stay as they were. The opt-out plan works.
+func TestApplyMemoryPlanFailsClosed(t *testing.T) {
+	saved := memStatusErr
+	memStatusErr = errors.New("forced: counting off")
+	t.Cleanup(func() { memStatusErr = saved })
+	goBefore := debug.SetMemoryLimit(-1)
+	t.Cleanup(func() { debug.SetMemoryLimit(goBefore) })
+	hard, soft := SQLiteHeapLimits()
+	p, err := PlanMemory(8<<30, "fixture", "", MemoryConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ApplyMemoryPlan(p); err == nil {
+		t.Fatal("plan with SQLite limits applied without memory counting")
+	}
+	if g := debug.SetMemoryLimit(-1); g != goBefore {
+		t.Fatalf("Go limit changed to %d by a failed plan", g)
+	}
+	if h, s := SQLiteHeapLimits(); h != hard || s != soft {
+		t.Fatalf("sqlite limits changed to %d/%d by a failed plan", h, s)
+	}
+	off, err := PlanMemory(8<<30, "fixture", "", MemoryConfig{SQLiteHard: -1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ApplyMemoryPlan(off); err != nil {
+		t.Fatalf("opt-out plan: %v", err)
+	}
+	if g := debug.SetMemoryLimit(-1); g != off.GoLimit {
+		t.Fatalf("Go limit %d, want %d", g, off.GoLimit)
+	}
+}
+
+// A package that opens SQLite in its init runs before hoglite's init in
+// some binaries. Memory counting then cannot start, and StartMemoryCaps
+// must fail instead of running without the cap (review of Q3, finding
+// 3). The opt-out still starts. A separate process, because init order
+// is per binary.
+func TestStartMemoryCapsFailsClosed(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds a binary")
+	}
+	bin := filepath.Join(t.TempDir(), "earlyinit")
+	gobin := filepath.Join(runtime.GOROOT(), "bin", "go")
+	if out, err := exec.Command(gobin, "build", "-o", bin, "./testdata/earlyinit").CombinedOutput(); err != nil {
+		t.Fatalf("build: %v\n%s", err, out)
+	}
+	run := func(hard string) string {
+		cmd := exec.Command(bin, hard)
+		for _, kv := range os.Environ() {
+			if !strings.HasPrefix(kv, "GOMEMLIMIT=") {
+				cmd.Env = append(cmd.Env, kv)
+			}
+		}
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("run: %v\n%s", err, out)
+		}
+		return string(out)
+	}
+	out := run(fmt.Sprint(64 << 20))
+	if !strings.Contains(out, "SQLite already initialized") {
+		t.Fatalf("the early package did not initialize SQLite first:\n%s", out)
+	}
+	if !strings.Contains(out, "start=memory: sqlite heap limit has no effect") ||
+		!strings.Contains(out, "hard=0 soft=0 go=9223372036854775807") {
+		t.Fatalf("explicit limit without counting:\n%s", out)
+	}
+	if out := run("-1"); !strings.Contains(out, "start=<nil>") {
+		t.Fatalf("opt-out:\n%s", out)
+	}
+}
+
+// SQLITE_NOMEM in each step of a read pin is 507 out_of_memory: the
+// prepare of the pin probe (first read), the open of a pool connection
+// (warm probe, no idle connection), and BEGIN (review of Q3, finding 2).
+func TestPinOutOfMemoryHTTP(t *testing.T) {
+	for _, path := range []string{"query", "tx"} {
+		for _, step := range []string{"prepare", "connection", "begin"} {
+			t.Run(path+"/"+step, func(t *testing.T) {
+				if step == "begin" {
+					noLookasideForTest(t)
+				}
+				m, ten, met := guardTenant(t, testOpts())
+				if step != "prepare" {
+					mustQuery(t, m, "t1", "SELECT 1")
+				}
+				if step == "connection" {
+					ten.roDB.SetMaxIdleConns(0)
+				}
+				srv := httptest.NewServer(NewServer(m, nil).Handler())
+				defer srv.Close()
+				var body []byte
+				if path == "tx" {
+					body, _ = json.Marshal(TxRequest{Client: "c", TxID: "r", Stmts: []Statement{{SQL: "SELECT 1"}}})
+				} else {
+					body, _ = json.Marshal(Statement{SQL: "SELECT 1"})
+				}
+				restore := withHeapLimitAt(t, 1)
+				resp, err := http.Post(srv.URL+"/v1/t/t1/"+path, "application/json", bytes.NewReader(body))
+				restore()
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer resp.Body.Close()
+				var ae apiError
+				json.NewDecoder(resp.Body).Decode(&ae)
+				slotsFree(t, ten, met)
+				if resp.StatusCode != 507 || ae.Code != "out_of_memory" || met.OutOfMemory.Load() != 1 {
+					t.Fatalf("got %d %+v, out of memory metric %d", resp.StatusCode, ae, met.OutOfMemory.Load())
+				}
+				if !ten.Alive() || countRows(t, m, "t1") != 0 {
+					t.Fatal("tenant unusable after the failed pin")
+				}
+			})
+		}
+	}
+}
+
+// SQLITE_NOMEM in BEGIN keeps the tenant open, for a write and a read;
+// the write's txid commits on retry.
+func TestBeginOutOfMemoryKeepsTenant(t *testing.T) {
+	noLookasideForTest(t)
+	m, ten, met := guardTenant(t, testOpts())
+	mustQuery(t, m, "t1", "SELECT 1")
+	restore := withHeapLimitAt(t, 1)
+	_, _, we := ten.SubmitTx(TxRequest{Client: "c", TxID: "begin", Stmts: []Statement{insertStmt(1, "lost")}})
+	_, re := ten.SubmitQuery(Statement{SQL: "SELECT 1"})
+	restore()
+	expectNoMem(t, we)
+	expectNoMem(t, re)
+	slotsFree(t, ten, met)
+	if !ten.Alive() {
+		t.Fatal("BEGIN failure poisoned the tenant")
+	}
+	mustTx(t, m, "t1", "c", "begin", insertStmt(1, "retry"))
+	if n := countRows(t, m, "t1"); n != 1 {
+		t.Fatalf("rows = %d", n)
+	}
+}
+
+// COMMIT and ROLLBACK both fail: the write connection stays inside the
+// transaction. endOpenTx must see it and fail the tenant, and nothing
+// ships. Without the check the next BEGIN fails forever.
+func TestRollbackOutOfMemoryPoisonsWrite(t *testing.T) {
+	noLookasideForTest(t)
+	_, ten, met := guardTenant(t, testOpts())
+	puts0 := met.SegPuts.Load()
+	restore := func() {}
+	onActor(ten, func() bool { ten.txHook = func() { restore = withHeapLimitAt(t, 1) }; return true })
+	_, _, err := ten.SubmitTx(TxRequest{Client: "c", TxID: "rollback", Stmts: []Statement{insertStmt(1, "lost")}})
+	restore()
+	expectNoMem(t, err)
+	waitFor(t, "poison", func() bool { return !ten.Alive() })
+	if !strings.Contains(ten.deadError().Error(), "left inside a transaction") {
+		t.Fatalf("poison cause = %v", ten.deadError())
+	}
+	if met.SegPuts.Load() != puts0 {
+		t.Fatal("the failed write was shipped")
+	}
+}
+
+// A read connection whose ROLLBACK failed is discarded, not returned to
+// the pool, and a new connection replaces it.
+func TestReadConnDiscardedAfterFailedRollback(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	c, err := db.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := sqliteHandle(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := disableLookaside(h); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := c.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restore := withHeapLimitAt(t, 1)
+	err = tx.Rollback()
+	stillOpen := !sqliteAutocommit(h)
+	if isNoMem(err) && stillOpen {
+		closeReadConn(c, h)
+	}
+	restore()
+	if !isNoMem(err) || !stillOpen {
+		t.Fatalf("setup: rollback = %v, transaction still open = %v", err, stillOpen)
+	}
+	if n := db.Stats().OpenConnections; n != 0 {
+		t.Fatalf("the read connection went back to the pool: open = %d", n)
+	}
+	if _, err := db.Exec("SELECT 1"); err != nil {
+		t.Fatalf("replacement connection: %v", err)
+	}
+}
+
+// The checkpoint skip after SQLITE_NOMEM refuses a claim, a class change
+// and a WAL file shorter than the shipped offset.
+func TestCheckpointSkipGates(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec("SELECT 1"); err != nil {
+		t.Fatal(err)
+	}
+	restore := withHeapLimitAt(t, 1)
+	var x int
+	noMem := db.QueryRow("SELECT length(randomblob(1000000))").Scan(&x)
+	restore()
+	if !isNoMem(noMem) {
+		t.Fatalf("setup: need a real SQLITE_NOMEM, got %v", noMem)
+	}
+	m, ten, _ := guardTenant(t, testOpts())
+	mustTx(t, m, "t1", "c", "a", insertStmt(1, "a"))
+	if _, _, sub := walState(t, ten); sub == 0 {
+		t.Fatal("setup: nothing shipped")
+	}
+	if !onActor(ten, func() bool { return ten.skipNoMemCheckpoint(noMem, "") }) {
+		t.Fatal("control: a plain checkpoint does not skip")
+	}
+	if onActor(ten, func() bool {
+		old := ten.claimed
+		ten.claimed = false
+		defer func() { ten.claimed = old }()
+		return ten.skipNoMemCheckpoint(noMem, "")
+	}) {
+		t.Error("a claim skipped its checkpoint")
+	}
+	if onActor(ten, func() bool { return ten.skipNoMemCheckpoint(noMem, "whale") }) {
+		t.Error("a class change skipped its checkpoint")
+	}
+	if onActor(ten, func() bool { return ten.skipNoMemCheckpoint(errors.New("other"), "") }) {
+		t.Error("an error other than SQLITE_NOMEM skipped")
+	}
+	type res struct {
+		ok  bool
+		err error
+	}
+	r := onActor(ten, func() res {
+		if err := os.Truncate(ten.walPath, 0); err != nil {
+			return res{err: err}
+		}
+		ok := ten.skipNoMemCheckpoint(noMem, "")
+		ten.failLocked(errors.New("test truncated the local WAL"))
+		return res{ok: ok}
+	})
+	if r.err != nil {
+		t.Fatal(r.err)
+	}
+	if r.ok {
+		t.Error("a WAL shorter than the shipped offset skipped")
+	}
+}
+
+// advanceWatermark clears the slots it takes out of t.segs and
+// t.pending, so their backing arrays do not pin acked data. It keeps the
+// entries that still wait.
+func TestWatermarkClearsSlots(t *testing.T) {
+	reply := make(chan txOutcome, 1)
+	seg := &segment{done: true, end: 10, waiters: []chan txOutcome{reply}, results: []txOutcome{{dup: true}}}
+	segs := []*segment{seg}
+	pending := []pendingAck{
+		{end: 10, reply: make(chan txOutcome, 1), outcome: txOutcome{dup: true}},
+		{end: 11, reply: make(chan txOutcome, 1), outcome: txOutcome{err: errors.New("kept")}},
+		{end: 9, reply: make(chan txOutcome, 1)},
+	}
+	keep := pending[1].reply
+	ten := &Tenant{mf: &Manifest{OwnerUntilMs: time.Now().Add(time.Hour).UnixMilli()}, segs: segs, pending: pending}
+	ten.advanceWatermark()
+	if segs[0] != nil {
+		t.Fatal("segment slot kept")
+	}
+	if !(<-reply).dup {
+		t.Fatal("segment waiter got the wrong result")
+	}
+	if len(ten.pending) != 1 || ten.pending[0].reply != keep || ten.pending[0].outcome.err == nil {
+		t.Fatal("pending compaction lost the waiting entry")
+	}
+	for i := 1; i < len(pending); i++ {
+		if pending[i].reply != nil || pending[i].outcome.err != nil || pending[i].outcome.dup {
+			t.Fatalf("pending slot %d kept", i)
+		}
 	}
 }

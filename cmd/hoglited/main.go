@@ -58,20 +58,16 @@ func main() {
 		cacheKiB    = flag.Int("sqlite-cache-kib", 0, "page cache bound per SQLite connection in KiB (0 = default, negative = SQLite default)")
 	)
 	flag.Parse()
-	// memory caps first: before any tenant opens (memory.go)
-	cgLimit, cgSrc, err := hoglite.CgroupMemoryLimit()
-	if err != nil {
-		log.Printf("WARNING: cgroup memory limit: %v", err)
-	}
-	plan, err := hoglite.PlanMemory(cgLimit, cgSrc, os.Getenv("GOMEMLIMIT"), hoglite.MemoryConfig{
+	// memory caps first: before any tenant opens (memory.go). A cap that
+	// cannot be set stops the start; -sqlite-heap-limit=-1 opts out of
+	// the SQLite cap.
+	plan, err := hoglite.StartMemoryCaps(hoglite.MemoryConfig{
 		Fraction: *memFrac, SQLiteFraction: *sqliteFrac, SQLiteHard: *sqliteHard, SQLiteSoft: *sqliteSoft})
 	if err != nil {
 		log.Fatal(err)
 	}
-	if err := hoglite.ApplyMemoryPlan(plan); err != nil {
-		log.Printf("WARNING: %v", err)
-	}
 	log.Print(plan)
+	log.Print(hoglite.EffectiveMemory())
 	if *bucket == "" {
 		log.Fatal("-bucket / HL_BUCKET required")
 	}

@@ -177,10 +177,14 @@ func (t *Tenant) pinRead(w *readWork, basis int64) {
 		t.replyRead(w, readOutcome{err: ErrClosed})
 		return
 	}
+	// abort is the one exit for a failed pin. It maps SQLITE_NOMEM from
+	// any step (prepare, connection open, BEGIN, probe) to
+	// ErrOutOfMemory, after the context cause, which wins.
 	abort := func(err error) {
 		if c := context.Cause(ctx); c != nil {
 			err = c
 		}
+		err = memErr(err, t.metrics)
 		cancel(nil)
 		t.readers.remove(ar)
 		t.replyRead(w, readOutcome{err: err})
@@ -215,7 +219,7 @@ func (t *Tenant) pinRead(w *readWork, basis int64) {
 	tx, err := conn.BeginTx(context.Background(), nil)
 	if err != nil {
 		closeReadConn(conn, h)
-		abort(memErr(err, t.metrics))
+		abort(err)
 		return
 	}
 	// The probe also runs with Background: it reads one schema page and
@@ -226,7 +230,7 @@ func (t *Tenant) pinRead(w *readWork, basis int64) {
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		tx.Rollback()
 		closeReadConn(conn, h)
-		abort(memErr(err, t.metrics))
+		abort(err)
 		return
 	}
 	pr := &pinnedRead{w: w, ctx: ctx, cancel: cancel, conn: conn, db: h, tx: tx, ar: ar,

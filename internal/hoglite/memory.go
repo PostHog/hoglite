@@ -73,8 +73,10 @@ func init() {
 // accepts it only before sqlite3_initialize, which the first open runs.
 // Package init runs before any code of this package opens a connection.
 // A program whose other packages open SQLite during their own init gets
-// SQLITE_MISUSE here, and the heap limits stay off (logged at Manager
-// start, visible in /v1/info).
+// SQLITE_MISUSE here. The heap limits then cannot work, and
+// StartMemoryCaps fails unless the operator turned the SQLite limit off
+// (TestStartMemoryCapsFailsClosed). Manager start logs it, and /v1/info
+// shows it.
 func enableSQLiteMemStatus() error {
 	tls := libc.NewTLS()
 	defer tls.Close()
@@ -174,12 +176,15 @@ func CgroupMemoryLimit() (limit int64, src string, err error) {
 }
 
 // cgroupMemoryLimit reads the limit below root (a fixture directory in
-// tests). It tries cgroup v2 (memory.max), then v1
-// (memory.limit_in_bytes). The cgroup path comes from /proc/self/cgroup.
-// With a cgroup namespace, or when the container sees only its own
-// cgroup, that path does not exist below the mount; the mount root is
-// then the cgroup of the process. Limits of parent cgroups also apply, so
-// the smallest limit from the cgroup up to the mount root wins.
+// tests). The cgroup path of the process comes from /proc/self/cgroup.
+// That path is relative to the root of the hierarchy. A mount can show a
+// subtree of the hierarchy, so /proc/self/mountinfo gives the mount point
+// and the hierarchy path that the mount shows (its root). The process
+// directory is the mount point plus the process path below that root.
+// The memory controller of cgroup v1 wins over cgroup v2 (hybrid layout).
+// Limits of parent cgroups also apply, so the smallest limit from the
+// process cgroup up to the mount point wins. Without mountinfo, the
+// standard mount points apply (/sys/fs/cgroup, /sys/fs/cgroup/memory).
 func cgroupMemoryLimit(root string) (int64, string, error) {
 	v2path, v1path := "", ""
 	if b, err := os.ReadFile(filepath.Join(root, "proc/self/cgroup")); err == nil {
@@ -198,6 +203,20 @@ func cgroupMemoryLimit(root string) (int64, string, error) {
 			}
 		}
 	}
+	if mounts, err := readMountinfo(filepath.Join(root, "proc/self/mountinfo")); err == nil {
+		if v1path != "" {
+			if mt, ok := pickMount(mounts, v1path, func(m mountEntry) bool {
+				return m.fstype == "cgroup" && hasOpt(m.superopts, "memory")
+			}); ok {
+				return cgroupWalk(filepath.Join(root, mt.point), relCgroupPath(mt.root, v1path), "memory.limit_in_bytes")
+			}
+		}
+		if v2path != "" {
+			if mt, ok := pickMount(mounts, v2path, func(m mountEntry) bool { return m.fstype == "cgroup2" }); ok {
+				return cgroupWalk(filepath.Join(root, mt.point), relCgroupPath(mt.root, v2path), "memory.max")
+			}
+		}
+	}
 	if _, err := os.Stat(filepath.Join(root, "sys/fs/cgroup/cgroup.controllers")); err == nil {
 		return cgroupWalk(filepath.Join(root, "sys/fs/cgroup"), v2path, "memory.max")
 	}
@@ -206,6 +225,109 @@ func cgroupMemoryLimit(root string) (int64, string, error) {
 		return cgroupWalk(mount, v1path, "memory.limit_in_bytes")
 	}
 	return 0, "", nil // no cgroup memory controller: no limit
+}
+
+// mountEntry is one line of /proc/self/mountinfo.
+type mountEntry struct{ root, point, fstype, superopts string }
+
+func readMountinfo(path string) ([]mountEntry, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var out []mountEntry
+	for _, line := range strings.Split(string(b), "\n") {
+		// ID parent major:minor root mountpoint options [optional...] - fstype source superopts
+		f := strings.Fields(line)
+		sep := -1
+		for i, x := range f {
+			if x == "-" && i >= 6 {
+				sep = i
+				break
+			}
+		}
+		if sep < 0 || len(f) < sep+4 {
+			continue
+		}
+		out = append(out, mountEntry{root: unescapeMount(f[3]), point: unescapeMount(f[4]),
+			fstype: f[sep+1], superopts: f[sep+3]})
+	}
+	return out, nil
+}
+
+// unescapeMount decodes the octal escapes of mountinfo (\040 is a space).
+func unescapeMount(s string) string {
+	if !strings.Contains(s, "\\") {
+		return s
+	}
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\\' && i+3 < len(s) {
+			if v, err := strconv.ParseUint(s[i+1:i+4], 8, 8); err == nil {
+				b.WriteByte(byte(v))
+				i += 3
+				continue
+			}
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
+}
+
+func hasOpt(opts, want string) bool {
+	for _, o := range strings.Split(opts, ",") {
+		if o == want {
+			return true
+		}
+	}
+	return false
+}
+
+// pickMount selects the mount of a hierarchy for the process path p. A
+// mount whose root contains p wins; among those, the deepest root, then
+// the standard mount point.
+func pickMount(mounts []mountEntry, p string, match func(mountEntry) bool) (mountEntry, bool) {
+	var best mountEntry
+	found, bestUnder := false, false
+	for _, m := range mounts {
+		if !match(m) {
+			continue
+		}
+		under := underCgroup(m.root, p)
+		better := !found ||
+			(under && !bestUnder) ||
+			(under == bestUnder && len(m.root) > len(best.root)) ||
+			(under == bestUnder && len(m.root) == len(best.root) && strings.HasPrefix(m.point, "/sys/fs/cgroup") && !strings.HasPrefix(best.point, "/sys/fs/cgroup"))
+		if better {
+			best, found, bestUnder = m, true, under
+		}
+	}
+	return best, found
+}
+
+// underCgroup reports whether the hierarchy path p is root or below it.
+// A root with ".." (a cgroup namespace shows the mount of a cgroup above
+// its own root this way) never contains p.
+func underCgroup(root, p string) bool {
+	if strings.Contains(root, "..") {
+		return false
+	}
+	root, p = filepath.Clean("/"+root), filepath.Clean("/"+p)
+	return root == "/" || p == root || strings.HasPrefix(p, root+"/")
+}
+
+// relCgroupPath returns the process path p relative to the mount root.
+// A p outside the root gives "/": the mount point is then the closest
+// visible cgroup.
+func relCgroupPath(root, p string) string {
+	if !underCgroup(root, p) {
+		return "/"
+	}
+	root, p = filepath.Clean("/"+root), filepath.Clean("/"+p)
+	if root == "/" {
+		return p
+	}
+	return "/" + strings.TrimPrefix(strings.TrimPrefix(p, root), "/")
 }
 
 // cgroupWalk returns the smallest limit in file from mount/rel up to
@@ -320,13 +442,20 @@ func mib(v int64) string {
 // the Go limit does not count the SQLite heap. An explicit GOMEMLIMIT
 // wins: the runtime already applied it, and the operator chose it.
 func PlanMemory(cg int64, src, gomemlimit string, c MemoryConfig) (MemoryPlan, error) {
+	// NaN fails every comparison, so the checks are written to accept
+	// only finite values in range.
+	for _, f := range []float64{c.Fraction, c.SQLiteFraction} {
+		if math.IsNaN(f) || math.IsInf(f, 0) {
+			return MemoryPlan{}, fmt.Errorf("memory fractions: %v is not a finite number", f)
+		}
+	}
 	if c.Fraction == 0 {
 		c.Fraction = defaultMemFraction
 	}
 	if c.SQLiteFraction == 0 {
 		c.SQLiteFraction = defaultSQLiteFraction
 	}
-	if c.Fraction < 0 || c.Fraction > 1 || c.SQLiteFraction < 0 || c.SQLiteFraction >= c.Fraction {
+	if !(c.Fraction > 0 && c.Fraction <= 1 && c.SQLiteFraction > 0 && c.SQLiteFraction < c.Fraction) {
 		return MemoryPlan{}, fmt.Errorf("memory fractions: need 0 < sqlite fraction (%v) < fraction (%v) <= 1", c.SQLiteFraction, c.Fraction)
 	}
 	p := MemoryPlan{CgroupLimit: cg, CgroupSource: src}
@@ -364,13 +493,66 @@ func PlanMemory(cg int64, src, gomemlimit string, c MemoryConfig) (MemoryPlan, e
 	return p, nil
 }
 
-// ApplyMemoryPlan sets the Go soft memory limit and the SQLite heap
-// limits of the process.
+// ApplyMemoryPlan sets the SQLite heap limits and the Go soft memory
+// limit of the process. It sets SQLite first and reads the limits back.
+// If SQLite cannot take them (memory counting is off, see
+// SQLiteMemStatus), it returns an error and leaves the Go limit as it
+// is. A plan without SQLite limits (operator opt-out) needs no counting.
 func ApplyMemoryPlan(p MemoryPlan) error {
+	if err := SetSQLiteHeapLimits(p.SQLiteHard, p.SQLiteSoft); err != nil {
+		return err
+	}
+	// SQLite clamps a soft limit to the hard limit (SetSQLiteHeapLimits)
+	wantSoft := p.SQLiteSoft
+	if p.SQLiteHard > 0 && (wantSoft == 0 || wantSoft > p.SQLiteHard) {
+		wantSoft = p.SQLiteHard
+	}
+	if h, s := SQLiteHeapLimits(); h != p.SQLiteHard || s != wantSoft {
+		return fmt.Errorf("sqlite heap limits did not apply: hard %d soft %d, want %d %d", h, s, p.SQLiteHard, wantSoft)
+	}
 	if p.GoLimit > 0 {
 		debug.SetMemoryLimit(p.GoLimit)
 	}
-	return SetSQLiteHeapLimits(p.SQLiteHard, p.SQLiteSoft)
+	return nil
+}
+
+// EffectiveMemory describes the caps in force now: the startup log line
+// after ApplyMemoryPlan.
+func EffectiveMemory() string {
+	hard, soft := SQLiteHeapLimits()
+	goLim := "none"
+	if v := goMemoryLimit(); v > 0 {
+		goLim = fmt.Sprintf("%d MiB", v>>20)
+	}
+	return fmt.Sprintf("memory caps in force: Go soft limit %s; sqlite heap hard %s soft %s", goLim, mib(hard), mib(soft))
+}
+
+// StartMemoryCaps sets the memory caps at process start, before any
+// tenant opens. It reads the cgroup limit and GOMEMLIMIT, plans with c
+// and applies the plan. It returns the plan, and an error when the caps
+// that c asks for cannot be set. The caller must then stop: running
+// without them would let one query grow the pod to the OOM killer.
+//
+// A cgroup read error is fatal when the SQLite limit derives from the
+// cgroup (c.SQLiteHard == 0). An explicit SQLite limit, or the opt-out
+// (c.SQLiteHard < 0), plans without the cgroup limit; the Go limit is then
+// only what GOMEMLIMIT sets.
+func StartMemoryCaps(c MemoryConfig) (MemoryPlan, error) {
+	cg, src, err := CgroupMemoryLimit()
+	if err != nil {
+		if c.SQLiteHard == 0 {
+			return MemoryPlan{}, fmt.Errorf("memory: cgroup memory limit: %w (set the sqlite heap limit explicitly, or turn it off)", err)
+		}
+		cg, src = 0, ""
+	}
+	p, err := PlanMemory(cg, src, os.Getenv("GOMEMLIMIT"), c)
+	if err != nil {
+		return MemoryPlan{}, err
+	}
+	if err := ApplyMemoryPlan(p); err != nil {
+		return p, fmt.Errorf("memory: %w", err)
+	}
+	return p, nil
 }
 
 // goMemoryLimit returns the current Go soft memory limit (0 = none).

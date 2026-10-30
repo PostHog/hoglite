@@ -1,0 +1,3 @@
+30 25 0:27 /docker/abc /sys/fs/cgroup/cpu,cpuacct ro - cgroup cgroup rw,cpu,cpuacct
+31 25 0:28 /docker/abc /sys/fs/cgroup/memory ro,nosuid master:9 - cgroup cgroup rw,memory
+32 25 0:29 / /sys/fs/cgroup/unified rw - cgroup2 cgroup2 rw
