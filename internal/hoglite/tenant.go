@@ -54,6 +54,12 @@ type TenantOpts struct {
 	MaxReaders    int           // concurrent read snapshots per tenant (read-only pool size)
 	ReadDrainWait time.Duration // checkpoint/close grace for in-flight reads before they are canceled
 	PodMaxQueries int           // pod-wide cap on admitted queries; read by the Manager, not per tenant
+	// Query guards (guards.go). Zero selects the default, a negative value
+	// turns the guard off.
+	QueryTimeout   time.Duration // execution deadline of a read (/query, read-only /tx)
+	WriteTimeout   time.Duration // execution deadline of a write transaction (runs on the actor)
+	MaxResultRows  int           // rows per response
+	MaxResultBytes int64         // estimated bytes of decoded values per response
 }
 
 func DefaultOpts() TenantOpts {
@@ -77,10 +83,14 @@ func DefaultOpts() TenantOpts {
 		// ratio saves fewer uploads than it adds to every cold acquire:
 		// with deltas of size d, a rebase cycle uploads base*(1+r) over
 		// r*base/d+1 checkpoints.
-		DeltaMaxRatio: 0.5,
-		MaxReaders:    4,
-		ReadDrainWait: 2 * time.Second,
-		PodMaxQueries: defaultPodMaxQueries(),
+		DeltaMaxRatio:  0.5,
+		MaxReaders:     4,
+		ReadDrainWait:  2 * time.Second,
+		PodMaxQueries:  defaultPodMaxQueries(),
+		QueryTimeout:   defaultQueryTimeout,
+		WriteTimeout:   defaultWriteTimeout,
+		MaxResultRows:  defaultMaxResultRows,
+		MaxResultBytes: defaultMaxResultBytes,
 	}
 }
 
@@ -194,8 +204,9 @@ type readWork struct {
 	// taken decides who returns the admission slots: the first party to
 	// set it (the actor on receipt, or the submitter that gives up) owns
 	// the release.
-	taken    atomic.Bool
-	released atomic.Bool // admission slots returned (releaseSlots)
+	taken       atomic.Bool
+	released    atomic.Bool // tenant reader slot returned (releaseSlots)
+	podReleased atomic.Bool // pod query slot returned (releasePodSlot)
 }
 
 type readOutcome struct {
@@ -285,7 +296,8 @@ type Tenant struct {
 	readSlots chan struct{}         // per-tenant read admission: one token per roDB connection
 	qlim      *queryLimiter         // pod-wide query admission (manager-owned; nil = unbounded)
 	readers   readerSet             // pinned read snapshots (open read transactions on roDB)
-	pinCh     chan *pinnedRead      // unbuffered: hands a pin to an idle reader worker
+	pinCh     chan *pinnedRead      // queued pins for the reader workers; room for MaxReaders
+	pool      readPool              // reader worker accounting for pinCh
 	probe     *sql.Stmt             // pin probe prepared on roDB; actor-loop only
 	readDone  chan readResult       // worker outcomes whose basis was not yet durable at pin time
 	readHook  func(context.Context) // test hook: runs in the worker after the pin
@@ -361,6 +373,10 @@ func openTenant(id string, dir string, mf *Manifest, etag string, store Backend,
 	if opts.ReadDrainWait <= 0 {
 		opts.ReadDrainWait = 2 * time.Second
 	}
+	opts.QueryTimeout = guardOpt(opts.QueryTimeout, defaultQueryTimeout)
+	opts.WriteTimeout = guardOpt(opts.WriteTimeout, defaultWriteTimeout)
+	opts.MaxResultRows = guardOpt(opts.MaxResultRows, defaultMaxResultRows)
+	opts.MaxResultBytes = guardOpt(opts.MaxResultBytes, defaultMaxResultBytes)
 	t := &Tenant{
 		ID: id, store: store, prefix: prefix, opts: opts, self: self, routeID: routeID, dir: dir, clock: clock,
 		dbPath: filepath.Join(dir, "db.sqlite"), walPath: filepath.Join(dir, "db.sqlite-wal"),
@@ -369,13 +385,12 @@ func openTenant(id string, dir string, mf *Manifest, etag string, store Backend,
 		sem:     make(chan struct{}, opts.Inflight),
 		writeCh: make(chan *txWork, 4096),
 		readCh:  make(chan *readWork, 4096),
-		// A worker sends here only after it closed its snapshot and returned
-		// its slots, so a full buffer parks a goroutine but holds no
-		// snapshot: a checkpoint drain cannot wait on it. The buffer only
-		// makes that park rare.
+		// Each outcome here still holds its tenant reader slot until the
+		// actor takes it (onReadDone), so the buffer never fills and a
+		// worker never waits for the actor.
 		readDone:  make(chan readResult, opts.MaxReaders),
 		readSlots: make(chan struct{}, opts.MaxReaders),
-		pinCh:     make(chan *pinnedRead),
+		pinCh:     make(chan *pinnedRead, opts.MaxReaders),
 		ctlCh:     make(chan func(), 64),
 		done:      make(chan struct{}),
 		metrics:   metrics,
@@ -453,7 +468,8 @@ func (t *Tenant) SubmitTx(req TxRequest) ([]QueryResult, bool, error) {
 // SubmitTxCtx is SubmitTx with a request context. A read-only transaction
 // runs on the reader path (off the actor) and ctx bounds its admission
 // wait and its execution. Writes ignore ctx: once queued, a write runs to
-// its durable outcome so a retry can never race it.
+// its durable outcome so a retry can never race it. Only the server-side
+// WriteTimeout stops a write, and it rolls the write back (applyTx).
 func (t *Tenant) SubmitTxCtx(ctx context.Context, req TxRequest) ([]QueryResult, bool, error) {
 	if allReadOnly(req.Stmts) {
 		o := t.submitRead(ctx, &readWork{stmts: req.Stmts, tx: true})
@@ -807,13 +823,66 @@ func (t *Tenant) applyTx(req TxRequest) (o txOutcome) {
 	if allReadOnly(req.Stmts) {
 		o.readOnly = true
 	}
-	ctx := context.Background()
-	tx, err := t.db.BeginTx(ctx, nil)
+	// The deadline bounds how long one transaction holds the actor. A
+	// timed-out transaction rolls back: no commit, no dedup receipt, no
+	// pending ack, and no new committed WAL bytes for cutSegment to ship.
+	ctx, cancel := withDeadline(context.Background(), t.opts.WriteTimeout, "write transaction")
+	defer cancel()
+	// A dedicated sql.Conn gives the sqlite handle of this transaction's
+	// connection. The pool may replace the connection between
+	// transactions, so the handle is looked up each time. Without a
+	// handle only the driver's own context checks stop the work.
+	conn, err := t.db.Conn(context.Background())
+	if err != nil {
+		o.err = err
+		return o
+	}
+	defer conn.Close()
+	h, _ := sqliteHandle(conn)
+	// Background: the deadline must not end the transaction on its own
+	// (database/sql would roll back on another goroutine). The statements
+	// carry the deadline.
+	tx, err := conn.BeginTx(context.Background(), nil)
 	if err != nil {
 		o.err = err
 		return o
 	}
 	defer tx.Rollback()
+	it := watchInterrupt(ctx, h)
+	o = t.runTx(ctx, tx, req, o)
+	// no interrupt may reach the COMMIT or the ROLLBACK below
+	it.stop()
+	if o.dup {
+		return o // the receipt answers; this transaction changed nothing
+	}
+	if ctx.Err() != nil {
+		// Also when every statement finished: a transaction that passed
+		// its deadline never commits, so the client sees one clear rule.
+		if c := context.Cause(ctx); errors.Is(c, ErrQueryTimeout) {
+			t.metrics.WriteTimeouts.Add(1)
+			o.err = c
+		} else if o.err == nil {
+			o.err = ctx.Err()
+		}
+		o.results = nil
+		return o
+	}
+	if o.err != nil {
+		if errors.Is(o.err, ErrResultTooLarge) {
+			t.metrics.ResultTooLarge.Add(1)
+		}
+		return o
+	}
+	if err := tx.Commit(); err != nil {
+		o.err = err
+		return o
+	}
+	return o
+}
+
+// runTx executes the dedup lookup, the statements and the dedup receipt
+// of req inside tx. ctx carries the write deadline.
+func (t *Tenant) runTx(ctx context.Context, tx *sql.Tx, req TxRequest, o txOutcome) txOutcome {
 	if req.Client != "" && req.TxID != "" && !o.readOnly {
 		var raw, fp string
 		err := tx.QueryRowContext(ctx, `SELECT result, reqfp FROM _hw_dedup WHERE client=? AND txid=?`,
@@ -838,7 +907,7 @@ func (t *Tenant) applyTx(req TxRequest) (o txOutcome) {
 			return o
 		}
 	}
-	if o.results, o.err = execTxStatements(ctx, tx, req.Stmts); o.err != nil {
+	if o.results, o.err = execTxStatements(ctx, tx, req.Stmts, t.newResultLimit()); o.err != nil {
 		return o
 	}
 	if req.Client != "" && req.TxID != "" && !o.readOnly {
@@ -850,20 +919,18 @@ func (t *Tenant) applyTx(req TxRequest) (o txOutcome) {
 			return o
 		}
 	}
-	if err := tx.Commit(); err != nil {
-		o.err = err
-		return o
-	}
 	return o
 }
 
 // execTxStatements runs the statements of one /tx in order and enforces
 // their guards. Shared by the write path (actor, write connection) and the
 // read-only path (reader worker, pinned read-only snapshot).
-func execTxStatements(ctx context.Context, tx *sql.Tx, stmts []Statement) ([]QueryResult, error) {
+//
+// lim is the result budget of the whole transaction.
+func execTxStatements(ctx context.Context, tx *sql.Tx, stmts []Statement, lim *resultLimit) ([]QueryResult, error) {
 	var results []QueryResult
 	for i, st := range stmts {
-		res, err := execStatement(ctx, tx, st)
+		res, err := execStatement(ctx, tx, st, lim)
 		if err != nil {
 			return results, err
 		}
@@ -935,7 +1002,7 @@ func forbiddenTXSQL(sqlText string) bool {
 	return strings.Contains(ls, "_hw_dedup")
 }
 
-func execStatement(ctx context.Context, tx *sql.Tx, st Statement) (QueryResult, error) {
+func execStatement(ctx context.Context, tx *sql.Tx, st Statement, lim *resultLimit) (QueryResult, error) {
 	if !singleStatement(st.SQL) {
 		return QueryResult{}, errors.New("one statement per Statement")
 	}
@@ -949,7 +1016,7 @@ func execStatement(ctx context.Context, tx *sql.Tx, st Statement) (QueryResult, 
 			return QueryResult{}, err
 		}
 		defer rows.Close()
-		qr, err := drainRows(rows)
+		qr, err := drainRows(rows, lim)
 		if err != nil {
 			return qr, err
 		}
@@ -988,13 +1055,13 @@ func checkQuerySQL(sqlText string) error {
 
 // runQuery executes one checked /query statement inside a pinned read
 // transaction on the query_only connection.
-func runQuery(ctx context.Context, tx *sql.Tx, st Statement) (QueryResult, error) {
+func runQuery(ctx context.Context, tx *sql.Tx, st Statement, lim *resultLimit) (QueryResult, error) {
 	rows, err := tx.QueryContext(ctx, st.SQL, normalizeArgs(st.Args)...)
 	if err != nil {
 		return QueryResult{}, err
 	}
 	defer rows.Close()
-	return drainRows(rows)
+	return drainRows(rows, lim)
 }
 
 func singleStatement(s string) bool {
@@ -1015,7 +1082,9 @@ func isQuerySQL(s string) bool {
 		strings.HasPrefix(ls, "explain") || strings.HasPrefix(ls, "values")
 }
 
-func drainRows(rows *sql.Rows) (QueryResult, error) {
+// drainRows reads all rows into memory. lim fails the query once the
+// response passes its row or byte budget; it never truncates.
+func drainRows(rows *sql.Rows, lim *resultLimit) (QueryResult, error) {
 	cols, err := rows.Columns()
 	if err != nil {
 		return QueryResult{}, err
@@ -1029,6 +1098,9 @@ func drainRows(rows *sql.Rows) (QueryResult, error) {
 		}
 		if err := rows.Scan(ptrs...); err != nil {
 			return out, err
+		}
+		if err := lim.addRow(vals); err != nil {
+			return QueryResult{}, err
 		}
 		for i, v := range vals {
 			vals[i] = jsonValue(v)
@@ -1768,7 +1840,7 @@ func (t *Tenant) failQueued(err error) {
 			rw.txReply <- txOutcome{err: err}
 			continue
 		}
-		rw.w.reply <- readOutcome{err: err} // slots already returned by the worker
+		rw.w.reply <- readOutcome{err: err} // slots already returned (worker, onReadDone)
 	}
 	t.readWaits = nil
 	for _, s := range t.segs {

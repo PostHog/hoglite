@@ -97,6 +97,23 @@ type apiError struct {
 	// structured guard failure detail (typed refusals downstream)
 	GuardIndex int    `json:"guard_index,omitempty"`
 	GuardKind  string `json:"guard_kind,omitempty"`
+	// Code names a query guard refusal: query_timeout, result_too_large
+	Code string `json:"code,omitempty"`
+}
+
+// guardStatus maps a query guard refusal to its HTTP status. Both are
+// deterministic for the same request and data, so neither uses 503, the
+// status that clients retry. 409 and 422 also keep their meaning (guard
+// failure, SQL error): the REST adapter acts on both. A timed-out write
+// rolled back and wrote no dedup receipt, so a later retry runs it again.
+func guardStatus(err error) (int, apiError, bool) {
+	switch {
+	case errors.Is(err, ErrQueryTimeout):
+		return 504, apiError{Error: err.Error(), Code: "query_timeout"}, true
+	case errors.Is(err, ErrResultTooLarge):
+		return 413, apiError{Error: err.Error(), Code: "result_too_large"}, true
+	}
+	return 0, apiError{}, false
 }
 
 func (s *Server) wrap(h func(http.ResponseWriter, *http.Request) (int, any)) http.HandlerFunc {
@@ -122,6 +139,9 @@ func decodeBody(r *http.Request, v any) error {
 }
 
 func errCode(err error) int {
+	if code, _, ok := guardStatus(err); ok {
+		return code
+	}
 	switch {
 	case errors.Is(err, ErrNoTenant):
 		return 404
@@ -172,6 +192,9 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) (int, any
 	fmt.Fprintf(&b, "hoglite_queries_inflight %d\n", m.QueriesInflight.Load())
 	fmt.Fprintf(&b, "hoglite_queries_waiting %d\n", m.QueriesWaiting.Load())
 	fmt.Fprintf(&b, "hoglite_commit_latency_ewma_us %d\n", m.CommitEwmaUs.Load())
+	fmt.Fprintf(&b, "hoglite_read_timeouts_total %d\n", m.ReadTimeouts.Load())
+	fmt.Fprintf(&b, "hoglite_write_timeouts_total %d\n", m.WriteTimeouts.Load())
+	fmt.Fprintf(&b, "hoglite_result_too_large_total %d\n", m.ResultTooLarge.Load())
 	// saturation: max(commit-latency ratio, inflight ratio); 1.0 = at
 	// operating limit. This is the HPA target metric.
 	fmt.Fprintf(&b, "hoglite_saturation %.4f\n", s.mgr.Saturation())
@@ -418,6 +441,10 @@ func (s *Server) handleTx(w http.ResponseWriter, r *http.Request) (int, any) {
 	w.Header().Set("x-hw-owner", s.mgr.ID())
 	results, dup, err := t.SubmitTxCtx(r.Context(), req)
 	if err != nil {
+		if code, ae, ok := guardStatus(err); ok {
+			ae.Owner = s.mgr.ID()
+			return code, ae
+		}
 		var ef *ExpectFailedError
 		switch {
 		case errors.As(err, &ef):
@@ -470,6 +497,10 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) (int, any) 
 	w.Header().Set("x-hw-owner", s.mgr.ID())
 	res, err := t.SubmitQueryCtx(r.Context(), st)
 	if err != nil {
+		if code, ae, ok := guardStatus(err); ok {
+			ae.Owner = s.mgr.ID()
+			return code, ae
+		}
 		if errors.Is(err, ErrNotOwner) || errors.Is(err, ErrClosed) || errors.Is(err, ErrReadPreempted) ||
 			errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return 503, apiError{Error: err.Error(), Owner: s.mgr.ID()} // transient: retry

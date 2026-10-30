@@ -47,6 +47,10 @@ func main() {
 		deltaCkpt   = flag.Bool("delta-checkpoints", envOr("HL_DELTA_CHECKPOINTS", "true") != "false", "checkpoints upload page deltas instead of full bases (needs -compress; applies from the next checkpoint per tenant; reads accept both). Pods of a build without delta support cannot take over such a tenant: set false while such pods may still run, then enable in a second rollout")
 		maxQueries  = flag.Int("max-queries", 0, "pod-wide cap on queries admitted at once across all tenants (0 = 2 x GOMAXPROCS, min 4)")
 		maxReaders  = flag.Int("max-readers", 4, "concurrent read snapshots per tenant")
+		queryTO     = flag.Duration("query-timeout", 5*time.Second, "execution deadline of a read (/query, read-only /tx); negative = off")
+		writeTO     = flag.Duration("write-timeout", 10*time.Second, "execution deadline of a write transaction; it holds the tenant actor; negative = off")
+		maxRows     = flag.Int("max-result-rows", 100_000, "max rows per query response; negative = off")
+		maxBytes    = flag.Int64("max-result-bytes", 64<<20, "max estimated bytes of decoded values per query response; negative = off")
 	)
 	flag.Parse()
 	if *bucket == "" {
@@ -157,6 +161,14 @@ func main() {
 	}
 	if *maxReaders > 0 {
 		opts.MaxReaders = *maxReaders
+	}
+	// zero keeps the default, negative turns a guard off (TenantOpts)
+	opts.QueryTimeout = *queryTO
+	opts.WriteTimeout = *writeTO
+	opts.MaxResultRows = *maxRows
+	opts.MaxResultBytes = *maxBytes
+	if opts.WriteTimeout < 0 || opts.WriteTimeout >= 60*time.Second {
+		log.Printf("WARNING: -write-timeout %v: a write holds the tenant actor; the actor watchdog fails a tenant over after about 70s without progress", opts.WriteTimeout)
 	}
 	ctrl := hoglite.ControllerOpts{Enabled: *whaleRate > 0, ScanEvery: 15 * time.Second,
 		WhaleThreshold: *whaleRate, SustainedScans: 2, Dwell: 5 * time.Minute}

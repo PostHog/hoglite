@@ -41,6 +41,7 @@ type pinnedRead struct {
 	ctx     context.Context
 	cancel  context.CancelCauseFunc
 	conn    *sql.Conn
+	db      uintptr // sqlite handle of conn for interrupts; 0 = none
 	tx      *sql.Tx
 	ar      *activeRead
 	basis   int64
@@ -110,9 +111,16 @@ func (t *Tenant) submitRead(ctx context.Context, w *readWork) readOutcome {
 
 // releaseSlots returns the admission slots of w. Idempotent.
 func (t *Tenant) releaseSlots(w *readWork) {
+	t.releasePodSlot(w)
 	if w.released.CompareAndSwap(false, true) {
-		t.qlim.release()
 		<-t.readSlots
+	}
+}
+
+// releasePodSlot returns only the pod-wide slot of w. Idempotent.
+func (t *Tenant) releasePodSlot(w *readWork) {
+	if w.podReleased.CompareAndSwap(false, true) {
+		t.qlim.release()
 	}
 }
 
@@ -196,6 +204,9 @@ func (t *Tenant) pinRead(w *readWork, basis int64) {
 		abort(err)
 		return
 	}
+	// for the read deadline (guards.go); without a handle only the
+	// driver's context checks stop the query
+	h, _ := sqliteHandle(conn)
 	// Background, not ctx: database/sql rolls a transaction back on its own
 	// goroutine when the BeginTx context ends, and the connection would
 	// then return to the pool after the worker released its slot. The
@@ -217,13 +228,21 @@ func (t *Tenant) pinRead(w *readWork, basis int64) {
 		abort(err)
 		return
 	}
-	pr := &pinnedRead{w: w, ctx: ctx, cancel: cancel, conn: conn, tx: tx, ar: ar,
+	pr := &pinnedRead{w: w, ctx: ctx, cancel: cancel, conn: conn, db: h, tx: tx, ar: ar,
 		basis: basis, gen: t.mf.Gen, durable: basis <= t.durableOff}
-	// an idle worker takes the read at once; otherwise start one
-	select {
-	case t.pinCh <- pr:
-	default:
-		go t.readWorkerLoop(pr)
+	// A free worker takes the read; start one only when every free worker
+	// is already spoken for. The send never blocks: each queued pin holds
+	// a reader slot, and pinCh has room for MaxReaders.
+	t.pool.mu.Lock()
+	t.pool.queued++
+	spawn := t.pool.queued > t.pool.free
+	if spawn {
+		t.pool.free++ // the new worker
+	}
+	t.pool.mu.Unlock()
+	t.pinCh <- pr
+	if spawn {
+		go t.readWorkerLoop()
 	}
 }
 
@@ -232,21 +251,72 @@ func (t *Tenant) pinRead(w *readWork, basis int64) {
 // deep, and a new goroutine pays the stack growth again on each read.
 const readWorkerIdle = 2 * time.Second
 
-// readWorkerLoop runs pr, then serves further pins until it is idle for
-// readWorkerIdle or the tenant closes. A worker starts only when no idle
-// one waits, so the workers never outnumber the reads that ran at once.
-func (t *Tenant) readWorkerLoop(pr *pinnedRead) {
+// readPool counts the reader workers of a tenant for the pin hand-off.
+//
+// A worker is free from the end of its read until it takes the next pin.
+// It becomes free before it returns its tenant reader slot (readWorker),
+// so a read admitted with that slot finds it free. pinRead starts a new
+// worker only when the queued pins outnumber the free workers. At that
+// moment every worker either runs a read or is counted for a queued pin,
+// and each of these holds a reader slot. So the workers never outnumber
+// MaxReaders, and serial reads use one worker.
+type readPool struct {
+	mu     sync.Mutex
+	queued int // pins in pinCh that no worker took yet
+	free   int // workers that run no read
+}
+
+// take records that a free worker took a queued pin.
+func (p *readPool) take() {
+	p.mu.Lock()
+	p.queued--
+	p.free--
+	p.mu.Unlock()
+}
+
+// finish records that a worker ended its read.
+func (p *readPool) finish() {
+	p.mu.Lock()
+	p.free++
+	p.mu.Unlock()
+}
+
+// leave lets a free worker exit unless a queued pin counts on it.
+func (p *readPool) leave() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.queued >= p.free {
+		return false
+	}
+	p.free--
+	return true
+}
+
+// readWorkerLoop serves pins until it is idle for readWorkerIdle or the
+// tenant closes, and no queued pin counts on it.
+func (t *Tenant) readWorkerLoop() {
 	idle := time.NewTimer(readWorkerIdle)
 	defer idle.Stop()
 	for {
-		t.readWorker(pr)
-		idle.Reset(readWorkerIdle)
 		select {
-		case pr = <-t.pinCh:
+		case pr := <-t.pinCh:
+			t.pool.take()
+			t.readWorker(pr)
+			idle.Reset(readWorkerIdle)
 		case <-idle.C:
-			return
+			if t.pool.leave() {
+				return
+			}
+			idle.Reset(readWorkerIdle)
 		case <-t.done:
-			return
+			if t.pool.leave() {
+				return
+			}
+			// a pin queued before the close counts on this worker; its
+			// context is canceled, so it ends at once
+			pr := <-t.pinCh
+			t.pool.take()
+			t.readWorker(pr)
 		}
 	}
 }
@@ -256,25 +326,42 @@ func (t *Tenant) readWorker(pr *pinnedRead) {
 	if h := t.readHook; h != nil {
 		h(pr.ctx)
 	}
-	out := t.execRead(pr.ctx, pr.tx, pr.w)
+	ctx, cancel := withDeadline(pr.ctx, t.opts.QueryTimeout, "read")
+	it := watchInterrupt(ctx, pr.db)
+	out := t.execRead(ctx, pr.tx, pr.w)
+	// no interrupt may reach the ROLLBACK or the next user of conn
+	it.stop()
 	if out.err != nil {
-		// report why the context ended (checkpoint preemption, tenant
-		// close) instead of the driver's interrupt error
-		if c := context.Cause(pr.ctx); c != nil {
+		// report why the context ended (deadline, checkpoint preemption,
+		// tenant close) instead of the driver's interrupt error
+		if c := context.Cause(ctx); c != nil {
 			out = readOutcome{err: c}
 		}
+		switch {
+		case errors.Is(out.err, ErrQueryTimeout):
+			t.metrics.ReadTimeouts.Add(1)
+		case errors.Is(out.err, ErrResultTooLarge):
+			t.metrics.ResultTooLarge.Add(1)
+		}
 	}
+	cancel()
 	pr.tx.Rollback()
 	pr.conn.Close()
 	pr.cancel(nil)
 	// the snapshot is closed: a waiting checkpoint or close may proceed
 	t.readers.remove(pr.ar)
-	t.releaseSlots(pr.w)
 	t.lastUsedMs.Store(time.Now().UnixMilli())
 	if pr.durable {
+		t.pool.finish() // before the slot returns, see readPool
+		t.releaseSlots(pr.w)
 		t.deliverRead(pr.w, out)
 		return
 	}
+	// The tenant slot returns when the actor takes the outcome (onReadDone).
+	// So readDone never holds more than MaxReaders outcomes, and this send
+	// never waits for the actor.
+	t.releasePodSlot(pr.w)
+	t.pool.finish()
 	select {
 	case t.readDone <- readResult{w: pr.w, basis: pr.basis, gen: pr.gen, out: out}:
 	case <-t.done:
@@ -284,14 +371,16 @@ func (t *Tenant) readWorker(pr *pinnedRead) {
 }
 
 // execRead executes the statements of w inside the pinned transaction tx.
-// ctx ends when the client goes away, a checkpoint preempts the read or
-// the tenant closes. Per-query limits (timeouts, result size) belong here.
+// ctx ends when the client goes away, the read deadline passes, a
+// checkpoint preempts the read or the tenant closes. The result limit
+// covers the whole response.
 func (t *Tenant) execRead(ctx context.Context, tx *sql.Tx, w *readWork) readOutcome {
+	lim := t.newResultLimit()
 	if w.tx {
-		res, err := execTxStatements(ctx, tx, w.stmts)
+		res, err := execTxStatements(ctx, tx, w.stmts, lim)
 		return readOutcome{results: res, err: err}
 	}
-	res, err := runQuery(ctx, tx, w.stmts[0])
+	res, err := runQuery(ctx, tx, w.stmts[0], lim)
 	if err != nil {
 		return readOutcome{err: err}
 	}
@@ -301,6 +390,7 @@ func (t *Tenant) execRead(ctx context.Context, tx *sql.Tx, w *readWork) readOutc
 // onReadDone releases or parks an outcome whose basis was not durable at
 // pin time. Actor-loop only.
 func (t *Tenant) onReadDone(rr readResult) {
+	t.releaseSlots(rr.w) // the tenant slot; the worker returned the pod slot
 	// a gen change means a checkpoint folded the basis into a durable base
 	if rr.gen != t.mf.Gen || rr.basis <= t.durableOff {
 		t.deliverRead(rr.w, rr.out)

@@ -63,6 +63,11 @@ type Metrics struct {
 	// hold a slot, and queries waiting for one
 	QueriesInflight atomic.Int64
 	QueriesWaiting  atomic.Int64
+	// query guards (guards.go): reads and write transactions stopped at
+	// their deadline, and queries refused for a too large result
+	ReadTimeouts   atomic.Int64
+	WriteTimeouts  atomic.Int64
+	ResultTooLarge atomic.Int64
 }
 
 // ewmaUpdate folds a sample into an atomic EWMA with alpha=1/8.
