@@ -325,10 +325,15 @@ func TestUnreadableManifestFailsClosed(t *testing.T) {
 	if code, out, _ := c.do(t, "b", "DELETE", "/v1/tenants/um", nil); code != 500 {
 		t.Fatalf("delete on unreadable manifest: %d %v", code, out)
 	}
+	// Assert BEFORE restoring the bytes: restoring a purged manifest would
+	// otherwise hide deletion even if the handler still answered 500.
+	c.fs.mu.Lock()
+	corrupt, exists := c.fs.objects[c.fs.manifestKey("um")]
+	c.fs.mu.Unlock()
+	if !exists || !bytes.Equal(corrupt, []byte("{not json")) {
+		t.Fatal("tenant was modified while its manifest was unreadable")
+	}
 	c.fs.mu.Lock()
 	c.fs.objects[c.fs.manifestKey("um")] = good
 	c.fs.mu.Unlock()
-	if mf, _, _ := c.fs.GetManifest(context.Background(), "um"); mf == nil {
-		t.Fatal("tenant was modified while its manifest was unreadable")
-	}
 }
