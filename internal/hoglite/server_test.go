@@ -195,3 +195,29 @@ func TestDeleteTenant(t *testing.T) {
 		t.Fatal("manifest survived delete")
 	}
 }
+
+func TestReleaseRoutesToOwner(t *testing.T) {
+	c := newTestCluster(t, "a", "b")
+	if code, out, _ := c.do(t, "a", "PUT", "/v1/tenants/rt", map[string]any{}); code != 200 {
+		t.Fatalf("create: %d %v", code, out)
+	}
+	// Release via the NON-owner must route to the owner, exactly like /tx:
+	// a lifecycle caller behind a Service cannot know which pod owns the
+	// tenant, and a 409 here made multi-pod catalog drops mostly fail.
+	code, out, _ := c.do(t, "b", "POST", "/v1/t/rt/release", nil)
+	if code != 200 {
+		t.Fatalf("release via non-owner: %d %v", code, out)
+	}
+	// The release really happened on the owner: ownership is gone, so a
+	// delete anywhere proceeds without the live-owner refusal.
+	code, out, _ = c.do(t, "b", "DELETE", "/v1/tenants/rt", nil)
+	if code != 200 {
+		t.Fatalf("delete after routed release: %d %v", code, out)
+	}
+	// A release with no live owner anywhere is idempotently OK, so a
+	// retried drop does not have to distinguish "released by the owner"
+	// from "already released".
+	if code, out, _ := c.do(t, "b", "POST", "/v1/t/rt/release", nil); code != 200 {
+		t.Fatalf("release of unowned tenant: %d %v", code, out)
+	}
+}
