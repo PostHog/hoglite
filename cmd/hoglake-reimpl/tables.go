@@ -481,9 +481,10 @@ func listFiles(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, out)
 }
 
-// scanPlan pairs each data file with its live deletion vector.
-// Approximation: dvs keeps only the newest vector per file. A pinned
-// read sees that vector when it began at or before the pin, else none.
+// scanPlan pairs each data file with its live deletion vector at the
+// pin: of the rows that began at or before the pin, the one with the
+// highest epoch. dvs keeps the history, so a time-travel read gets the
+// vector of its snapshot.
 func scanPlan(w http.ResponseWriter, r *http.Request) {
 	c, ns, tbl := r.PathValue("c"), r.PathValue("ns"), r.PathValue("t")
 	snap, f := travel(r, c)
@@ -567,8 +568,8 @@ func splitComma(s string) []string {
 }
 
 // changes is the changefeed plan for (from_snapshot, to_snapshot].
-// Files come from the live incarnation. DVs are the live vectors that
-// began in the window (superseded vectors are not kept).
+// Files come from the live incarnation. DVs are all vectors that began
+// in the window, superseded ones included (dvs keeps the history).
 func changes(w http.ResponseWriter, r *http.Request) {
 	c, ns, tbl := r.PathValue("c"), r.PathValue("ns"), r.PathValue("t")
 	q := r.URL.Query()
