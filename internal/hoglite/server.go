@@ -445,9 +445,16 @@ func (s *Server) localOrProxy(w http.ResponseWriter, r *http.Request, tid string
 }
 
 func (s *Server) proxyTo(w http.ResponseWriter, r *http.Request, url string, body []byte) bool {
+	// Forward the query string too: /release?class=... carries its whole
+	// meaning there, and dropping it made a routed reclass silently a
+	// plain release.
+	if r.URL.RawQuery != "" {
+		url += "?" + r.URL.RawQuery
+	}
 	req, err := http.NewRequestWithContext(r.Context(), r.Method, url, bytes.NewReader(body))
 	if err != nil {
-		writeJSON(w, 500, apiError{Error: err.Error()})
+		// Do NOT write here: every caller treats false as "fall through"
+		// and writes its own response (a second write would corrupt it).
 		return false
 	}
 	req.Header = r.Header.Clone()

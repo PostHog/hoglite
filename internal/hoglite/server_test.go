@@ -284,3 +284,51 @@ func TestDeleteUnroutableOwnerHints421(t *testing.T) {
 		t.Fatal("tenant deleted despite the 421")
 	}
 }
+
+func TestRoutedReleasePreservesClass(t *testing.T) {
+	c := newTestCluster(t, "a", "b")
+	// A reclassing release must behave identically whether it lands on the
+	// owner directly or is routed there: the query string is part of the
+	// request, and a proxied release that dropped ?class= would silently
+	// degrade a reclass into a plain release.
+	for _, via := range []string{"a", "b"} {
+		tid := "rc-" + via
+		if code, out, _ := c.do(t, "a", "PUT", "/v1/tenants/"+tid, map[string]any{}); code != 200 {
+			t.Fatalf("create %s: %d %v", tid, code, out)
+		}
+		code, out, _ := c.do(t, via, "POST", "/v1/t/"+tid+"/release?class=large", nil)
+		mf, _, err := c.fs.GetManifest(context.Background(), tid)
+		if err != nil || mf == nil {
+			t.Fatalf("manifest after release via %s: %v", via, err)
+		}
+		if code != 200 || mf.Class != "large" {
+			t.Fatalf("release via %s lost the class: status=%d class=%q out=%v", via, code, mf.Class, out)
+		}
+	}
+}
+
+func TestUnreadableManifestFailsClosed(t *testing.T) {
+	c := newTestCluster(t, "a", "b")
+	if code, out, _ := c.do(t, "a", "PUT", "/v1/tenants/um", map[string]any{}); code != 200 {
+		t.Fatalf("create: %d %v", code, out)
+	}
+	// Corrupt the manifest so ownership reads error out. RELEASE must not
+	// answer an idempotent 200 (the caller would proceed to delete), and
+	// DELETE must not purge on a guess: both fail with 500.
+	c.fs.mu.Lock()
+	good := c.fs.objects[c.fs.manifestKey("um")]
+	c.fs.objects[c.fs.manifestKey("um")] = []byte("{not json")
+	c.fs.mu.Unlock()
+	if code, out, _ := c.do(t, "b", "POST", "/v1/t/um/release", nil); code != 500 {
+		t.Fatalf("release on unreadable manifest: %d %v", code, out)
+	}
+	if code, out, _ := c.do(t, "b", "DELETE", "/v1/tenants/um", nil); code != 500 {
+		t.Fatalf("delete on unreadable manifest: %d %v", code, out)
+	}
+	c.fs.mu.Lock()
+	c.fs.objects[c.fs.manifestKey("um")] = good
+	c.fs.mu.Unlock()
+	if mf, _, _ := c.fs.GetManifest(context.Background(), "um"); mf == nil {
+		t.Fatal("tenant was modified while its manifest was unreadable")
+	}
+}
