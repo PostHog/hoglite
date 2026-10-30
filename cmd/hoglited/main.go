@@ -45,6 +45,8 @@ func main() {
 		satInflight = flag.Float64("sat-inflight-cap", 128, "in-flight segment cap for the saturation metric")
 		compress    = flag.Bool("compress", envOr("HL_COMPRESS", "true") != "false", "publish new generations zstd-compressed (base and every WAL segment; applies from the next checkpoint per tenant; reads accept both). Pods of a build without compression support cannot take over a compressed tenant: set false while such pods may still run, then enable in a second rollout")
 		deltaCkpt   = flag.Bool("delta-checkpoints", envOr("HL_DELTA_CHECKPOINTS", "true") != "false", "checkpoints upload page deltas instead of full bases (needs -compress; applies from the next checkpoint per tenant; reads accept both). Pods of a build without delta support cannot take over such a tenant: set false while such pods may still run, then enable in a second rollout")
+		maxQueries  = flag.Int("max-queries", 0, "pod-wide cap on queries admitted at once across all tenants (0 = 2 x GOMAXPROCS, min 4)")
+		maxReaders  = flag.Int("max-readers", 4, "concurrent read snapshots per tenant")
 	)
 	flag.Parse()
 	if *bucket == "" {
@@ -149,6 +151,12 @@ func main() {
 	opts.Compress = *compress
 	if !*deltaCkpt {
 		opts.DeltaMaxChain = 0
+	}
+	if *maxQueries > 0 {
+		opts.PodMaxQueries = *maxQueries
+	}
+	if *maxReaders > 0 {
+		opts.MaxReaders = *maxReaders
 	}
 	ctrl := hoglite.ControllerOpts{Enabled: *whaleRate > 0, ScanEvery: 15 * time.Second,
 		WhaleThreshold: *whaleRate, SustainedScans: 2, Dwell: 5 * time.Minute}

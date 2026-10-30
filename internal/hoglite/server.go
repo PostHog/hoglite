@@ -169,6 +169,8 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) (int, any
 	fmt.Fprintf(&b, "hoglite_swept_objects_total %d\n", m.SweptObjects.Load())
 	fmt.Fprintf(&b, "hoglite_open_tenants %d\n", s.mgr.OpenCount())
 	fmt.Fprintf(&b, "hoglite_inflight_segments %d\n", m.InflightSegs.Load())
+	fmt.Fprintf(&b, "hoglite_queries_inflight %d\n", m.QueriesInflight.Load())
+	fmt.Fprintf(&b, "hoglite_queries_waiting %d\n", m.QueriesWaiting.Load())
 	fmt.Fprintf(&b, "hoglite_commit_latency_ewma_us %d\n", m.CommitEwmaUs.Load())
 	// saturation: max(commit-latency ratio, inflight ratio); 1.0 = at
 	// operating limit. This is the HPA target metric.
@@ -414,7 +416,7 @@ func (s *Server) handleTx(w http.ResponseWriter, r *http.Request) (int, any) {
 		return 400, apiError{Error: "client and txid required"}
 	}
 	w.Header().Set("x-hw-owner", s.mgr.ID())
-	results, dup, err := t.SubmitTx(req)
+	results, dup, err := t.SubmitTxCtx(r.Context(), req)
 	if err != nil {
 		var ef *ExpectFailedError
 		switch {
@@ -423,7 +425,8 @@ func (s *Server) handleTx(w http.ResponseWriter, r *http.Request) (int, any) {
 			// caller re-prepares; retrying the same payload is pointless
 			return 409, apiError{Error: "expect_failed: " + err.Error(), Owner: s.mgr.ID(),
 				GuardIndex: ef.Index + 1, GuardKind: ef.Guard}
-		case errors.Is(err, ErrNotOwner), errors.Is(err, ErrClosed):
+		case errors.Is(err, ErrNotOwner), errors.Is(err, ErrClosed), errors.Is(err, ErrReadPreempted),
+			errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 			return 503, apiError{Error: err.Error(), Owner: s.mgr.ID()} // transient: retry
 		default:
 			// transient infra errors (segment PUT timeouts, S3 throttling,
@@ -465,8 +468,12 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) (int, any) 
 		return 400, apiError{Error: err.Error()}
 	}
 	w.Header().Set("x-hw-owner", s.mgr.ID())
-	res, err := t.SubmitQuery(st)
+	res, err := t.SubmitQueryCtx(r.Context(), st)
 	if err != nil {
+		if errors.Is(err, ErrNotOwner) || errors.Is(err, ErrClosed) || errors.Is(err, ErrReadPreempted) ||
+			errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return 503, apiError{Error: err.Error(), Owner: s.mgr.ID()} // transient: retry
+		}
 		return 409, apiError{Error: err.Error()}
 	}
 	return 200, res

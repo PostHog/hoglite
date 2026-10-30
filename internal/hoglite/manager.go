@@ -59,6 +59,10 @@ type Metrics struct {
 	DeltaStoredBytes atomic.Int64
 	Rebases          atomic.Int64
 	CheckpointMs     atomic.Int64
+	// pod-wide query admission (TenantOpts.PodMaxQueries): queries that
+	// hold a slot, and queries waiting for one
+	QueriesInflight atomic.Int64
+	QueriesWaiting  atomic.Int64
 }
 
 // ewmaUpdate folds a sample into an atomic EWMA with alpha=1/8.
@@ -136,6 +140,7 @@ type Manager struct {
 	// without deltas: the format gate stops at format 1. Tests only.
 	legacyReadForTest bool
 	s1ReadForTest     bool
+	qlim              *queryLimiter // bounds admitted queries across all tenants
 
 	maxOpen int // soft cap on simultaneously open tenants
 
@@ -194,6 +199,7 @@ func NewManagerSat(store Backend, prefix, id, class, baseDir string, opts Tenant
 	// near 100 MiB (550 MiB worst case) in a failover burst. Claims (4 lanes) are the slower stage, so
 	// this does not limit takeover throughput.
 	m.decodeSem = make(chan struct{}, 32)
+	m.qlim = newQueryLimiter(opts.PodMaxQueries, m.metrics)
 	// the first heartbeat is synchronous: no tenant may start before the
 	// write gate has a clock
 	m.heartbeatLease()
@@ -591,6 +597,7 @@ func (m *Manager) createTenant(ctx context.Context, tid, class string) (*Tenant,
 	if err == nil {
 		t.ckptSem = m.ckptSem
 		t.claimSem = m.claimSem
+		t.qlim = m.qlim
 	}
 	if err != nil {
 		return nil, err
@@ -647,6 +654,7 @@ func (m *Manager) takeOver(ctx context.Context, tid string, mf *Manifest, etag s
 	if err == nil {
 		t.ckptSem = m.ckptSem
 		t.claimSem = m.claimSem
+		t.qlim = m.qlim
 	}
 	if err != nil {
 		// local cache may be corrupt (disk, partial write): wipe and
@@ -665,6 +673,7 @@ func (m *Manager) takeOver(ctx context.Context, tid string, mf *Manifest, etag s
 		if err == nil {
 			t.ckptSem = m.ckptSem
 			t.claimSem = m.claimSem
+			t.qlim = m.qlim
 		}
 		if err != nil {
 			coolFailedClaim()

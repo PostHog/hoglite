@@ -10,6 +10,7 @@ import (
 	"hash/fnv"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -50,6 +51,9 @@ type TenantOpts struct {
 	// deltas would exceed this fraction of the stored base. Recovery then
 	// downloads at most (1 + DeltaMaxRatio) times the base.
 	DeltaMaxRatio float64
+	MaxReaders    int           // concurrent read snapshots per tenant (read-only pool size)
+	ReadDrainWait time.Duration // checkpoint/close grace for in-flight reads before they are canceled
+	PodMaxQueries int           // pod-wide cap on admitted queries; read by the Manager, not per tenant
 }
 
 func DefaultOpts() TenantOpts {
@@ -74,7 +78,17 @@ func DefaultOpts() TenantOpts {
 		// with deltas of size d, a rebase cycle uploads base*(1+r) over
 		// r*base/d+1 checkpoints.
 		DeltaMaxRatio: 0.5,
+		MaxReaders:    4,
+		ReadDrainWait: 2 * time.Second,
+		PodMaxQueries: defaultPodMaxQueries(),
 	}
+}
+
+// defaultPodMaxQueries allows two executing queries per usable CPU. Reads
+// are mostly CPU-bound in the pure-Go SQLite. More concurrency only adds
+// queueing inside the scheduler and takes CPU from the tenant actors.
+func defaultPodMaxQueries() int {
+	return max(4, 2*runtime.GOMAXPROCS(0))
 }
 
 type Statement struct {
@@ -163,14 +177,23 @@ func isSQLWordByte(c byte) bool {
 	return c == '_' || c >= '0' && c <= '9' || c >= 'a' && c <= 'z'
 }
 
+// readWork is one admitted read (/query or read-only /tx). It holds one
+// per-tenant reader slot and one pod-wide query slot until release.
 type readWork struct {
-	stmt  Statement
+	ctx   context.Context
+	stmts []Statement
+	tx    bool // read-only /tx: run every statement with its guards
 	reply chan readOutcome
+	// taken decides who returns the admission slots: the first party to
+	// set it (the actor on receipt, or the submitter that gives up) owns
+	// the release.
+	taken   atomic.Bool
+	release func() // returns the admission slots; idempotent
 }
 
 type readOutcome struct {
-	res QueryResult
-	err error
+	results []QueryResult
+	err     error
 }
 
 var ErrClosed = errors.New("tenant closed")
@@ -250,7 +273,17 @@ type Tenant struct {
 	segDone chan segDone
 	sem     chan struct{}
 
-	readWaits []readWait // reads parked until their basis is durable
+	readWaits []readWait // read results parked until their basis is durable
+
+	readSlots chan struct{}         // per-tenant read admission: one token per roDB connection
+	qlim      *queryLimiter         // pod-wide query admission (manager-owned; nil = unbounded)
+	readers   readerSet             // pinned read snapshots (open read transactions on roDB)
+	readDone  chan readResult       // worker outcomes whose basis was not yet durable at pin time
+	readHook  func(context.Context) // test hook: runs in the worker after the pin
+	// ckptDeferUntil delays size-triggered checkpoints after one was
+	// skipped because reads did not drain. Actor-owned.
+	ckptDeferUntil time.Time
+	ckptWantSince  time.Time // first size-triggered checkpoint deferred for open reads
 
 	writeCh chan *txWork
 	readCh  chan *readWork
@@ -297,21 +330,28 @@ type segDone struct {
 	err error
 }
 
-// readWait parks a read until durableOff >= end (the read's basis: the
-// commit end of the last applied transaction at arrival). P0-5: a read
-// must never return applied-but-not-yet-durable state; after a crash such
-// state vanishes and snapshot ids would be reused under an OCC basis that
-// already saw them.
+// readWait parks a computed read result until durableOff >= end (the
+// read's basis: the commit end of the last applied transaction when its
+// snapshot was pinned). P0-5: a read must never return applied-but-not-
+// yet-durable state; after a crash such state vanishes and snapshot ids
+// would be reused under an OCC basis that already saw them.
 type readWait struct {
 	end int64
 	w   *readWork
+	out readOutcome
 	// when non-nil, this wait carries a parked /tx outcome to release
-	// instead of running a query
+	// instead of a query result
 	txReply chan txOutcome
 	txOut   txOutcome
 }
 
 func openTenant(id string, dir string, mf *Manifest, etag string, store Backend, prefix, self, routeID string, opts TenantOpts, metrics *Metrics, clock leaseClock) (*Tenant, error) {
+	if opts.MaxReaders <= 0 {
+		opts.MaxReaders = 4
+	}
+	if opts.ReadDrainWait <= 0 {
+		opts.ReadDrainWait = 2 * time.Second
+	}
 	t := &Tenant{
 		ID: id, store: store, prefix: prefix, opts: opts, self: self, routeID: routeID, dir: dir, clock: clock,
 		dbPath: filepath.Join(dir, "db.sqlite"), walPath: filepath.Join(dir, "db.sqlite-wal"),
@@ -320,9 +360,13 @@ func openTenant(id string, dir string, mf *Manifest, etag string, store Backend,
 		sem:     make(chan struct{}, opts.Inflight),
 		writeCh: make(chan *txWork, 4096),
 		readCh:  make(chan *readWork, 4096),
-		ctlCh:   make(chan func(), 64),
-		done:    make(chan struct{}),
-		metrics: metrics,
+		// buffered to the reader cap: a finishing worker never waits for a
+		// busy actor (e.g. one inside a checkpoint)
+		readDone:  make(chan readResult, opts.MaxReaders),
+		readSlots: make(chan struct{}, opts.MaxReaders),
+		ctlCh:     make(chan func(), 64),
+		done:      make(chan struct{}),
+		metrics:   metrics,
 	}
 	if fi, err := os.Stat(t.dbPath); err == nil {
 		t.dbBytes = fi.Size() // before SQLite opens it: base + chain as materialized
@@ -341,7 +385,10 @@ func openTenant(id string, dir string, mf *Manifest, etag string, store Backend,
 		db.Close()
 		return nil, err
 	}
-	ro.SetMaxOpenConns(1)
+	// one connection per reader slot: a pin on the actor never waits for
+	// the pool (see pinRead)
+	ro.SetMaxOpenConns(opts.MaxReaders)
+	ro.SetMaxIdleConns(opts.MaxReaders)
 	t.roDB = ro
 	// note: rowid-ordered on purpose — the retention trim uses it.
 	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS _hw_dedup(
@@ -388,6 +435,18 @@ func (t *Tenant) deadError() error {
 }
 
 func (t *Tenant) SubmitTx(req TxRequest) ([]QueryResult, bool, error) {
+	return t.SubmitTxCtx(context.Background(), req)
+}
+
+// SubmitTxCtx is SubmitTx with a request context. A read-only transaction
+// runs on the reader path (off the actor) and ctx bounds its admission
+// wait and its execution. Writes ignore ctx: once queued, a write runs to
+// its durable outcome so a retry can never race it.
+func (t *Tenant) SubmitTxCtx(ctx context.Context, req TxRequest) ([]QueryResult, bool, error) {
+	if allReadOnly(req.Stmts) {
+		o := t.submitRead(ctx, &readWork{stmts: req.Stmts, tx: true})
+		return o.results, false, o.err
+	}
 	t0 := time.Now()
 	w := &txWork{req: req, reply: make(chan txOutcome, 1)}
 	select {
@@ -412,23 +471,20 @@ func (t *Tenant) SubmitTx(req TxRequest) ([]QueryResult, bool, error) {
 }
 
 func (t *Tenant) SubmitQuery(st Statement) (QueryResult, error) {
-	w := &readWork{stmt: st, reply: make(chan readOutcome, 1)}
-	select {
-	case t.readCh <- w:
-	case <-t.done:
-		return QueryResult{}, t.deadError()
+	return t.SubmitQueryCtx(context.Background(), st)
+}
+
+// SubmitQueryCtx runs one read-only statement. ctx bounds the wait for a
+// reader slot and a pod query slot, and cancels the running query.
+func (t *Tenant) SubmitQueryCtx(ctx context.Context, st Statement) (QueryResult, error) {
+	if err := checkQuerySQL(st.SQL); err != nil {
+		return QueryResult{}, err
 	}
-	select {
-	case o := <-w.reply:
-		return o.res, o.err
-	case <-t.done:
-		select {
-		case o := <-w.reply:
-			return o.res, o.err
-		default:
-		}
-		return QueryResult{}, t.deadError()
+	o := t.submitRead(ctx, &readWork{stmts: []Statement{st}})
+	if o.err != nil {
+		return QueryResult{}, o.err
 	}
+	return o.results[0], nil
 }
 
 // Stop gracefully flushes, checkpoints and optionally releases ownership.
@@ -544,6 +600,8 @@ func (t *Tenant) run() {
 				break
 			}
 			if o.readOnly {
+				// SubmitTx sends read-only work to the reader path, so this
+				// branch is a fallback only.
 				// durable-read gate: a read-only /tx must not observe
 				// applied-but-unshipped writes. Park until the watermark covers
 				// the basis, exactly like /query.
@@ -584,29 +642,33 @@ func (t *Tenant) run() {
 			}
 		case r := <-t.readCh:
 			t.lastUsedMs.Store(time.Now().UnixMilli())
+			if !r.taken.CompareAndSwap(false, true) {
+				break // the submitter gave up and returned the slots
+			}
+			if err := r.ctx.Err(); err != nil {
+				t.replyRead(r, readOutcome{err: err})
+				break
+			}
 			if t.leaseExpiring() {
-				r.reply <- readOutcome{err: ErrNotOwner}
+				t.replyRead(r, readOutcome{err: ErrNotOwner})
 				break
 			}
 			// durable-reads: the read's basis is the current applied commit
-			// end. Serve at once when that is already durable; otherwise
-			// force a cut and park until the watermark passes it.
+			// end. pinRead fixes the snapshot at exactly that point and hands
+			// execution to a worker; the result waits for the watermark when
+			// the basis is not durable yet (see pinRead).
 			basis, err := t.currentCommitEnd()
 			if err != nil {
-				r.reply <- readOutcome{err: err}
+				t.replyRead(r, readOutcome{err: err})
 				t.failLocked(err)
 				return
 			}
-			if basis <= t.durableOff {
-				res, err := t.runQuery(r.stmt)
-				r.reply <- readOutcome{res, err}
-				if err == nil {
-					t.metrics.Queries.Add(1)
-				}
-				break
+			t.pinRead(r, basis)
+			if basis > t.durableOff {
+				t.cutSegment() // ship pending bytes so the watermark can pass
 			}
-			t.readWaits = append(t.readWaits, readWait{end: basis, w: r})
-			t.cutSegment() // ship pending bytes so the watermark can pass
+		case rr := <-t.readDone:
+			t.onReadDone(rr)
 		case <-flushC:
 			flushTimer = nil
 			flushC = nil
@@ -626,7 +688,7 @@ func (t *Tenant) run() {
 			if !t.claimed {
 				continue
 			}
-			if t.opts.IdleRelease > 0 &&
+			if t.opts.IdleRelease > 0 && t.readers.count() == 0 &&
 				time.Now().UnixMilli()-t.lastUsedMs.Load() > t.idleReleaseMs() {
 				t.shutdown(true, "") // release so the next acquire is instant
 				return
@@ -764,35 +826,8 @@ func (t *Tenant) applyTx(req TxRequest) (o txOutcome) {
 			return o
 		}
 	}
-	for i, st := range req.Stmts {
-		res, err := execStatement(tx, st)
-		if err != nil {
-			o.err = err
-			return o
-		}
-		if st.ExpectAffected != nil && res.Affected != *st.ExpectAffected {
-			o.err = &ExpectFailedError{Index: i, What: fmt.Sprintf("affected %d != %d", res.Affected, *st.ExpectAffected)}
-			return o
-		}
-		if st.ExpectScalarInt != nil {
-			var got int64
-			ok := len(res.Rows) > 0 && len(res.Rows[0]) > 0
-			if ok {
-				switch v := res.Rows[0][0].(type) {
-				case int64:
-					got = v
-				case json.Number:
-					got, _ = v.Int64()
-				default:
-					ok = false
-				}
-			}
-			if !ok || got != *st.ExpectScalarInt {
-				o.err = &ExpectFailedError{Index: i, What: fmt.Sprintf("scalar %d != %d", got, *st.ExpectScalarInt)}
-				return o
-			}
-		}
-		o.results = append(o.results, res)
+	if o.results, o.err = execTxStatements(ctx, tx, req.Stmts); o.err != nil {
+		return o
 	}
 	if req.Client != "" && req.TxID != "" && !o.readOnly {
 		raw, _ := json.Marshal(o.results)
@@ -808,6 +843,41 @@ func (t *Tenant) applyTx(req TxRequest) (o txOutcome) {
 		return o
 	}
 	return o
+}
+
+// execTxStatements runs the statements of one /tx in order and enforces
+// their guards. Shared by the write path (actor, write connection) and the
+// read-only path (reader worker, pinned read-only snapshot).
+func execTxStatements(ctx context.Context, tx *sql.Tx, stmts []Statement) ([]QueryResult, error) {
+	var results []QueryResult
+	for i, st := range stmts {
+		res, err := execStatement(ctx, tx, st)
+		if err != nil {
+			return results, err
+		}
+		if st.ExpectAffected != nil && res.Affected != *st.ExpectAffected {
+			return results, &ExpectFailedError{Index: i, What: fmt.Sprintf("affected %d != %d", res.Affected, *st.ExpectAffected)}
+		}
+		if st.ExpectScalarInt != nil {
+			var got int64
+			ok := len(res.Rows) > 0 && len(res.Rows[0]) > 0
+			if ok {
+				switch v := res.Rows[0][0].(type) {
+				case int64:
+					got = v
+				case json.Number:
+					got, _ = v.Int64()
+				default:
+					ok = false
+				}
+			}
+			if !ok || got != *st.ExpectScalarInt {
+				return results, &ExpectFailedError{Index: i, What: fmt.Sprintf("scalar %d != %d", got, *st.ExpectScalarInt)}
+			}
+		}
+		results = append(results, res)
+	}
+	return results, nil
 }
 
 var errForbiddenSQL = errors.New("statement class not allowed through /tx")
@@ -853,8 +923,7 @@ func forbiddenTXSQL(sqlText string) bool {
 	return strings.Contains(ls, "_hw_dedup")
 }
 
-func execStatement(tx *sql.Tx, st Statement) (QueryResult, error) {
-	ctx := context.Background()
+func execStatement(ctx context.Context, tx *sql.Tx, st Statement) (QueryResult, error) {
 	if !singleStatement(st.SQL) {
 		return QueryResult{}, errors.New("one statement per Statement")
 	}
@@ -885,22 +954,30 @@ func execStatement(tx *sql.Tx, st Statement) (QueryResult, error) {
 	return QueryResult{Affected: n}, nil
 }
 
-func (t *Tenant) runQuery(st Statement) (QueryResult, error) {
+// checkQuerySQL is the textual gate for /query. It runs before admission,
+// so a rejected statement never takes a reader slot.
+func checkQuerySQL(sqlText string) error {
 	// read-only is enforced by SQLite (query_only connection), not by
 	// textual classification: INSERT..RETURNING and writable WITH slip
 	// past prefix checks, and this path never ships their bytes.
-	if !singleStatement(st.SQL) {
-		return QueryResult{}, errors.New("one statement per Statement")
+	if !singleStatement(sqlText) {
+		return errors.New("one statement per Statement")
 	}
-	ls := strings.ToLower(stripSQLComments(st.SQL))
+	ls := strings.ToLower(stripSQLComments(sqlText))
 	if !strings.HasPrefix(ls, "select") && !strings.HasPrefix(ls, "with") &&
 		!strings.HasPrefix(ls, "values") && !strings.HasPrefix(ls, "explain") {
-		return QueryResult{}, errors.New("statement class not allowed through /query")
+		return errors.New("statement class not allowed through /query")
 	}
 	if sqlContainsDML(ls) || strings.Contains(ls, "_hw_dedup") {
-		return QueryResult{}, errors.New("statement class not allowed through /query")
+		return errors.New("statement class not allowed through /query")
 	}
-	rows, err := t.roDB.QueryContext(context.Background(), st.SQL, normalizeArgs(st.Args)...)
+	return nil
+}
+
+// runQuery executes one checked /query statement inside a pinned read
+// transaction on the query_only connection.
+func runQuery(ctx context.Context, tx *sql.Tx, st Statement) (QueryResult, error) {
+	rows, err := tx.QueryContext(ctx, st.SQL, normalizeArgs(st.Args)...)
 	if err != nil {
 		return QueryResult{}, err
 	}
@@ -1317,27 +1394,13 @@ func (t *Tenant) advanceWatermark() {
 	}
 	t.pending = rest
 	if len(t.readWaits) > 0 {
+		// every parked entry is a result computed on the snapshot at its
+		// basis, so basis <= durableOff is the whole condition. Newer
+		// in-flight commits cannot leak: nothing executes here.
 		var waiting []readWait
 		for _, rw := range t.readWaits {
-			// release only when the basis is durable AND no newer commit is
-			// still in flight: executing now must not expose applied-but-
-			// unshipped rows (a newer commit that never lands is a phantom)
-			curEnd, err := t.currentCommitEnd()
-			if err != nil {
-				t.failLocked(err)
-				return
-			}
-			fullyDurable := curEnd <= t.durableOff && !t.batchOpen && len(t.segs) == 0
-			if rw.end <= t.durableOff && fullyDurable {
-				if rw.txReply != nil {
-					rw.txReply <- rw.txOut // parked /tx outcome
-					continue
-				}
-				res, err := t.runQuery(rw.w.stmt)
-				rw.w.reply <- readOutcome{res, err}
-				if err == nil {
-					t.metrics.Queries.Add(1)
-				}
+			if rw.end <= t.durableOff {
+				t.releaseReadWait(rw)
 			} else {
 				waiting = append(waiting, rw)
 			}
@@ -1350,6 +1413,22 @@ func (t *Tenant) maybeCheckpoint() {
 	if t.submittedOff < t.opts.CheckpointByte && t.segsSinceC < t.opts.MaxSegments {
 		return
 	}
+	now := time.Now()
+	if now.Before(t.ckptDeferUntil) {
+		return // a recent attempt found reads that would not drain
+	}
+	// This fold is optional, and draining open snapshots stalls the actor.
+	// Wait for a moment without readers; force the drain only after
+	// 10 x ReadDrainWait of continuous overlap.
+	if t.readers.count() > 0 {
+		if t.ckptWantSince.IsZero() {
+			t.ckptWantSince = now
+		}
+		if now.Sub(t.ckptWantSince) < 10*t.opts.ReadDrainWait {
+			return
+		}
+	}
+	t.ckptWantSince = time.Time{}
 	t.checkpointLocked("")
 }
 
@@ -1412,6 +1491,26 @@ func (t *Tenant) checkpointLocked(newClass string) bool {
 		}
 		sd.seg.done = true
 		t.advanceWatermark()
+	}
+	// TRUNCATE needs a WAL with no open read snapshot. Only the actor
+	// pins snapshots (pinRead), and the actor stays in this function until
+	// the TRUNCATE is done, so no new snapshot can start. Wait for the
+	// pinned ones to end: bounded, then canceled. This runs after the
+	// segment drain, so a skip still leaves every commit durable and acked.
+	if !t.drainReaders() {
+		if !t.claimed {
+			// a claim has no published readers; never skip the acquisition
+			t.failLocked(errors.New("checkpoint: reads did not drain during claim"))
+			return false
+		}
+		// Durability is unaffected: every segment is in S3. The fold into
+		// a new base retries on the next trigger.
+		t.metrics.Logger.Printf("checkpoint %s skipped: %d reads did not drain", t.ID, t.readers.count())
+		// back off: without it every later write would wait the full
+		// drain again behind the same stuck read
+		t.ckptDeferUntil = time.Now().Add(5 * t.opts.ReadDrainWait)
+		t.cutSegment() // a cut deferred by the inflight cap must not wait for the next write
+		return true
 	}
 	if t.leaseExpiring() {
 		t.failLocked(fmt.Errorf("%w: lease expired during checkpoint drain", ErrNotOwner))
@@ -1567,15 +1666,7 @@ func (t *Tenant) checkpointLocked(newClass string) bool {
 	}
 	t.pending = nil
 	for _, rw := range t.readWaits {
-		if rw.txReply != nil {
-			rw.txReply <- rw.txOut
-			continue
-		}
-		res, err := t.runQuery(rw.w.stmt)
-		rw.w.reply <- readOutcome{res, err}
-		if err == nil {
-			t.metrics.Queries.Add(1)
-		}
+		t.releaseReadWait(rw)
 	}
 	t.readWaits = nil
 	// re-open wal handle: TRUNCATE may have replaced the file
@@ -1634,6 +1725,9 @@ func (t *Tenant) shutdown(release bool, newClass string) {
 		_, _ = t.store.PutManifestCAS(ctx, t.ID, &nm, t.etag) // best effort
 	}
 	t.failQueued(ErrClosed)
+	// graceful close: let in-flight reads finish inside the grace before
+	// finishClose cancels the rest
+	t.readers.waitIdle(t.opts.ReadDrainWait, t.bumpProgress)
 	t.finishClose()
 }
 
@@ -1662,7 +1756,7 @@ func (t *Tenant) failQueued(err error) {
 			rw.txReply <- txOutcome{err: err}
 			continue
 		}
-		rw.w.reply <- readOutcome{err: err}
+		rw.w.reply <- readOutcome{err: err} // slots already returned by the worker
 	}
 	t.readWaits = nil
 	for _, s := range t.segs {
@@ -1685,7 +1779,9 @@ reads:
 	for {
 		select {
 		case r := <-t.readCh:
-			r.reply <- readOutcome{err: err}
+			if r.taken.CompareAndSwap(false, true) {
+				t.replyRead(r, readOutcome{err: err})
+			}
 		default:
 			return
 		}
@@ -1698,9 +1794,7 @@ func (t *Tenant) finishClose() {
 	}
 	t.dead = true
 	t.db.Close()
-	if t.roDB != nil {
-		t.roDB.Close()
-	}
+	t.closeReaders()
 	t.wal.Close()
 	// publish the poison cooldown BEFORE done closes: once done is closed,
 	// LocalTenant can drop us from the registry and an Acquire can start
@@ -1738,5 +1832,6 @@ func (t *Tenant) DebugStatus() map[string]any {
 		"pending_acks": len(t.pending), "inflight_segments": len(t.segs),
 		"segments_since_checkpoint": t.segsSinceC, "alive": t.Alive(),
 		"format": t.mf.Format, "delta_chain": len(t.mf.Deltas),
+		"active_reads": t.readers.count(),
 	}
 }

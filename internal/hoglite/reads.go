@@ -1,0 +1,454 @@
+package hoglite
+
+// Read path: reads execute on worker goroutines, not on the tenant actor.
+//
+// The actor keeps the durable-read gate. It only decides the basis of a
+// read and pins a read snapshot at that basis (pinRead). A worker then runs
+// the statements on the pinned snapshot (readWorker). A slow query no
+// longer stalls writes, segment acks, heartbeats or checkpoints of its
+// tenant, so it cannot trip the actor watchdog either.
+//
+// Admission happens on the caller goroutine before the actor sees the read:
+// first one per-tenant reader slot (MaxReaders, equal to the roDB pool
+// size), then one pod-wide query slot (PodMaxQueries). Both waits end with
+// the request context. The slots return when the query has finished, not
+// when its result is released by the durable gate.
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"sync"
+	"time"
+)
+
+// ErrReadPreempted is returned to a read that a checkpoint canceled after
+// the drain grace. The read is safe to retry.
+var ErrReadPreempted = errors.New("read canceled by checkpoint; retry")
+
+// readResult carries a worker outcome back to the actor when the basis was
+// not yet durable at pin time.
+type readResult struct {
+	w     *readWork
+	basis int64
+	gen   int64 // manifest gen of the basis offsets
+	out   readOutcome
+}
+
+// pinnedRead is one read snapshot held open on a roDB connection.
+type pinnedRead struct {
+	w       *readWork
+	ctx     context.Context
+	cancel  context.CancelCauseFunc
+	conn    *sql.Conn
+	tx      *sql.Tx
+	ar      *activeRead
+	basis   int64
+	gen     int64
+	durable bool // basis <= durableOff at pin time
+}
+
+// submitRead admits w, queues it for the actor and waits for its outcome.
+func (t *Tenant) submitRead(ctx context.Context, w *readWork) readOutcome {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	w.ctx = ctx
+	w.reply = make(chan readOutcome, 1)
+	// tenant slot first: a tenant that already uses all its reader slots
+	// must not also hold pod slots while it waits for its own
+	select {
+	case t.readSlots <- struct{}{}:
+	case <-ctx.Done():
+		return readOutcome{err: ctx.Err()}
+	case <-t.done:
+		return readOutcome{err: t.deadError()}
+	}
+	if err := t.qlim.acquire(ctx, t.done); err != nil {
+		<-t.readSlots
+		if errors.Is(err, ErrClosed) {
+			err = t.deadError()
+		}
+		return readOutcome{err: err}
+	}
+	var once sync.Once
+	w.release = func() {
+		once.Do(func() {
+			t.qlim.release()
+			<-t.readSlots
+		})
+	}
+	select {
+	case t.readCh <- w:
+	case <-t.done:
+		w.release()
+		return readOutcome{err: t.deadError()}
+	}
+	select {
+	case o := <-w.reply:
+		return o
+	case <-ctx.Done():
+		// still queued: take it back and return the slots here. Otherwise
+		// the actor or the worker owns it; the canceled ctx stops the
+		// query and the owner returns the slots.
+		if w.taken.CompareAndSwap(false, true) {
+			w.release()
+		}
+		return readOutcome{err: ctx.Err()}
+	case <-t.done:
+		select {
+		case o := <-w.reply:
+			return o
+		default:
+		}
+		// a send that raced the close can sit in readCh forever
+		if w.taken.CompareAndSwap(false, true) {
+			w.release()
+		}
+		return readOutcome{err: t.deadError()}
+	}
+}
+
+// replyRead answers a read that never reached a worker.
+func (t *Tenant) replyRead(w *readWork, o readOutcome) {
+	w.release()
+	w.reply <- o
+}
+
+// deliverRead hands a computed outcome to the submitter.
+func (t *Tenant) deliverRead(w *readWork, o readOutcome) {
+	if o.err == nil {
+		t.metrics.Queries.Add(1)
+	}
+	w.reply <- o
+}
+
+// pinRead fixes the read snapshot of w at basis and starts its worker.
+// Actor-loop only, called right after basis = currentCommitEnd().
+//
+// Why the result never exposes applied-but-not-durable state:
+//
+//  1. All commits are applied by this actor. Between the basis computation
+//     and the end of pinRead nothing commits, so the database state equals
+//     the state at basis.
+//  2. A deferred BEGIN takes no snapshot. The probe SELECT reads the schema
+//     b-tree and opens the WAL read transaction here, on the actor. From
+//     now on SQLite serves this transaction the frames up to basis only,
+//     however many commits the actor applies later. The worker therefore
+//     reads the basis state even if it starts much later.
+//  3. The outcome goes to the submitter only once basis <= durableOff in the
+//     same gen, or once a later checkpoint folded it into a durable base
+//     (onReadDone, advanceWatermark, checkpointLocked). A crash before that
+//     fails the read. Errors are gated the same way: they also reflect the
+//     snapshot.
+//
+// A naive worker that opens its transaction after the actor moved on reads
+// the newest applied state, which can include commits that never become
+// durable. TestReadSnapshotPinnedAtBasis catches that.
+//
+// Lease: leaseExpiring is checked on the actor before the pin, as before.
+// A pinned read that outlives the lease still completes. Its snapshot is
+// the basis state, which this owner committed while it held the lease, and
+// the result is released only after that state is durable (the watermark
+// and checkpoint paths check the lease before they advance). It is a
+// correct read of committed state that linearizes at the pin. No write of
+// a later owner can precede the pin: a new owner waits out the lease.
+func (t *Tenant) pinRead(w *readWork, basis int64) {
+	ctx, cancel := context.WithCancelCause(w.ctx)
+	ar := t.readers.add(cancel)
+	if ar == nil {
+		cancel(nil)
+		t.replyRead(w, readOutcome{err: ErrClosed})
+		return
+	}
+	abort := func(err error) {
+		if c := context.Cause(ctx); c != nil {
+			err = c
+		}
+		cancel(nil)
+		t.readers.remove(ar)
+		t.replyRead(w, readOutcome{err: err})
+	}
+	// The reader slot of w guarantees a free pool connection, so this does
+	// not wait. The timeout only bounds the actor if that accounting is
+	// ever wrong.
+	cctx, ccancel := context.WithTimeout(ctx, time.Second)
+	conn, err := t.roDB.Conn(cctx)
+	ccancel()
+	if err != nil {
+		abort(err)
+		return
+	}
+	// Background, not ctx: database/sql rolls a transaction back on its own
+	// goroutine when the BeginTx context ends, and the connection would
+	// then return to the pool after the worker released its slot. The
+	// worker rolls back itself; ctx cancels the statements.
+	tx, err := conn.BeginTx(context.Background(), nil)
+	if err != nil {
+		conn.Close()
+		abort(err)
+		return
+	}
+	var one int
+	err = tx.QueryRowContext(ctx, `SELECT 1 FROM sqlite_master LIMIT 1`).Scan(&one)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		tx.Rollback()
+		conn.Close()
+		abort(err)
+		return
+	}
+	pr := &pinnedRead{w: w, ctx: ctx, cancel: cancel, conn: conn, tx: tx, ar: ar,
+		basis: basis, gen: t.mf.Gen, durable: basis <= t.durableOff}
+	go t.readWorker(pr)
+}
+
+// readWorker runs a pinned read off the actor.
+func (t *Tenant) readWorker(pr *pinnedRead) {
+	if h := t.readHook; h != nil {
+		h(pr.ctx)
+	}
+	out := t.execRead(pr.ctx, pr.tx, pr.w)
+	if out.err != nil {
+		// report why the context ended (checkpoint preemption, tenant
+		// close) instead of the driver's interrupt error
+		if c := context.Cause(pr.ctx); c != nil {
+			out = readOutcome{err: c}
+		}
+	}
+	pr.tx.Rollback()
+	pr.conn.Close()
+	pr.cancel(nil)
+	// the snapshot is closed: a waiting checkpoint or close may proceed
+	t.readers.remove(pr.ar)
+	pr.w.release()
+	t.lastUsedMs.Store(time.Now().UnixMilli())
+	if pr.durable {
+		t.deliverRead(pr.w, out)
+		return
+	}
+	select {
+	case t.readDone <- readResult{w: pr.w, basis: pr.basis, gen: pr.gen, out: out}:
+	case <-t.done:
+		// the basis may never become durable now
+		pr.w.reply <- readOutcome{err: t.deadError()}
+	}
+}
+
+// execRead executes the statements of w inside the pinned transaction tx.
+// ctx ends when the client goes away, a checkpoint preempts the read or
+// the tenant closes. Per-query limits (timeouts, result size) belong here.
+func (t *Tenant) execRead(ctx context.Context, tx *sql.Tx, w *readWork) readOutcome {
+	if w.tx {
+		res, err := execTxStatements(ctx, tx, w.stmts)
+		return readOutcome{results: res, err: err}
+	}
+	res, err := runQuery(ctx, tx, w.stmts[0])
+	if err != nil {
+		return readOutcome{err: err}
+	}
+	return readOutcome{results: []QueryResult{res}}
+}
+
+// onReadDone releases or parks an outcome whose basis was not durable at
+// pin time. Actor-loop only.
+func (t *Tenant) onReadDone(rr readResult) {
+	// a gen change means a checkpoint folded the basis into a durable base
+	if rr.gen != t.mf.Gen || rr.basis <= t.durableOff {
+		t.deliverRead(rr.w, rr.out)
+		return
+	}
+	t.readWaits = append(t.readWaits, readWait{end: rr.basis, w: rr.w, out: rr.out})
+	t.cutSegment()
+}
+
+// releaseReadWait hands a parked outcome to its submitter. Callers have
+// established that its basis is durable.
+func (t *Tenant) releaseReadWait(rw readWait) {
+	if rw.txReply != nil {
+		rw.txReply <- rw.txOut // parked /tx outcome
+		return
+	}
+	t.deliverRead(rw.w, rw.out)
+}
+
+func (t *Tenant) bumpProgress() { t.progressMs.Store(time.Now().UnixMilli()) }
+
+// drainReaders waits until no read snapshot is open. After ReadDrainWait
+// it cancels the remaining reads with ErrReadPreempted and waits once
+// more. False means a read did not stop in time. Actor-loop only.
+func (t *Tenant) drainReaders() bool {
+	if t.readers.waitIdle(t.opts.ReadDrainWait, t.bumpProgress) {
+		return true
+	}
+	t.readers.cancelAll(ErrReadPreempted)
+	return t.readers.waitIdle(t.opts.ReadDrainWait, t.bumpProgress)
+}
+
+// closeReaders cancels in-flight reads and closes roDB once none uses it.
+// A read that ignores cancellation for longer than ReadDrainWait keeps its
+// connection; the last such read closes roDB when it ends.
+func (t *Tenant) closeReaders() {
+	cause := t.deadErr
+	if cause == nil {
+		cause = ErrClosed
+	}
+	t.readers.cancelAll(cause)
+	if !t.readers.waitIdle(t.opts.ReadDrainWait, t.bumpProgress) && t.metrics.Logger != nil {
+		t.metrics.Logger.Printf("tenant %s closed with %d reads still running", t.ID, t.readers.count())
+	}
+	ro := t.roDB
+	t.readers.closeWith(func() {
+		if ro != nil {
+			ro.Close()
+		}
+	})
+}
+
+// readerSet tracks the open read snapshots of one tenant.
+type readerSet struct {
+	mu     sync.Mutex
+	active map[*activeRead]struct{}
+	idle   chan struct{} // closed when active drops to zero; nil while idle
+	closed bool          // no new snapshots
+	onIdle func()        // set by closeWith while reads still run
+}
+
+type activeRead struct{ cancel context.CancelCauseFunc }
+
+// add registers a snapshot. It returns nil once the set is closed.
+func (s *readerSet) add(cancel context.CancelCauseFunc) *activeRead {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil
+	}
+	if s.active == nil {
+		s.active = map[*activeRead]struct{}{}
+	}
+	if len(s.active) == 0 {
+		s.idle = make(chan struct{})
+	}
+	ar := &activeRead{cancel: cancel}
+	s.active[ar] = struct{}{}
+	return ar
+}
+
+func (s *readerSet) remove(ar *activeRead) {
+	var fn func()
+	s.mu.Lock()
+	delete(s.active, ar)
+	if len(s.active) == 0 && s.idle != nil {
+		close(s.idle)
+		s.idle = nil
+		fn, s.onIdle = s.onIdle, nil
+	}
+	s.mu.Unlock()
+	if fn != nil {
+		fn()
+	}
+}
+
+func (s *readerSet) count() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.active)
+}
+
+func (s *readerSet) cancelAll(cause error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for ar := range s.active {
+		ar.cancel(cause)
+	}
+}
+
+// waitIdle waits up to d for zero open snapshots. tick runs about once a
+// second so a waiting actor keeps feeding the watchdog.
+func (s *readerSet) waitIdle(d time.Duration, tick func()) bool {
+	deadline := time.Now().Add(d)
+	for {
+		s.mu.Lock()
+		ch := s.idle
+		s.mu.Unlock()
+		if ch == nil {
+			return true
+		}
+		left := time.Until(deadline)
+		if left <= 0 {
+			return false
+		}
+		if left > time.Second {
+			left = time.Second
+		}
+		tm := time.NewTimer(left)
+		select {
+		case <-ch:
+		case <-tm.C:
+		}
+		tm.Stop()
+		if tick != nil {
+			tick()
+		}
+	}
+}
+
+// closeWith closes the set and runs fn once no snapshot is open: now, or
+// when the last running read ends.
+func (s *readerSet) closeWith(fn func()) {
+	s.mu.Lock()
+	s.closed = true
+	if len(s.active) > 0 {
+		s.onIdle = fn
+		s.mu.Unlock()
+		return
+	}
+	s.mu.Unlock()
+	fn()
+}
+
+// queryLimiter bounds the queries admitted at once across all tenants of
+// a pod. A nil limiter admits everything.
+type queryLimiter struct {
+	slots   chan struct{}
+	metrics *Metrics
+}
+
+func newQueryLimiter(n int, m *Metrics) *queryLimiter {
+	if n <= 0 {
+		n = defaultPodMaxQueries()
+	}
+	return &queryLimiter{slots: make(chan struct{}, n), metrics: m}
+}
+
+// acquire waits for a slot until ctx ends or done closes. A saturated pod
+// queues the query instead of failing it; the client decides how long.
+func (l *queryLimiter) acquire(ctx context.Context, done <-chan struct{}) error {
+	if l == nil {
+		return nil
+	}
+	select {
+	case l.slots <- struct{}{}:
+		l.metrics.QueriesInflight.Add(1)
+		return nil
+	default:
+	}
+	l.metrics.QueriesWaiting.Add(1)
+	defer l.metrics.QueriesWaiting.Add(-1)
+	select {
+	case l.slots <- struct{}{}:
+		l.metrics.QueriesInflight.Add(1)
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-done:
+		return ErrClosed
+	}
+}
+
+func (l *queryLimiter) release() {
+	if l == nil {
+		return
+	}
+	l.metrics.QueriesInflight.Add(-1)
+	<-l.slots
+}
