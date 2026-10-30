@@ -97,7 +97,8 @@ type apiError struct {
 	// structured guard failure detail (typed refusals downstream)
 	GuardIndex int    `json:"guard_index,omitempty"`
 	GuardKind  string `json:"guard_kind,omitempty"`
-	// Code names a query guard refusal: query_timeout, result_too_large
+	// Code names a query guard refusal: query_timeout, result_too_large,
+	// out_of_memory
 	Code string `json:"code,omitempty"`
 }
 
@@ -106,8 +107,18 @@ type apiError struct {
 // status that clients retry. 409 and 422 also keep their meaning (guard
 // failure, SQL error): the REST adapter acts on both. A timed-out write
 // rolled back and wrote no dedup receipt, so a later retry runs it again.
+//
+// SQLITE_NOMEM at the SQLite heap limit (memory.go) is 507 with code
+// out_of_memory. It is not 503 either: a query that alone needs more than
+// the limit fails the same way on every retry, and a retry loop keeps the
+// pod at its memory limit for every tenant. Before the cap it was a plain
+// SQL error (422 for /tx, 409 for /query), which the REST adapter reads as
+// a constraint or guard failure. The statement rolled back; a write wrote
+// no dedup receipt.
 func guardStatus(err error) (int, apiError, bool) {
 	switch {
+	case errors.Is(err, ErrOutOfMemory):
+		return 507, apiError{Error: err.Error(), Code: "out_of_memory"}, true
 	case errors.Is(err, ErrQueryTimeout):
 		return 504, apiError{Error: err.Error(), Code: "query_timeout"}, true
 	case errors.Is(err, ErrResultTooLarge):
@@ -201,6 +212,14 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) (int, any
 	}
 	fmt.Fprintf(&b, "hoglite_sqlite_interrupt_available %d\n", interruptOK)
 	fmt.Fprintf(&b, "hoglite_interrupt_handle_misses_total %d\n", m.InterruptMisses.Load())
+	sqUsed, sqHW := SQLiteMemory()
+	sqHard, sqSoft := SQLiteHeapLimits()
+	fmt.Fprintf(&b, "hoglite_sqlite_memory_used_bytes %d\n", sqUsed)
+	fmt.Fprintf(&b, "hoglite_sqlite_memory_highwater_bytes %d\n", sqHW)
+	fmt.Fprintf(&b, "hoglite_sqlite_heap_limit_bytes %d\n", sqHard)
+	fmt.Fprintf(&b, "hoglite_sqlite_soft_heap_limit_bytes %d\n", sqSoft)
+	fmt.Fprintf(&b, "hoglite_go_memory_limit_bytes %d\n", goMemoryLimit())
+	fmt.Fprintf(&b, "hoglite_out_of_memory_total %d\n", m.OutOfMemory.Load())
 	// saturation: max(commit-latency ratio, inflight ratio); 1.0 = at
 	// operating limit. This is the HPA target metric.
 	fmt.Fprintf(&b, "hoglite_saturation %.4f\n", s.mgr.Saturation())

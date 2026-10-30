@@ -71,6 +71,9 @@ type Metrics struct {
 	// failed sqlite handle lookups (guards.go connHandle): each one is a
 	// query or write that only the driver's own checks can stop
 	InterruptMisses atomic.Int64
+	// statements that failed with SQLITE_NOMEM at the SQLite heap limit
+	// (memory.go)
+	OutOfMemory atomic.Int64
 }
 
 // ewmaUpdate folds a sample into an atomic EWMA with alpha=1/8.
@@ -199,6 +202,9 @@ func NewManagerSat(store Backend, prefix, id, class, baseDir string, opts Tenant
 	}
 	if err := interruptSupport(); err != nil {
 		m.metrics.Logger.Printf("WARNING: sqlite interrupt unavailable (%v): query deadlines and cancels cannot stop a statement after its first row; check the modernc.org/sqlite version", err)
+	}
+	if err := SQLiteMemStatus(); err != nil {
+		m.metrics.Logger.Printf("WARNING: %v: the sqlite heap limits have no effect, so a large query can grow the process to the OOM killer", err)
 	}
 	m.leaseStop = make(chan struct{})
 	// 8 concurrent drains per pod: enough to absorb release bursts without
@@ -1207,5 +1213,6 @@ func (m *Manager) Stats() map[string]any {
 		"proxied": m.metrics.Proxied.Load(), "evictions": m.metrics.Evictions.Load(),
 		"dedup_hits":       m.metrics.DedupHits.Load(),
 		"sqlite_interrupt": interruptSupport() == nil,
+		"memory":           memoryInfo(m.metrics),
 	}
 }

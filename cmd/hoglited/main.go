@@ -51,8 +51,27 @@ func main() {
 		writeTO     = flag.Duration("write-timeout", 10*time.Second, "execution deadline of a write transaction; it holds the tenant actor; negative = off")
 		maxRows     = flag.Int("max-result-rows", 100_000, "max rows per read response (/query, read-only /tx); negative = off")
 		maxBytes    = flag.Int64("max-result-bytes", 64<<20, "max estimated bytes per response, reads and write transactions; negative = off")
+		memFrac     = flag.Float64("mem-fraction", 0.9, "share of the cgroup memory limit for the Go soft limit plus the SQLite hard heap limit (GOMEMLIMIT in the environment wins for Go)")
+		sqliteFrac  = flag.Float64("sqlite-heap-fraction", 0.4, "share of the cgroup memory limit for the SQLite hard heap limit")
+		sqliteHard  = flag.Int64("sqlite-heap-limit", 0, "SQLite hard heap limit in bytes, process wide (0 = -sqlite-heap-fraction of the cgroup limit, negative = off)")
+		sqliteSoft  = flag.Int64("sqlite-soft-heap-limit", 0, "SQLite soft heap limit in bytes (0 = 80% of the hard limit, negative = the hard limit)")
+		cacheKiB    = flag.Int("sqlite-cache-kib", 0, "page cache bound per SQLite connection in KiB (0 = default, negative = SQLite default)")
 	)
 	flag.Parse()
+	// memory caps first: before any tenant opens (memory.go)
+	cgLimit, cgSrc, err := hoglite.CgroupMemoryLimit()
+	if err != nil {
+		log.Printf("WARNING: cgroup memory limit: %v", err)
+	}
+	plan, err := hoglite.PlanMemory(cgLimit, cgSrc, os.Getenv("GOMEMLIMIT"), hoglite.MemoryConfig{
+		Fraction: *memFrac, SQLiteFraction: *sqliteFrac, SQLiteHard: *sqliteHard, SQLiteSoft: *sqliteSoft})
+	if err != nil {
+		log.Fatal(err)
+	}
+	if err := hoglite.ApplyMemoryPlan(plan); err != nil {
+		log.Printf("WARNING: %v", err)
+	}
+	log.Print(plan)
 	if *bucket == "" {
 		log.Fatal("-bucket / HL_BUCKET required")
 	}
@@ -167,6 +186,7 @@ func main() {
 	opts.WriteTimeout = *writeTO
 	opts.MaxResultRows = *maxRows
 	opts.MaxResultBytes = *maxBytes
+	opts.CacheKiB = *cacheKiB
 	if opts.WriteTimeout < 0 || opts.WriteTimeout >= 60*time.Second {
 		log.Printf("WARNING: -write-timeout %v: a write holds the tenant actor; the actor watchdog fails a tenant over after about 70s without progress", opts.WriteTimeout)
 	}

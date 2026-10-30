@@ -17,6 +17,7 @@ package hoglite
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"sync"
 	"time"
@@ -213,8 +214,8 @@ func (t *Tenant) pinRead(w *readWork, basis int64) {
 	// worker rolls back itself; ctx cancels the statements.
 	tx, err := conn.BeginTx(context.Background(), nil)
 	if err != nil {
-		conn.Close()
-		abort(err)
+		closeReadConn(conn, h)
+		abort(memErr(err, t.metrics))
 		return
 	}
 	// The probe also runs with Background: it reads one schema page and
@@ -224,8 +225,8 @@ func (t *Tenant) pinRead(w *readWork, basis int64) {
 	err = tx.StmtContext(context.Background(), t.probe).QueryRowContext(context.Background()).Scan(&one)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		tx.Rollback()
-		conn.Close()
-		abort(err)
+		closeReadConn(conn, h)
+		abort(memErr(err, t.metrics))
 		return
 	}
 	pr := &pinnedRead{w: w, ctx: ctx, cancel: cancel, conn: conn, db: h, tx: tx, ar: ar,
@@ -343,10 +344,11 @@ func (t *Tenant) readWorker(pr *pinnedRead) {
 		case errors.Is(out.err, ErrResultTooLarge):
 			t.metrics.ResultTooLarge.Add(1)
 		}
+		out.err = memErr(out.err, t.metrics)
 	}
 	cancel()
 	pr.tx.Rollback()
-	pr.conn.Close()
+	closeReadConn(pr.conn, pr.db)
 	pr.cancel(nil)
 	// the snapshot is closed: a waiting checkpoint or close may proceed
 	t.readers.remove(pr.ar)
@@ -615,4 +617,16 @@ func (l *queryLimiter) release() {
 	}
 	l.metrics.QueriesInflight.Add(-1)
 	<-l.slots
+}
+
+// closeReadConn returns a read connection to the pool. A connection that
+// still has an open transaction is closed instead: SQLITE_NOMEM can also
+// fail the ROLLBACK, and the next pin would fail its BEGIN and hold a
+// snapshot that blocks the checkpoint. Closing a read connection is safe
+// (PERSIST_WAL, see registerAuthorizerOnce); SQLite rolls back on close.
+func closeReadConn(c *sql.Conn, h uintptr) {
+	if err := endOpenTx(c, h); err != nil {
+		c.Raw(func(any) error { return driver.ErrBadConn })
+	}
+	c.Close()
 }

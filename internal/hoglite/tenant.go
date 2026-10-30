@@ -60,6 +60,11 @@ type TenantOpts struct {
 	WriteTimeout   time.Duration // execution deadline of a write transaction (runs on the actor)
 	MaxResultRows  int           // rows per read response (not for write transactions)
 	MaxResultBytes int64         // estimated bytes of a response (reads and writes)
+	// CacheKiB bounds the page cache of each SQLite connection of the
+	// tenant (the write connection and each read connection), in KiB.
+	// Zero selects the default, a negative value keeps the SQLite
+	// default (2000 KiB). See memory.go.
+	CacheKiB int
 }
 
 func DefaultOpts() TenantOpts {
@@ -91,6 +96,7 @@ func DefaultOpts() TenantOpts {
 		WriteTimeout:   defaultWriteTimeout,
 		MaxResultRows:  defaultMaxResultRows,
 		MaxResultBytes: defaultMaxResultBytes,
+		CacheKiB:       defaultCacheKiB,
 	}
 }
 
@@ -136,6 +142,9 @@ type txOutcome struct {
 	dup      bool
 	readOnly bool
 	err      error
+	// poison fails the tenant after the reply: the write connection or
+	// the WAL is in a state that the actor cannot trust (applyTx).
+	poison error
 }
 
 // allReadOnly is the STRICT classifier for the no-durability fast path:
@@ -378,6 +387,7 @@ func openTenant(id string, dir string, mf *Manifest, etag string, store Backend,
 	opts.WriteTimeout = guardOpt(opts.WriteTimeout, defaultWriteTimeout)
 	opts.MaxResultRows = guardOpt(opts.MaxResultRows, defaultMaxResultRows)
 	opts.MaxResultBytes = guardOpt(opts.MaxResultBytes, defaultMaxResultBytes)
+	opts.CacheKiB = guardOpt(opts.CacheKiB, defaultCacheKiB)
 	t := &Tenant{
 		ID: id, store: store, prefix: prefix, opts: opts, self: self, routeID: routeID, dir: dir, clock: clock,
 		dbPath: filepath.Join(dir, "db.sqlite"), walPath: filepath.Join(dir, "db.sqlite-wal"),
@@ -402,6 +412,11 @@ func openTenant(id string, dir string, mf *Manifest, etag string, store Backend,
 	registerAuthorizerOnce()
 	dsn := fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=wal_autocheckpoint(0)"+
 		"&_pragma=synchronous(OFF)&_pragma=busy_timeout(10000)&_pragma=foreign_keys(1)", t.dbPath)
+	if opts.CacheKiB > 0 {
+		// negative cache_size means KiB; the pragma runs before the
+		// authorizer is installed, and clients cannot send PRAGMA
+		dsn += fmt.Sprintf("&_pragma=cache_size(-%d)", opts.CacheKiB)
+	}
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
@@ -624,6 +639,11 @@ func (t *Tenant) run() {
 		case w := <-t.writeCh:
 			t.lastUsedMs.Store(time.Now().UnixMilli())
 			o := t.applyTx(w.req)
+			if o.poison != nil {
+				w.reply <- o
+				t.failLocked(o.poison)
+				return
+			}
 			if o.err != nil {
 				w.reply <- o
 				break
@@ -836,13 +856,22 @@ func (t *Tenant) applyTx(req TxRequest) (o txOutcome) {
 	// deadline or the result limit.
 	ctx, cancel := withDeadline(context.Background(), t.opts.WriteTimeout, "write transaction")
 	defer cancel()
+	// The commit end before this transaction. A failed COMMIT compares
+	// against it (see below). The parse also covers the commits since the
+	// last cut, which the next cut then does not parse again.
+	preEnd, err := t.currentCommitEnd()
+	if err != nil {
+		o.err = fmt.Errorf("wal parse: %w", err)
+		o.poison = o.err
+		return o
+	}
 	// A dedicated sql.Conn gives the sqlite handle of this transaction's
 	// connection. The pool may replace the connection between
 	// transactions, so the handle is looked up each time. Without a
 	// handle only the driver's own context checks stop the work.
 	conn, err := t.db.Conn(context.Background())
 	if err != nil {
-		o.err = err
+		o.err = memErr(err, t.metrics)
 		return o
 	}
 	defer conn.Close()
@@ -852,10 +881,24 @@ func (t *Tenant) applyTx(req TxRequest) (o txOutcome) {
 	// carry the deadline.
 	tx, err := conn.BeginTx(context.Background(), nil)
 	if err != nil {
-		o.err = err
+		o.err = memErr(err, t.metrics)
 		return o
 	}
-	defer tx.Rollback()
+	committed := false
+	defer func() {
+		if committed {
+			return
+		}
+		tx.Rollback()
+		// SQLITE_NOMEM can also fail the ROLLBACK (its statement needs
+		// memory too). A transaction left open would make every later
+		// BEGIN fail, and it holds uncommitted pages. The write
+		// connection cannot be replaced safely: closing the last
+		// connection checkpoints and deletes the WAL under the shipper.
+		if err := endOpenTx(conn, h); err != nil && o.poison == nil {
+			o.poison = fmt.Errorf("write connection left inside a transaction: %w", err)
+		}
+	}()
 	it := watchInterrupt(ctx, h)
 	o = t.runTx(ctx, tx, req, o)
 	if h := t.txHook; h != nil {
@@ -882,13 +925,62 @@ func (t *Tenant) applyTx(req TxRequest) (o txOutcome) {
 		if errors.Is(o.err, ErrResultTooLarge) {
 			t.metrics.ResultTooLarge.Add(1)
 		}
+		// SQLITE_NOMEM rolled the transaction back: nothing to ship
+		o.err = memErr(o.err, t.metrics)
 		return o
 	}
 	if err := tx.Commit(); err != nil {
-		o.err = err
+		// tx.Commit ends the database/sql transaction also on failure, and
+		// the driver rolls back what is still open. Whether SQLite wrote
+		// a commit frame is not visible from the error: a failure after
+		// the frames reached the WAL file (for example SQLITE_NOMEM in
+		// the wal-index update) reports an error and rolls back in memory
+		// only. The parser and the shipper read the file, so they would
+		// ship a transaction that SQLite does not have. The commit end
+		// tells: unchanged means nothing committed, a deferred foreign
+		// key failure for example. Changed means poison before the next
+		// cut can ship it; recovery then rebuilds from S3.
+		committed = true // tx is done; the deferred check still runs below
+		o.err = memErr(err, t.metrics)
+		o.results = nil
+		if err := endOpenTx(conn, h); err != nil {
+			o.poison = fmt.Errorf("write connection left inside a transaction after a failed COMMIT: %w", err)
+			return o
+		}
+		end, perr := t.currentCommitEnd()
+		switch {
+		case perr != nil:
+			o.poison = fmt.Errorf("wal parse after a failed COMMIT: %w", perr)
+		case end != preEnd:
+			o.poison = fmt.Errorf("COMMIT failed but the WAL holds a new commit frame (%d -> %d): %w", preEnd, end, err)
+		}
 		return o
 	}
+	committed = true
 	return o
+}
+
+// endOpenTx makes sure that the connection behind c has no open
+// transaction after a rollback. It retries ROLLBACK a few times, because
+// SQLITE_NOMEM can fail one attempt and the next can find memory. Without
+// a handle (h == 0) the state is not visible, and endOpenTx trusts the
+// rollback. A non-nil result means a transaction is still open.
+func endOpenTx(c *sql.Conn, h uintptr) error {
+	if h == 0 || sqliteAutocommit(h) {
+		return nil
+	}
+	var err error
+	for i := 0; i < 3; i++ {
+		_, err = c.ExecContext(context.Background(), "ROLLBACK")
+		if sqliteAutocommit(h) {
+			return nil
+		}
+		time.Sleep(time.Duration(i+1) * 10 * time.Millisecond)
+	}
+	if err == nil {
+		err = errors.New("transaction still open")
+	}
+	return err
 }
 
 // runTx executes the dedup lookup, the statements and the dedup receipt
@@ -1473,6 +1565,10 @@ func (t *Tenant) advanceWatermark() {
 			return
 		}
 		s := t.segs[0]
+		// Clear the slot: the backing array outlives the reslice, and
+		// an idle tenant would pin its last segment (data and results)
+		// in the Go heap until its next cut.
+		t.segs[0] = nil
 		t.segs = t.segs[1:]
 		t.durableOff = s.end
 		for i, ch := range s.waiters {
@@ -1493,6 +1589,7 @@ func (t *Tenant) advanceWatermark() {
 			rest = append(rest, pa)
 		}
 	}
+	clear(t.pending[len(rest):]) // acked entries hold results; see t.segs
 	t.pending = rest
 	if len(t.readWaits) > 0 {
 		// every parked entry is a result computed on the snapshot at its
@@ -1629,7 +1726,10 @@ func (t *Tenant) checkpointLocked(newClass string) bool {
 	plan := t.planDelta()
 	dbSize, plan, err := t.foldWAL(ctx, plan)
 	if err != nil {
-		t.failLocked(fmt.Errorf("wal checkpoint: %w", err))
+		if t.skipNoMemCheckpoint(err, newClass) {
+			return true
+		}
+		t.failLocked(fmt.Errorf("wal checkpoint: %w", memErr(err, t.metrics)))
 		return false
 	}
 	newGen := t.mf.Gen + 1
@@ -1794,6 +1894,33 @@ func (t *Tenant) checkpointLocked(newClass string) bool {
 			_ = t.store.DeleteObjects(ctx, keys...)
 		}
 	}(obsolete, oldIID, oldGen)
+	return true
+}
+
+// skipNoMemCheckpoint decides whether a checkpoint that failed with
+// SQLITE_NOMEM can be skipped instead of failing the tenant. The heap
+// limit is process wide, so the tenant that hits it in a checkpoint is
+// often not the one that uses the memory. Poisoning it would turn memory
+// pressure into failovers. A checkpoint allocates its frame index before
+// it copies a page, and it truncates the WAL only after a full copy. So
+// after SQLITE_NOMEM the WAL still holds every committed frame, and a
+// copied page equals the committed state in the WAL. The check below
+// confirms that the WAL still reaches the shipped offset; a WAL that
+// shrank fails the tenant. Durability is unaffected: every segment is in
+// S3. A claim never skips (the checkpoint is the acquisition), and a
+// class change keeps the poison path.
+func (t *Tenant) skipNoMemCheckpoint(err error, newClass string) bool {
+	if !isNoMem(err) || !t.claimed || newClass != "" {
+		return false
+	}
+	end, perr := t.currentCommitEnd()
+	if perr != nil || end < t.submittedOff || t.walFileSize() < t.submittedOff {
+		return false
+	}
+	t.metrics.OutOfMemory.Add(1)
+	t.metrics.Logger.Printf("checkpoint %s skipped: %v", t.ID, err)
+	t.ckptDeferUntil = time.Now().Add(5 * t.opts.ReadDrainWait)
+	t.cutSegment() // as in the read-drain skip above
 	return true
 }
 
