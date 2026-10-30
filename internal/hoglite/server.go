@@ -97,8 +97,11 @@ type apiError struct {
 	// structured guard failure detail (typed refusals downstream)
 	GuardIndex int    `json:"guard_index,omitempty"`
 	GuardKind  string `json:"guard_kind,omitempty"`
-	// Code names a query guard refusal: query_timeout, result_too_large,
-	// out_of_memory
+	// Code names the outcome of a failed /tx or /query (outcome.go):
+	// expect_failed, refused, not_applied, outcome_unknown, or a query
+	// guard refusal: query_timeout, result_too_large, out_of_memory.
+	// Clients switch on Code, not on the status: 504 is both
+	// query_timeout and outcome_unknown.
 	Code string `json:"code,omitempty"`
 }
 
@@ -206,6 +209,7 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) (int, any
 	fmt.Fprintf(&b, "hoglite_proxied_total %d\n", m.Proxied.Load())
 	fmt.Fprintf(&b, "hoglite_evictions_total %d\n", m.Evictions.Load())
 	fmt.Fprintf(&b, "hoglite_dedup_hits_total %d\n", m.DedupHits.Load())
+	fmt.Fprintf(&b, "hoglite_tx_outcome_unknown_total %d\n", m.OutcomeUnknown.Load())
 	fmt.Fprintf(&b, "hoglite_sweeps_total %d\n", m.Sweeps.Load())
 	fmt.Fprintf(&b, "hoglite_swept_objects_total %d\n", m.SweptObjects.Load())
 	fmt.Fprintf(&b, "hoglite_open_tenants %d\n", s.mgr.OpenCount())
@@ -511,36 +515,11 @@ func (s *Server) handleTx(w http.ResponseWriter, r *http.Request) (int, any) {
 	w.Header().Set("x-hw-owner", s.mgr.ID())
 	results, dup, err := t.SubmitTxCtx(r.Context(), req)
 	if err != nil {
-		if code, ae, ok := guardStatus(err); ok {
-			ae.Owner = s.mgr.ID()
-			return code, ae
+		code, body := txErrorResponse(err, allReadOnly(req.Stmts), s.mgr.ID())
+		if body.Code == CodeOutcomeUnknown {
+			s.mgr.metrics.OutcomeUnknown.Add(1)
 		}
-		var ef *ExpectFailedError
-		switch {
-		case errors.As(err, &ef):
-			// deterministic refusal (conflict guard, missing table): the
-			// caller re-prepares; retrying the same payload is pointless
-			return 409, apiError{Error: "expect_failed: " + err.Error(), Owner: s.mgr.ID(),
-				GuardIndex: ef.Index + 1, GuardKind: ef.Guard}
-		case errors.Is(err, ErrNotOwner), errors.Is(err, ErrClosed), errors.Is(err, ErrReadPreempted),
-			errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
-			return 503, apiError{Error: err.Error(), Owner: s.mgr.ID()} // transient: retry
-		default:
-			// transient infra errors (segment PUT timeouts, S3 throttling,
-			// checkpoint/heartbeat CAS throttle) must NOT read as a permanent
-			// SQL refusal: 503, caller retries
-			msg := err.Error()
-			if strings.Contains(msg, "context deadline exceeded") ||
-				strings.Contains(msg, "SlowDown") ||
-				strings.Contains(msg, "retry Send token") ||
-				strings.Contains(msg, "segment put") ||
-				strings.Contains(msg, "base put") ||
-				strings.Contains(msg, "checkpoint cas") ||
-				strings.Contains(msg, "heartbeat cas") {
-				return 503, apiError{Error: msg, Owner: s.mgr.ID()}
-			}
-			return 422, apiError{Error: err.Error()} // SQL errors are permanent
-		}
+		return code, body
 	}
 	return 200, map[string]any{"results": results, "dup": dup}
 }
@@ -567,15 +546,7 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) (int, any) 
 	w.Header().Set("x-hw-owner", s.mgr.ID())
 	res, err := t.SubmitQueryCtx(r.Context(), st)
 	if err != nil {
-		if code, ae, ok := guardStatus(err); ok {
-			ae.Owner = s.mgr.ID()
-			return code, ae
-		}
-		if errors.Is(err, ErrNotOwner) || errors.Is(err, ErrClosed) || errors.Is(err, ErrReadPreempted) ||
-			errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return 503, apiError{Error: err.Error(), Owner: s.mgr.ID()} // transient: retry
-		}
-		return 409, apiError{Error: err.Error()}
+		return queryErrorResponse(err, t.Alive(), s.mgr.ID())
 	}
 	return 200, res
 }

@@ -464,8 +464,10 @@ func (t *Tenant) execRead(ctx context.Context, tx *sql.Tx, w *readWork, lim *res
 			// execTxStatements returns the results of the statements before
 			// the failed one. No caller uses them (the /tx handler answers
 			// with the error only), and a parked outcome must not keep them:
-			// its park budget share counts no rows for an error.
-			return readOutcome{err: err}
+			// its park budget share counts no rows for an error. The error
+			// is typed like on the write path (classifyStmtErr), so a
+			// statement the engine refuses stays final.
+			return readOutcome{err: classifyStmtErr(err)}
 		}
 		return readOutcome{results: res}
 	}

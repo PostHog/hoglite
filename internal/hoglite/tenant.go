@@ -985,6 +985,17 @@ func (t *Tenant) applyTx(req TxRequest) (o txOutcome) {
 		case end != preEnd:
 			o.poison = fmt.Errorf("COMMIT failed but the WAL holds a new commit frame (%d -> %d): %w", preEnd, end, err)
 		}
+		if o.poison != nil {
+			// The commit end moved, or could not be read: the frames of
+			// this transaction may be in the WAL file. Never a refusal:
+			// the caller retries with the same txid, which deduplicates
+			// against whatever recovery finds.
+			o.err = outcomeUnknown(o.err)
+		} else {
+			// The commit end is unchanged: nothing committed (a deferred
+			// foreign key failure, for example), a definite rollback.
+			o.err = classifyStmtErr(o.err)
+		}
 		return o
 	}
 	committed = true
@@ -1023,13 +1034,15 @@ func (t *Tenant) runTx(ctx context.Context, tx *sql.Tx, req TxRequest, lim *resu
 			req.Client, req.TxID).Scan(&raw, &fp)
 		if err == nil {
 			if fp != "" && req.FP != "" && fp != req.FP {
-				o.err = errors.New("idempotency key reused with a different request")
+				o.err = &RefusedError{Err: errors.New("idempotency key reused with a different request")}
 				return o
 			}
 			dec := json.NewDecoder(strings.NewReader(raw))
 			dec.UseNumber()
 			if dec.Decode(&o.results) != nil {
-				o.err = errors.New("corrupt dedup entry")
+				// the key's commit IS in this database; only its answer is
+				// unreadable, so the caller cannot be told it failed
+				o.err = &OutcomeUnknownError{Err: errors.New("corrupt dedup entry")}
 				return o
 			}
 			o.dup = true
@@ -1042,6 +1055,10 @@ func (t *Tenant) runTx(ctx context.Context, tx *sql.Tx, req TxRequest, lim *resu
 		}
 	}
 	if o.results, o.err = execTxStatements(ctx, tx, req.Stmts, lim); o.err != nil {
+		// a statement-level failure refuses the set (422); anything else
+		// rolled back on a transient error (503). Guard misses keep their
+		// own type (409).
+		o.err = classifyStmtErr(o.err)
 		return o
 	}
 	if req.Client != "" && req.TxID != "" && !o.readOnly {
@@ -2016,9 +2033,14 @@ func (t *Tenant) failLocked(err error) {
 }
 
 func (t *Tenant) failQueued(err error) {
+	// pending and segment waiters were APPLIED (committed to the local
+	// database, WAL bytes possibly shipped or folded into an uploaded
+	// base): their outcome is unknown, never a plain failure. Queued
+	// writes and parked read-only transactions never applied anything.
+	applied := outcomeUnknown(err)
 	for _, pa := range t.pending {
 		o := pa.outcome
-		o.err = err
+		o.err = applied
 		pa.reply <- o
 	}
 	t.pending = nil
@@ -2030,7 +2052,7 @@ func (t *Tenant) failQueued(err error) {
 	for _, s := range t.segs {
 		for i, ch := range s.waiters {
 			o := s.results[i]
-			o.err = err
+			o.err = applied
 			ch <- o
 		}
 	}

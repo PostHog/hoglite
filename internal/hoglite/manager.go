@@ -83,6 +83,9 @@ type Metrics struct {
 	// per-tenant execution accounting of the tenants that share this
 	// Metrics (usage.go)
 	usage usageTracker
+	// OutcomeUnknown counts /tx answers that were applied locally but
+	// ended before durability was confirmed (504 outcome_unknown).
+	OutcomeUnknown atomic.Int64
 }
 
 // ewmaUpdate folds a sample into an atomic EWMA with alpha=1/8.
