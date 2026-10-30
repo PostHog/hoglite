@@ -11,14 +11,36 @@ package hoglite
 // Admission happens on the caller goroutine before the actor sees the read:
 // first one per-tenant reader slot (MaxReaders, equal to the roDB pool
 // size), then one pod-wide query slot (PodMaxQueries). Both waits end with
-// the request context. The slots return when the query has finished, not
-// when its result is released by the durable gate.
+// the request context. The pod slot returns when the query has finished.
+//
+// A result whose basis is not durable yet parks until the durable gate
+// releases it. Before Q1 a read parked before it executed, so it held no
+// result. Now a parked read holds its full result (up to MaxResultBytes)
+// in the Go heap, so two bounds apply until it is delivered or dropped:
+//
+//   - It keeps its tenant reader slot. So at most MaxReaders results of a
+//     tenant are parked or executing, and a new read of that tenant waits
+//     for admission with its request context.
+//   - It holds a share of the pod park budget (PodMaxParkedBytes) of the
+//     size of its result estimate. The worker takes the share before it
+//     returns the pod slot. When the budget is full, the worker waits with
+//     the pod slot, so the waiting results stay inside the bound of the
+//     executing ones (PodMaxQueries x MaxResultBytes).
+//
+// A parked read holds no snapshot and no connection: it is not in the
+// reader set, so the checkpoint drain and close never wait for it. Its
+// release needs only durability progress, which needs no read slot: the
+// actor cuts a segment when it pins and when it parks a read (pinRead,
+// onReadDone), and segment PUTs and acks run on the actor and the upload
+// goroutines. A caller that gives up drops its parked result: an
+// AfterFunc on the request context tells the actor (readAbandon).
 
 import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
 	"errors"
+	"slices"
 	"sync"
 	"time"
 )
@@ -91,8 +113,9 @@ func (t *Tenant) submitRead(ctx context.Context, w *readWork) readOutcome {
 		return o
 	case <-ctx.Done():
 		// still queued: take it back and return the slots here. Otherwise
-		// the actor or the worker owns it; the canceled ctx stops the
-		// query and the owner returns the slots.
+		// the actor or the worker owns it: the canceled ctx stops the
+		// query or the budget wait, or drops a parked result (onReadDone),
+		// and the owner returns the slots.
 		if w.taken.CompareAndSwap(false, true) {
 			t.releaseSlots(w)
 		}
@@ -111,9 +134,13 @@ func (t *Tenant) submitRead(ctx context.Context, w *readWork) readOutcome {
 	}
 }
 
-// releaseSlots returns the admission slots of w. Idempotent.
+// releaseSlots returns the admission slots of w and its park budget
+// share. Idempotent.
 func (t *Tenant) releaseSlots(w *readWork) {
 	t.releasePodSlot(w)
+	if n := w.parkBytes.Swap(0); n > 0 {
+		t.qlim.releasePark(n)
+	}
 	if w.released.CompareAndSwap(false, true) {
 		<-t.readSlots
 	}
@@ -132,8 +159,10 @@ func (t *Tenant) replyRead(w *readWork, o readOutcome) {
 	w.reply <- o
 }
 
-// deliverRead hands a computed outcome to the submitter.
+// deliverRead hands a computed outcome to the submitter and returns the
+// slots and the park budget share of w.
 func (t *Tenant) deliverRead(w *readWork, o readOutcome) {
+	t.releaseSlots(w)
 	if o.err == nil {
 		t.metrics.Queries.Add(1)
 	}
@@ -366,15 +395,31 @@ func (t *Tenant) readWorker(pr *pinnedRead) {
 	t.lastUsedMs.Store(time.Now().UnixMilli())
 	if pr.durable {
 		t.pool.finish() // before the slot returns, see readPool
-		t.releaseSlots(pr.w)
 		t.deliverRead(pr.w, out)
 		return
 	}
-	// The tenant slot returns when the actor takes the outcome (onReadDone).
-	// So readDone never holds more than MaxReaders outcomes, and this send
-	// never waits for the actor.
+	// The result waits for durability. It keeps the tenant slot until it
+	// is delivered or dropped, so readDone never holds more than MaxReaders
+	// outcomes, and the send below never waits for the actor. The park
+	// budget share comes before the pod slot returns: while the budget is
+	// full, this worker waits with its pod slot (see the top of the file).
+	n := int64(resultCost) // an error outcome holds no rows
+	if out.err == nil {
+		n = max(n, lim.bytes)
+	}
+	n, err := t.qlim.reservePark(pr.w.ctx, t.done, n)
+	t.pool.finish() // before the slot returns, see readPool
+	if err != nil {
+		// the caller gave up or the tenant closed: drop the result
+		if errors.Is(err, ErrClosed) {
+			err = t.deadError()
+		}
+		t.releaseSlots(pr.w)
+		pr.w.reply <- readOutcome{err: err}
+		return
+	}
+	pr.w.parkBytes.Store(n)
 	t.releasePodSlot(pr.w)
-	t.pool.finish()
 	select {
 	case t.readDone <- readResult{w: pr.w, basis: pr.basis, gen: pr.gen, out: out}:
 		// The send can win against a closed done. The actor no longer
@@ -393,9 +438,9 @@ func (t *Tenant) readWorker(pr *pinnedRead) {
 }
 
 // drainReadDone fails the outcomes left in readDone after the tenant
-// closed and returns their tenant slots. The receive makes exactly one
-// party (finishClose or a late worker) the owner of each outcome.
-// Only after done is closed.
+// closed and returns their tenant slots and park budget shares. The
+// receive makes exactly one party (finishClose or a late worker) the
+// owner of each outcome. Only after done is closed.
 func (t *Tenant) drainReadDone() {
 	for {
 		select {
@@ -425,26 +470,61 @@ func (t *Tenant) execRead(ctx context.Context, tx *sql.Tx, w *readWork, lim *res
 }
 
 // onReadDone releases or parks an outcome whose basis was not durable at
-// pin time. Actor-loop only.
+// pin time. A parked outcome keeps its tenant slot and its park budget
+// share until releaseReadWait, abandonRead or failQueued. Actor-loop only.
 func (t *Tenant) onReadDone(rr readResult) {
-	t.releaseSlots(rr.w) // the tenant slot; the worker returned the pod slot
 	// a gen change means a checkpoint folded the basis into a durable base
 	if rr.gen != t.mf.Gen || rr.basis <= t.durableOff {
 		t.deliverRead(rr.w, rr.out)
 		return
 	}
-	t.readWaits = append(t.readWaits, readWait{end: rr.basis, w: rr.w, out: rr.out})
+	w := rr.w
+	if err := w.ctx.Err(); err != nil {
+		t.deliverRead(w, readOutcome{err: err}) // nobody waits for the result
+		return
+	}
+	// The caller can give up while the result is parked. The callback
+	// tells the actor, which drops the result and returns the slots. It
+	// runs at most once, after stop it never runs, and a message for a
+	// result that is gone already is ignored (abandonRead).
+	stop := context.AfterFunc(w.ctx, func() {
+		select {
+		case t.readAbandon <- w:
+		case <-t.done:
+		}
+	})
+	t.readWaits = append(t.readWaits, readWait{end: rr.basis, w: w, out: rr.out, stop: stop})
+	t.metrics.ParkedReads.Add(1)
 	t.cutSegment()
 }
 
 // releaseReadWait hands a parked outcome to its submitter. Callers have
-// established that its basis is durable.
+// established that its basis is durable, and remove rw from readWaits.
 func (t *Tenant) releaseReadWait(rw readWait) {
-	if rw.txReply != nil {
-		rw.txReply <- rw.txOut // parked /tx outcome
+	t.unparkRead(rw)
+	t.deliverRead(rw.w, rw.out)
+}
+
+// unparkRead ends the parked state of rw. Its caller removes rw from
+// readWaits and replies, which returns the slots and the budget share.
+func (t *Tenant) unparkRead(rw readWait) {
+	rw.stop()
+	t.metrics.ParkedReads.Add(-1)
+}
+
+// abandonRead drops the parked result of w after its caller gave up. The
+// reply only fills the buffer: the caller returned already. Nothing is
+// done when the result was delivered before the message arrived.
+// Actor-loop only.
+func (t *Tenant) abandonRead(w *readWork) {
+	i := slices.IndexFunc(t.readWaits, func(rw readWait) bool { return rw.w == w })
+	if i < 0 {
 		return
 	}
-	t.deliverRead(rw.w, rw.out)
+	rw := t.readWaits[i]
+	t.readWaits = slices.Delete(t.readWaits, i, i+1) // clears the tail: no result stays referenced
+	t.unparkRead(rw)
+	t.deliverRead(w, readOutcome{err: context.Cause(w.ctx)})
 }
 
 func (t *Tenant) bumpProgress() { t.progressMs.Store(time.Now().UnixMilli()) }
@@ -587,17 +667,123 @@ func (s *readerSet) closeWith(fn func()) {
 }
 
 // queryLimiter bounds the queries admitted at once across all tenants of
-// a pod. A nil limiter admits everything.
+// a pod, and the bytes of their results that wait for durability. A nil
+// limiter admits everything.
 type queryLimiter struct {
 	slots   chan struct{}
 	metrics *Metrics
+
+	// park budget (reservePark): estimated result bytes of reads that
+	// wait for durability, across all tenants
+	mu       sync.Mutex
+	parkMax  int64 // 0 = no bound
+	parkUsed int64
+	parkQ    []*parkWaiter // FIFO: a large result is not passed by small ones
 }
 
-func newQueryLimiter(n int, m *Metrics) *queryLimiter {
+type parkWaiter struct {
+	n     int64
+	ready chan struct{} // closed when the share is granted
+}
+
+func newQueryLimiter(o TenantOpts, m *Metrics) *queryLimiter {
+	n := o.PodMaxQueries
 	if n <= 0 {
 		n = defaultPodMaxQueries()
 	}
-	return &queryLimiter{slots: make(chan struct{}, n), metrics: m}
+	return &queryLimiter{slots: make(chan struct{}, n), metrics: m, parkMax: podParkBudget(o, n)}
+}
+
+// podParkBudget resolves PodMaxParkedBytes for a pod with n query slots.
+// The default is the bound of the executing results, n x MaxResultBytes:
+// parked results then add at most as much again.
+func podParkBudget(o TenantOpts, n int) int64 {
+	if o.PodMaxParkedBytes < 0 {
+		return 0
+	}
+	if o.PodMaxParkedBytes > 0 {
+		return o.PodMaxParkedBytes
+	}
+	per := guardOpt(o.MaxResultBytes, defaultMaxResultBytes)
+	if per == 0 { // result limit off: count each result at the default
+		per = defaultMaxResultBytes
+	}
+	return int64(n) * per
+}
+
+// reservePark takes a share of n bytes of the park budget. It waits in
+// FIFO order until the share fits, ctx ends or done closes. A share above
+// the budget is cut to the budget, so it fits once nothing else is
+// parked. It returns the size of the share to pass to releasePark.
+func (l *queryLimiter) reservePark(ctx context.Context, done <-chan struct{}, n int64) (int64, error) {
+	if l == nil {
+		return 0, nil
+	}
+	l.mu.Lock()
+	if l.parkMax > 0 && n > l.parkMax {
+		n = l.parkMax
+	}
+	if len(l.parkQ) == 0 && (l.parkMax == 0 || l.parkUsed+n <= l.parkMax) {
+		l.parkUsed += n
+		l.metrics.ParkedBytes.Add(n)
+		l.mu.Unlock()
+		return n, nil
+	}
+	pw := &parkWaiter{n: n, ready: make(chan struct{})}
+	l.parkQ = append(l.parkQ, pw)
+	l.metrics.ParkWaiting.Add(1)
+	l.mu.Unlock()
+	defer l.metrics.ParkWaiting.Add(-1)
+	var err error
+	select {
+	case <-pw.ready:
+		return n, nil
+	case <-ctx.Done():
+		err = ctx.Err()
+	case <-done:
+		err = ErrClosed
+	}
+	l.mu.Lock()
+	select {
+	case <-pw.ready:
+		// granted while it gave up: return the share
+		l.mu.Unlock()
+		l.releasePark(n)
+		return 0, err
+	default:
+	}
+	if i := slices.Index(l.parkQ, pw); i >= 0 {
+		l.parkQ = slices.Delete(l.parkQ, i, i+1)
+	}
+	l.grantPark() // the next waiter may fit now
+	l.mu.Unlock()
+	return 0, err
+}
+
+// releasePark returns a share taken by reservePark.
+func (l *queryLimiter) releasePark(n int64) {
+	if l == nil || n <= 0 {
+		return
+	}
+	l.mu.Lock()
+	l.parkUsed -= n
+	l.metrics.ParkedBytes.Add(-n)
+	l.grantPark()
+	l.mu.Unlock()
+}
+
+// grantPark grants waiting shares in order while they fit. Needs l.mu.
+func (l *queryLimiter) grantPark() {
+	for len(l.parkQ) > 0 {
+		pw := l.parkQ[0]
+		if l.parkMax > 0 && l.parkUsed+pw.n > l.parkMax {
+			return
+		}
+		l.parkUsed += pw.n
+		l.metrics.ParkedBytes.Add(pw.n)
+		close(pw.ready)
+		l.parkQ = slices.Delete(l.parkQ, 0, 1)
+	}
 }
 
 // acquire waits for a slot until ctx ends or done closes. A saturated pod

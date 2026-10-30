@@ -247,6 +247,10 @@ func TestDeltaCheckpointReleasesParkedRead(t *testing.T) {
 	if r := recvRead(t, read, 3*time.Second); r.err != nil || r.res.Rows[0][0].(int64) != 4 {
 		t.Fatalf("parked read: %+v", r)
 	}
+	// the checkpoint release returns the slot and the park budget share
+	waitFor(t, "parked read released", func() bool {
+		return met.ParkedReads.Load() == 0 && met.ParkedBytes.Load() == 0 && len(ten.readSlots) == 0
+	})
 	for i := 0; i < 2; i++ {
 		if err := <-txDone; err != nil {
 			t.Fatalf("commit: %v", err)

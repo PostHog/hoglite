@@ -54,6 +54,11 @@ type TenantOpts struct {
 	MaxReaders    int           // concurrent read snapshots per tenant (read-only pool size)
 	ReadDrainWait time.Duration // checkpoint/close grace for in-flight reads before they are canceled
 	PodMaxQueries int           // pod-wide cap on admitted queries; read by the Manager, not per tenant
+	// PodMaxParkedBytes caps the estimated result bytes of reads that
+	// wait for durability, across all tenants of a pod (reads.go); read by
+	// the Manager. Zero selects PodMaxQueries x MaxResultBytes, a negative
+	// value turns the cap off.
+	PodMaxParkedBytes int64
 	// Query guards (guards.go). Zero selects the default, a negative value
 	// turns the guard off.
 	QueryTimeout   time.Duration // execution deadline of a read (/query, read-only /tx)
@@ -214,7 +219,9 @@ func isSQLWordByte(c byte) bool {
 }
 
 // readWork is one admitted read (/query or read-only /tx). It holds one
-// per-tenant reader slot and one pod-wide query slot until release.
+// per-tenant reader slot until its outcome is delivered or dropped, and
+// one pod-wide query slot until its query finished. A result that waits
+// for durability also holds a share of the pod park budget (reads.go).
 type readWork struct {
 	ctx   context.Context
 	stmts []Statement
@@ -224,8 +231,9 @@ type readWork struct {
 	// set it (the actor on receipt, or the submitter that gives up) owns
 	// the release.
 	taken       atomic.Bool
-	released    atomic.Bool // tenant reader slot returned (releaseSlots)
-	podReleased atomic.Bool // pod query slot returned (releasePodSlot)
+	released    atomic.Bool  // tenant reader slot returned (releaseSlots)
+	podReleased atomic.Bool  // pod query slot returned (releasePodSlot)
+	parkBytes   atomic.Int64 // park budget share not yet returned (releaseSlots)
 }
 
 type readOutcome struct {
@@ -322,6 +330,9 @@ type Tenant struct {
 	readHook  func(context.Context) // test hook: runs in the worker after the pin
 	txHook    func()                // test hook: runs on the actor after the statements of a write
 	foldHook  func()                // test hook: runs in foldWAL after a PASSIVE fold, before TRUNCATE
+	// readAbandon carries parked reads whose caller gave up (the AfterFunc
+	// of onReadDone). The actor drops their results.
+	readAbandon chan *readWork
 	// ckptDeferUntil delays size-triggered checkpoints after one was
 	// skipped because reads did not drain. Actor-owned.
 	ckptDeferUntil time.Time
@@ -379,14 +390,15 @@ type segDone struct {
 // snapshot was pinned). P0-5: a read must never return applied-but-not-
 // yet-durable state; after a crash such state vanishes and snapshot ids
 // would be reused under an OCC basis that already saw them.
+//
+// The entry holds the tenant reader slot and the park budget share of w,
+// so parked results stay bounded (reads.go). Read-only /tx outcomes park
+// here the same way: they run on the reader path.
 type readWait struct {
-	end int64
-	w   *readWork
-	out readOutcome
-	// when non-nil, this wait carries a parked /tx outcome to release
-	// instead of a query result
-	txReply chan txOutcome
-	txOut   txOutcome
+	end  int64
+	w    *readWork
+	out  readOutcome
+	stop func() bool // stops the abandon callback of onReadDone
 }
 
 func openTenant(id string, dir string, mf *Manifest, etag string, store Backend, prefix, self, routeID string, opts TenantOpts, metrics *Metrics, clock leaseClock) (*Tenant, error) {
@@ -409,15 +421,18 @@ func openTenant(id string, dir string, mf *Manifest, etag string, store Backend,
 		sem:     make(chan struct{}, opts.Inflight),
 		writeCh: make(chan *txWork, 4096),
 		readCh:  make(chan *readWork, 4096),
-		// Each outcome here still holds its tenant reader slot until the
-		// actor takes it (onReadDone), so the buffer never fills and a
-		// worker never waits for the actor.
+		// Each outcome here still holds its tenant reader slot (until it
+		// is delivered or dropped), so the buffer never fills and a worker
+		// never waits for the actor.
 		readDone:  make(chan readResult, opts.MaxReaders),
 		readSlots: make(chan struct{}, opts.MaxReaders),
 		pinCh:     make(chan *pinnedRead, opts.MaxReaders),
 		ctlCh:     make(chan func(), 64),
 		done:      make(chan struct{}),
 		metrics:   metrics,
+
+		// one message per parked read, and each parked read holds a slot
+		readAbandon: make(chan *readWork, opts.MaxReaders),
 	}
 	if fi, err := os.Stat(t.dbPath); err == nil {
 		t.dbBytes = fi.Size() // before SQLite opens it: base + chain as materialized
@@ -667,23 +682,12 @@ func (t *Tenant) run() {
 				break
 			}
 			if o.readOnly {
-				// SubmitTx sends read-only work to the reader path, so this
-				// branch is a fallback only.
-				// durable-read gate: a read-only /tx must not observe
-				// applied-but-unshipped writes. Park until the watermark covers
-				// the basis, exactly like /query.
-				basis, err := t.currentCommitEnd()
-				if err != nil {
-					w.reply <- txOutcome{err: err}
-					t.failLocked(err)
-					return
-				}
-				if basis <= t.durableOff {
-					w.reply <- o
-					break
-				}
-				t.readWaits = append(t.readWaits, readWait{end: basis, txReply: w.reply, txOut: o})
-				t.cutSegment()
+				// Not reachable: SubmitTxCtx sends every transaction that
+				// allReadOnly accepts to the reader path, and applyTx uses the
+				// same test. Such a result must not park here, outside the
+				// slot and budget bounds of the reader path, and it may show
+				// state that is not durable yet. So it fails.
+				w.reply <- txOutcome{err: errors.New("read-only transaction on the write path")}
 				break
 			}
 			// a real commit (not a dedup replay) writes WAL bytes this gen
@@ -736,6 +740,8 @@ func (t *Tenant) run() {
 			}
 		case rr := <-t.readDone:
 			t.onReadDone(rr)
+		case w := <-t.readAbandon:
+			t.abandonRead(w)
 		case <-flushC:
 			flushTimer = nil
 			flushC = nil
@@ -2015,11 +2021,8 @@ func (t *Tenant) failQueued(err error) {
 	}
 	t.pending = nil
 	for _, rw := range t.readWaits {
-		if rw.txReply != nil {
-			rw.txReply <- txOutcome{err: err}
-			continue
-		}
-		rw.w.reply <- readOutcome{err: err} // slots already returned (worker, onReadDone)
+		t.unparkRead(rw)
+		t.deliverRead(rw.w, readOutcome{err: err}) // returns the slot and the budget share
 	}
 	t.readWaits = nil
 	for _, s := range t.segs {

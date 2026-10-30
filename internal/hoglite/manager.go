@@ -63,6 +63,12 @@ type Metrics struct {
 	// hold a slot, and queries waiting for one
 	QueriesInflight atomic.Int64
 	QueriesWaiting  atomic.Int64
+	// read results that wait for durability (reads.go): results parked on
+	// the tenant actors, bytes held in the pod park budget (including
+	// results on their way to the actor), and workers waiting for budget
+	ParkedReads atomic.Int64
+	ParkedBytes atomic.Int64
+	ParkWaiting atomic.Int64
 	// query guards (guards.go): reads and write transactions stopped at
 	// their deadline, and queries refused for a too large result
 	ReadTimeouts   atomic.Int64
@@ -219,7 +225,7 @@ func NewManagerSat(store Backend, prefix, id, class, baseDir string, opts Tenant
 	// near 100 MiB (550 MiB worst case) in a failover burst. Claims (4 lanes) are the slower stage, so
 	// this does not limit takeover throughput.
 	m.decodeSem = make(chan struct{}, 32)
-	m.qlim = newQueryLimiter(opts.PodMaxQueries, m.metrics)
+	m.qlim = newQueryLimiter(opts, m.metrics)
 	m.metrics.usage.configure(opts.UsageTopN, opts.UsageInterval, opts.UsageHalfLife)
 	// the first heartbeat is synchronous: no tenant may start before the
 	// write gate has a clock
