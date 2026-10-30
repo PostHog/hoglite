@@ -383,3 +383,58 @@ func TestParkBudget(t *testing.T) {
 		t.Fatalf("budget off: %d", got)
 	}
 }
+
+// A read-only /tx whose later statement fails parks an error outcome. It
+// must not keep the large results of the statements before the failure:
+// its park budget share counts no rows for an error.
+func TestParkedFailedReadTxKeepsNoResults(t *testing.T) {
+	for _, fail := range []string{"expect", "sql"} {
+		t.Run(fail, func(t *testing.T) {
+			fs, met, tens := parkTenants(t, testOpts(), "t1")
+			ten := tens[0]
+			release := stallSegments(t, fs)
+			wr := unshippedWrite(t, ten, 2)
+
+			two := int64(2)
+			second := Statement{SQL: `SELECT 1`, ExpectScalarInt: &two} // guard fails
+			if fail == "sql" {
+				second = Statement{SQL: `SELECT nope FROM kv`} // no such column
+			}
+			stmts := []Statement{{SQL: `SELECT zeroblob(1000000) AS b`}, second}
+			type txRes struct {
+				n   int
+				err error
+			}
+			done := make(chan txRes, 1)
+			go func() {
+				res, _, err := ten.SubmitTxCtx(context.Background(), TxRequest{Client: "c", TxID: "ro", Stmts: stmts})
+				done <- txRes{len(res), err}
+			}()
+			waitFor(t, "parked failed read", func() bool { return parkedCount(ten) == 1 })
+			kept := onActor(ten, func() int { return len(ten.readWaits[0].out.results) })
+			if kept != 0 || met.ParkedBytes.Load() != resultCost {
+				t.Fatalf("parked error outcome keeps %d results, share %d bytes", kept, met.ParkedBytes.Load())
+			}
+			release()
+			if err := <-wr; err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case r := <-done:
+				err := r.err
+				var ef *ExpectFailedError
+				switch {
+				case r.n != 0:
+					t.Fatalf("failed read returned %d results", r.n)
+				case fail == "expect" && !errors.As(err, &ef):
+					t.Fatalf("want ExpectFailedError, got %v", err)
+				case fail == "sql" && (err == nil || errors.As(err, &ef)):
+					t.Fatalf("want a SQL error, got %v", err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("failed read did not return")
+			}
+			allReleased(t, met, ten)
+		})
+	}
+}

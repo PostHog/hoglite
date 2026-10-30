@@ -403,7 +403,7 @@ func (t *Tenant) readWorker(pr *pinnedRead) {
 	// outcomes, and the send below never waits for the actor. The park
 	// budget share comes before the pod slot returns: while the budget is
 	// full, this worker waits with its pod slot (see the top of the file).
-	n := int64(resultCost) // an error outcome holds no rows
+	n := int64(resultCost) // an error outcome holds no rows (execRead)
 	if out.err == nil {
 		n = max(n, lim.bytes)
 	}
@@ -460,7 +460,14 @@ func (t *Tenant) drainReadDone() {
 func (t *Tenant) execRead(ctx context.Context, tx *sql.Tx, w *readWork, lim *resultLimit) readOutcome {
 	if w.tx {
 		res, err := execTxStatements(ctx, tx, w.stmts, lim)
-		return readOutcome{results: res, err: err}
+		if err != nil {
+			// execTxStatements returns the results of the statements before
+			// the failed one. No caller uses them (the /tx handler answers
+			// with the error only), and a parked outcome must not keep them:
+			// its park budget share counts no rows for an error.
+			return readOutcome{err: err}
+		}
+		return readOutcome{results: res}
 	}
 	res, err := runQuery(ctx, tx, w.stmts[0], lim)
 	if err != nil {
@@ -714,7 +721,8 @@ func podParkBudget(o TenantOpts, n int) int64 {
 // reservePark takes a share of n bytes of the park budget. It waits in
 // FIFO order until the share fits, ctx ends or done closes. A share above
 // the budget is cut to the budget, so it fits once nothing else is
-// parked. It returns the size of the share to pass to releasePark.
+// parked: that one result then passes the budget (see PodMaxParkedBytes).
+// It returns the size of the share to pass to releasePark.
 func (l *queryLimiter) reservePark(ctx context.Context, done <-chan struct{}, n int64) (int64, error) {
 	if l == nil {
 		return 0, nil

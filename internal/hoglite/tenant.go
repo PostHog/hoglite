@@ -57,7 +57,9 @@ type TenantOpts struct {
 	// PodMaxParkedBytes caps the estimated result bytes of reads that
 	// wait for durability, across all tenants of a pod (reads.go); read by
 	// the Manager. Zero selects PodMaxQueries x MaxResultBytes, a negative
-	// value turns the cap off.
+	// value turns the cap off. A result larger than the cap is charged the
+	// whole cap, so it parks only when nothing else is parked, and it
+	// alone can pass the cap. A cap of at least MaxResultBytes is strict.
 	PodMaxParkedBytes int64
 	// Query guards (guards.go). Zero selects the default, a negative value
 	// turns the guard off.

@@ -47,7 +47,7 @@ func main() {
 		deltaCkpt   = flag.Bool("delta-checkpoints", envOr("HL_DELTA_CHECKPOINTS", "true") != "false", "checkpoints upload page deltas instead of full bases (needs -compress; applies from the next checkpoint per tenant; reads accept both). Pods of a build without delta support cannot take over such a tenant: set false while such pods may still run, then enable in a second rollout")
 		maxQueries  = flag.Int("max-queries", 0, "pod-wide cap on queries admitted at once across all tenants (0 = 2 x GOMAXPROCS, min 4)")
 		maxReaders  = flag.Int("max-readers", 4, "concurrent read snapshots per tenant")
-		maxParked   = flag.Int64("max-parked-bytes", 0, "pod-wide cap on estimated bytes of read results that wait for durability (0 = max-queries x max-result-bytes; negative = off)")
+		maxParked   = flag.Int64("max-parked-bytes", 0, "pod-wide cap on estimated bytes of read results that wait for durability (0 = max-queries x max-result-bytes; negative = off; a single result above the cap parks alone, so set it to at least max-result-bytes for a strict cap)")
 		queryTO     = flag.Duration("query-timeout", 5*time.Second, "execution deadline of a read (/query, read-only /tx); negative = off")
 		writeTO     = flag.Duration("write-timeout", 10*time.Second, "execution deadline of a write transaction; it holds the tenant actor; negative = off")
 		maxRows     = flag.Int("max-result-rows", 100_000, "max rows per read response (/query, read-only /tx); negative = off")
