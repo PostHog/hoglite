@@ -1,7 +1,10 @@
 package hoglite
 
 import (
+	"bufio"
 	"encoding/binary"
+	"errors"
+	"io"
 )
 
 // WAL parsing. We ship raw byte ranges of the SQLite WAL file. SQLite may
@@ -72,6 +75,67 @@ func walCommitEnd(wal []byte) int64 {
 		}
 	}
 	return commitEnd
+}
+
+// walCommitEndReader is walCommitEnd over a stream. It holds one frame in
+// memory, so recovery can validate a WAL of any size (segments go up to
+// 1 GiB) without reading it whole. Read errors other than EOF are
+// returned; a short tail simply ends the chain, as in walCommitEnd.
+func walCommitEndReader(r io.Reader) (int64, error) {
+	br := bufio.NewReaderSize(r, 256<<10)
+	hdr := make([]byte, walHdrSize)
+	if _, err := io.ReadFull(br, hdr); err != nil {
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	var bo binary.ByteOrder
+	switch binary.BigEndian.Uint32(hdr[0:4]) {
+	case walMagicLE:
+		bo = binary.LittleEndian
+	case walMagicBE:
+		bo = binary.BigEndian
+	default:
+		return 0, nil
+	}
+	pageSize := int64(binary.BigEndian.Uint32(hdr[8:12]))
+	if pageSize == 1 {
+		pageSize = 65536
+	}
+	if pageSize < 512 || pageSize > 65536 || pageSize&(pageSize-1) != 0 {
+		return 0, nil
+	}
+	salt1 := binary.BigEndian.Uint32(hdr[16:20])
+	salt2 := binary.BigEndian.Uint32(hdr[20:24])
+	s1, s2 := walChecksum(bo, hdr[0:24], 0, 0)
+	if s1 != binary.BigEndian.Uint32(hdr[24:28]) || s2 != binary.BigEndian.Uint32(hdr[28:32]) {
+		return 0, nil
+	}
+	frameSize := walFrmHdr + pageSize
+	frame := make([]byte, frameSize)
+	var commitEnd int64
+	for off := int64(walHdrSize); ; off += frameSize {
+		if _, err := io.ReadFull(br, frame); err != nil {
+			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+				break
+			}
+			return 0, err
+		}
+		h := frame[:walFrmHdr]
+		if binary.BigEndian.Uint32(h[8:12]) != salt1 || binary.BigEndian.Uint32(h[12:16]) != salt2 {
+			break
+		}
+		s1, s2 = walChecksum(bo, h[0:8], s1, s2)
+		s1, s2 = walChecksum(bo, frame[walFrmHdr:], s1, s2)
+		if s1 != binary.BigEndian.Uint32(h[16:20]) || s2 != binary.BigEndian.Uint32(h[20:24]) {
+			break
+		}
+		if binary.BigEndian.Uint32(h[4:8]) != 0 {
+			commitEnd = off + frameSize
+		}
+	}
+	return commitEnd, nil
 }
 
 // walChecksum is SQLite's WAL checksum: s1 += x0 + s2; s2 += x1 + s1 over

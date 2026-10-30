@@ -44,6 +44,7 @@ func main() {
 		satCommitMs = flag.Float64("sat-commit-ms", 500, "commit-latency budget in ms for the saturation metric (1.0 = at limit)")
 		satInflight = flag.Float64("sat-inflight-cap", 128, "in-flight segment cap for the saturation metric")
 		compress    = flag.Bool("compress", envOr("HL_COMPRESS", "true") != "false", "publish new generations zstd-compressed (base and every WAL segment; applies from the next checkpoint per tenant; reads accept both). Pods of a build without compression support cannot take over a compressed tenant: set false while such pods may still run, then enable in a second rollout")
+		deltaCkpt   = flag.Bool("delta-checkpoints", envOr("HL_DELTA_CHECKPOINTS", "true") != "false", "checkpoints upload page deltas instead of full bases (needs -compress; applies from the next checkpoint per tenant; reads accept both). Pods of a build without delta support cannot take over such a tenant: set false while such pods may still run, then enable in a second rollout")
 	)
 	flag.Parse()
 	if *bucket == "" {
@@ -146,6 +147,9 @@ func main() {
 	}
 	opts.BatchWindow = time.Duration(*batchMs) * time.Millisecond
 	opts.Compress = *compress
+	if !*deltaCkpt {
+		opts.DeltaMaxChain = 0
+	}
 	ctrl := hoglite.ControllerOpts{Enabled: *whaleRate > 0, ScanEvery: 15 * time.Second,
 		WhaleThreshold: *whaleRate, SustainedScans: 2, Dwell: 5 * time.Minute}
 	// fencing arithmetic: the last PUT an owner can start is at

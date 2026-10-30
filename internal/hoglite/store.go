@@ -38,6 +38,19 @@ type Manifest struct {
 	// instead of misreading it. Absent (0) means raw objects only, as
 	// written by builds before compression.
 	Format int `json:"format,omitempty"`
+	// BaseSize is the stored size of the base object (format 2 only). The
+	// checkpoint uses it for the rebase rule, and recovery checks it.
+	BaseSize int64 `json:"base_size,omitempty"`
+	// Deltas is the ordered page-delta chain on top of the base (format 2
+	// only, see delta.go). State at the start of the generation = base,
+	// then every delta in order.
+	Deltas []DeltaRef `json:"deltas,omitempty"`
+}
+
+// DeltaRef names one page delta of the chain and its stored size.
+type DeltaRef struct {
+	Key  string `json:"key"`
+	Size int64  `json:"size"`
 }
 
 // Manifest formats. Bump maxManifestFormat with any change that an older
@@ -45,8 +58,34 @@ type Manifest struct {
 const (
 	manifestFormatRaw  = 0 // raw base image and raw WAL segments
 	manifestFormatZstd = 1 // base and every segment are one zstd frame each (see codec.go)
-	maxManifestFormat  = manifestFormatZstd
+	// base + page-delta chain + segments, every object one zstd frame, and
+	// base and deltas under ckpt/ (see delta.go)
+	manifestFormatChain = 2
+	maxManifestFormat   = manifestFormatChain
 )
+
+// manifestObjects returns the base and delta keys a manifest names. These
+// objects are live as long as the manifest is current.
+func manifestObjects(m *Manifest) []string {
+	out := make([]string, 0, 1+len(m.Deltas))
+	if m.BaseKey != "" {
+		out = append(out, m.BaseKey)
+	}
+	for _, d := range m.Deltas {
+		out = append(out, d.Key)
+	}
+	return out
+}
+
+// manifestNames reports whether key is the base or a delta of m.
+func manifestNames(m *Manifest, key string) bool {
+	for _, k := range manifestObjects(m) {
+		if k == key {
+			return true
+		}
+	}
+	return false
+}
 
 // ErrUnsupportedFormat means the tenant was written by a newer build whose
 // object format this build cannot read. Refusing is the only safe answer:
@@ -55,8 +94,12 @@ var ErrUnsupportedFormat = errors.New("tenant uses a newer storage format")
 
 // checkManifestFormat refuses manifests from a newer format.
 func checkManifestFormat(tid string, m *Manifest) error {
-	if m.Format > maxManifestFormat {
-		return fmt.Errorf("%w: %s has format %d, this build reads up to %d", ErrUnsupportedFormat, tid, m.Format, maxManifestFormat)
+	return checkManifestFormatMax(tid, m, maxManifestFormat)
+}
+
+func checkManifestFormatMax(tid string, m *Manifest, max int) error {
+	if m.Format > max {
+		return fmt.Errorf("%w: %s has format %d, this build reads up to %d", ErrUnsupportedFormat, tid, m.Format, max)
 	}
 	return nil
 }
@@ -127,6 +170,20 @@ func baseKey(prefix, tid, iid string, gen, epoch int64) string {
 }
 func baseKeyAttempt(prefix, tid, iid string, gen, epoch int64, attempt string) string {
 	return fmt.Sprintf("%s/i/%s/base/%06d-%06d-%s.db", tenantPrefix(prefix, tid), iid, gen, epoch, attempt)
+}
+
+// ckptKey names a base (kind "base") or a page delta (kind "delta") of a
+// chain generation. They live under ckpt/, not base/: builds before
+// format 2 parse the gen of base/ keys and delete every base of an older
+// gen, but a chain base stays live while later gens add deltas. Those
+// builds skip keys under ckpt/. attempt is the claim nonce ("" outside
+// claims), as for base keys.
+func ckptKey(prefix, tid, iid string, gen, epoch int64, attempt, kind string) string {
+	k := fmt.Sprintf("%s/i/%s/ckpt/%06d-%06d", tenantPrefix(prefix, tid), iid, gen, epoch)
+	if attempt != "" {
+		k += "-" + attempt
+	}
+	return k + "." + kind
 }
 func segKey(prefix, tid, iid string, gen, epoch, offset int64) string {
 	return fmt.Sprintf("%s/i/%s/wal/%06d/%06d/%016x.seg", tenantPrefix(prefix, tid), iid, gen, epoch, offset)

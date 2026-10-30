@@ -68,6 +68,11 @@ func segForms(t *testing.T, fs *FakeStore, tid string) (objForms, *Manifest) {
 	return f, mf
 }
 
+// zstdGen reports whether a manifest format makes every object zstd.
+func zstdGen(format int) bool {
+	return format == manifestFormatZstd || format == manifestFormatChain
+}
+
 func baseObject(t *testing.T, fs *FakeStore, tid string) []byte {
 	t.Helper()
 	mf, _, _ := fs.GetManifest(context.Background(), tid)
@@ -97,7 +102,7 @@ func TestCompressedObjectsRoundTrip(t *testing.T) {
 	if !isZstd(baseObject(t, fs, "t1")) {
 		t.Fatal("base not compressed")
 	}
-	if mf.Format != manifestFormatZstd {
+	if !zstdGen(mf.Format) {
 		t.Fatalf("manifest format %d", mf.Format)
 	}
 	if met.SegStoredBytes.Load() >= met.SegBytes.Load() || met.SegStoredBytes.Load() == 0 {
@@ -146,7 +151,7 @@ func TestGenFormatSticksAcrossFlagFlip(t *testing.T) {
 		mustTx(t, m, "t1", "c", fmt.Sprintf("b%d", i), insertStmt(int64(i), pad))
 	}
 	forms, mf := segForms(t, fs, "t1")
-	if forms.raw != 0 || forms.zst < 8 || mf.Format != manifestFormatZstd {
+	if forms.raw != 0 || forms.zst < 8 || !zstdGen(mf.Format) {
 		t.Fatalf("zstd gen after flip off: %+v format %d, want all zstd", forms, mf.Format)
 	}
 	segs, _ := fs.ListSegments(ctx, "t1", mf.Instance, mf.Gen)
@@ -186,7 +191,7 @@ func TestGenFormatSticksAcrossFlagFlip(t *testing.T) {
 	if err := m2.Release("t1", ""); err != nil {
 		t.Fatal(err)
 	}
-	if mf, _, _ := fs.GetManifest(ctx, "t1"); mf.Format != manifestFormatZstd || !isZstd(baseObject(t, fs, "t1")) {
+	if mf, _, _ := fs.GetManifest(ctx, "t1"); !zstdGen(mf.Format) || !isZstd(baseObject(t, fs, "t1")) {
 		t.Fatalf("checkpoint after flip on: format %d, want a zstd gen", mf.Format)
 	}
 	m3 := newTestManager(t, fs, "c")
@@ -229,7 +234,7 @@ func TestLegacyRawGenerationRecovers(t *testing.T) {
 	if n := countRows(t, m, "t1"); n != 5 {
 		t.Fatalf("after recovery: %d rows, want 5", n)
 	}
-	if mf, _, _ := fs.GetManifest(ctx, "t1"); mf.Format != manifestFormatZstd || !isZstd(baseObject(t, fs, "t1")) {
+	if mf, _, _ := fs.GetManifest(ctx, "t1"); !zstdGen(mf.Format) || !isZstd(baseObject(t, fs, "t1")) {
 		t.Fatal("new owner's claim should publish a zstd gen")
 	}
 }
@@ -248,7 +253,7 @@ func TestIncompressibleSegmentsStayZstd(t *testing.T) {
 		mustTx(t, m, "t1", "c", fmt.Sprintf("r%d", i), Statement{SQL: `INSERT INTO r VALUES (?, randomblob(200000))`, Args: []any{i}})
 	}
 	forms, mf := segForms(t, fs, "t1")
-	if forms.raw != 0 || forms.zst == 0 || mf.Format != manifestFormatZstd {
+	if forms.raw != 0 || forms.zst == 0 || !zstdGen(mf.Format) {
 		t.Fatalf("segments %+v format %d, want all zstd", forms, mf.Format)
 	}
 	if met.SegStoredBytes.Load() < met.SegBytes.Load()/2 {
@@ -528,6 +533,14 @@ func newLegacyManager(t *testing.T, fs *FakeStore, id string) *Manager {
 	return m
 }
 
+// newS1Manager emulates the build with compression but without page
+// deltas: it reads formats 0 and 1 and writes format 1.
+func newS1Manager(t *testing.T, fs *FakeStore, id string) *Manager {
+	m, _ := newTestManagerOpts(t, fs, id, func(o *TenantOpts) { o.DeltaMaxChain = 0 })
+	m.s1ReadForTest = true
+	return m
+}
+
 func snapshotObjects(fs *FakeStore) map[string]string {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
@@ -562,87 +575,147 @@ func TestOldBuildRefusesZstdGeneration(t *testing.T) {
 		"large-tx":       {hot: `INSERT INTO hot VALUES (1, zeroblob(67108864))`},
 		"incompressible": {hot: `INSERT INTO hot VALUES (1, randomblob(300000))`},
 	}
-	for name, sh := range shapes {
-		t.Run(name, func(t *testing.T) {
-			fs := NewFakeStore()
-			m, _ := newTestManagerOpts(t, fs, "new", func(o *TenantOpts) {
-				o.CheckpointByte = 1 << 30
-				o.MaxSegments = 1000
-			})
-			mustCreate(t, m, "t1")
-			mustTx(t, m, "t1", "c", "schema", Statement{SQL: `CREATE TABLE cold(k INTEGER PRIMARY KEY, v BLOB)`})
-			mustTx(t, m, "t1", "c", "cold", Statement{SQL: `INSERT INTO cold VALUES (1, zeroblob(4096))`})
-			if sh.hot != "" {
-				// fold "cold" into a zstd base, then write the hot tx as
-				// the first segment of the next generation
-				if err := m.Release("t1", ""); err != nil {
-					t.Fatal(err)
-				}
-				mustTx(t, m, "t1", "c", "hot",
-					Statement{SQL: `CREATE TABLE hot(k INTEGER PRIMARY KEY, v BLOB)`},
-					Statement{SQL: sh.hot})
+	// "zstd": deltas off, a format 1 gen, read by a build before
+	// compression. "chain": deltas on, a format 2 gen with a delta chain,
+	// read by a build before compression and by a build with compression
+	// but without deltas. Every reader must refuse.
+	type mode struct {
+		deltas  bool
+		format  int
+		readers []string
+	}
+	modes := map[string]mode{
+		"zstd":  {false, manifestFormatZstd, []string{"legacy"}},
+		"chain": {true, manifestFormatChain, []string{"legacy", "s1"}},
+	}
+	for mname, md := range modes {
+		for name, sh := range shapes {
+			for _, reader := range md.readers {
+				t.Run(mname+"/"+name+"/"+reader, func(t *testing.T) {
+					oldBuildRefusal(t, ctx, name, sh.hot, sh.release, md.deltas, md.format, reader)
+				})
 			}
-			if sh.release {
-				if err := m.Release("t1", ""); err != nil {
-					t.Fatal(err)
-				}
-			} else {
-				crashTenant(t, m, "t1")
-				waitLeaseExpiry()
-			}
-			forms, mf := segForms(t, fs, "t1")
-			if mf.Format != manifestFormatZstd || forms.raw != 0 || !isZstd(baseObject(t, fs, "t1")) {
-				t.Fatalf("want a pure zstd gen: format %d segments %+v", mf.Format, forms)
-			}
-			if !sh.release && forms.zst == 0 {
-				t.Fatal("want segments")
-			}
-			if name == "large-tx" {
-				// one segment above 64 MiB (the old in-memory cap)
-				segs, _ := fs.ListSegments(ctx, "t1", mf.Instance, mf.Gen)
-				var largest int
-				for _, sg := range segs {
-					st, _ := fs.GetObject(ctx, sg.Key)
-					d, err := decodeBlob(st, maxSegmentRawBytes)
-					if err != nil {
-						t.Fatal(err)
-					}
-					largest = max(largest, len(d))
-				}
-				if largest <= 64<<20 {
-					t.Fatalf("largest segment %d bytes, want > 64 MiB", largest)
-				}
-			}
+		}
+	}
+}
 
-			before := snapshotObjects(fs)
-			old := newLegacyManager(t, fs, "old")
-			if _, err := old.Acquire(ctx, "t1", false); err == nil {
-				t.Fatal("old build took over a zstd generation")
-			} else {
-				t.Logf("old build refused: %v", err)
+func oldBuildRefusal(t *testing.T, ctx context.Context, name, hot string, release, deltas bool, wantFormat int, reader string) {
+	sh := struct {
+		hot     string
+		release bool
+	}{hot, release}
+	fs := NewFakeStore()
+	m, _ := newTestManagerOpts(t, fs, "new", func(o *TenantOpts) {
+		o.CheckpointByte = 1 << 30
+		o.MaxSegments = 1000
+		if !deltas {
+			o.DeltaMaxChain = 0
+		}
+		o.DeltaMaxRatio = 1000 // tiny base: keep the deltas
+	})
+	mustCreate(t, m, "t1")
+	mustTx(t, m, "t1", "c", "schema", Statement{SQL: `CREATE TABLE cold(k INTEGER PRIMARY KEY, v BLOB)`})
+	mustTx(t, m, "t1", "c", "cold", Statement{SQL: `INSERT INTO cold VALUES (1, zeroblob(4096))`})
+	if sh.hot != "" {
+		// fold "cold" into a zstd base, then write the hot tx as
+		// the first segment of the next generation
+		if err := m.Release("t1", ""); err != nil {
+			t.Fatal(err)
+		}
+		mustTx(t, m, "t1", "c", "hot",
+			Statement{SQL: `CREATE TABLE hot(k INTEGER PRIMARY KEY, v BLOB)`},
+			Statement{SQL: sh.hot})
+	}
+	if sh.release {
+		if err := m.Release("t1", ""); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		crashTenant(t, m, "t1")
+		waitLeaseExpiry()
+	}
+	forms, mf := segForms(t, fs, "t1")
+	if mf.Format != wantFormat || forms.raw != 0 || !isZstd(baseObject(t, fs, "t1")) {
+		t.Fatalf("want a pure zstd gen of format %d: format %d segments %+v", wantFormat, mf.Format, forms)
+	}
+	// "segments" has no checkpoint after the create: a chain gen with an
+	// empty chain, which must be refused too
+	if deltas && (sh.release || sh.hot != "") {
+		if len(mf.Deltas) == 0 {
+			t.Fatal("want a delta chain")
+		}
+		for _, d := range mf.Deltas {
+			if b, err := fs.GetObject(ctx, d.Key); err != nil || !isZstd(b) {
+				t.Fatalf("delta %s: zstd %v, err %v", d.Key, isZstd(b), err)
 			}
-			after := snapshotObjects(fs)
-			if len(after) != len(before) {
-				t.Fatalf("old build changed the object set: %d -> %d objects", len(before), len(after))
+		}
+	}
+	if !sh.release && forms.zst == 0 {
+		t.Fatal("want segments")
+	}
+	if name == "large-tx" {
+		// one segment above 64 MiB (the old in-memory cap)
+		segs, _ := fs.ListSegments(ctx, "t1", mf.Instance, mf.Gen)
+		var largest int
+		for _, sg := range segs {
+			st, _ := fs.GetObject(ctx, sg.Key)
+			d, err := decodeBlob(st, maxSegmentRawBytes)
+			if err != nil {
+				t.Fatal(err)
 			}
-			for k, v := range before {
-				if after[k] != v {
-					t.Fatalf("old build changed or deleted %s", k)
-				}
-			}
+			largest = max(largest, len(d))
+		}
+		if largest <= 64<<20 {
+			t.Fatalf("largest segment %d bytes, want > 64 MiB", largest)
+		}
+	}
 
-			m2 := newTestManager(t, fs, "new2")
-			res := mustQuery(t, m2, "t1", `SELECT COUNT(*), SUM(LENGTH(v)) FROM cold`)
-			if fmt.Sprint(res.Rows) != "[[1 4096]]" {
-				t.Fatalf("acked cold table after old refusal: %v", res.Rows)
+	before := snapshotObjects(fs)
+	beforeMf, beforeTag, _ := fs.GetManifest(ctx, "t1")
+	var old *Manager
+	if reader == "s1" {
+		old = newS1Manager(t, fs, "old")
+	} else {
+		old = newLegacyManager(t, fs, "old")
+	}
+	if _, err := old.Acquire(ctx, "t1", false); err == nil {
+		t.Fatal("old build took over a zstd generation")
+	} else {
+		t.Logf("old build refused: %v", err)
+	}
+	// its sweeper must not touch the tenant either
+	if reader == "s1" {
+		NewSweeper(old, fs, "fake", testOpts(), &Metrics{}).sweepTenant(ctx, "t1")
+	} else if g := legacySweepGarbage(fs, beforeMf); len(g) > 0 {
+		for _, k := range g {
+			if manifestNames(beforeMf, k) {
+				t.Fatalf("the sweeper of a build before compression deletes live %s", k)
 			}
-			if sh.hot != "" {
-				res := mustQuery(t, m2, "t1", `SELECT COUNT(*) FROM hot`)
-				if fmt.Sprint(res.Rows) != "[[1]]" {
-					t.Fatalf("hot table: %v", res.Rows)
-				}
-			}
-		})
+		}
+	}
+	if mf2, tag2, _ := fs.GetManifest(ctx, "t1"); tag2 != beforeTag || !manifestEqual(mf2, beforeMf) {
+		t.Fatal("old build published a manifest")
+	}
+	after := snapshotObjects(fs)
+	if len(after) != len(before) {
+		t.Fatalf("old build changed the object set: %d -> %d objects", len(before), len(after))
+	}
+	for k, v := range before {
+		if after[k] != v {
+			t.Fatalf("old build changed or deleted %s", k)
+		}
+	}
+
+	m2 := newTestManager(t, fs, "new2")
+	res := mustQuery(t, m2, "t1", `SELECT COUNT(*), SUM(LENGTH(v)) FROM cold`)
+	if fmt.Sprint(res.Rows) != "[[1 4096]]" {
+		t.Fatalf("acked cold table after old refusal: %v", res.Rows)
+	}
+	if sh.hot != "" {
+		res := mustQuery(t, m2, "t1", `SELECT COUNT(*) FROM hot`)
+		if fmt.Sprint(res.Rows) != "[[1]]" {
+			t.Fatalf("hot table: %v", res.Rows)
+		}
 	}
 }
 
@@ -671,7 +744,7 @@ type gateStore struct {
 }
 
 func (g *gateStore) GetObjectTo(ctx context.Context, key string, w io.Writer) error {
-	if strings.Contains(key, "/base/") || strings.Contains(key, ".db") {
+	if strings.Contains(key, "/base/") || strings.Contains(key, ".db") || strings.HasSuffix(key, ".base") {
 		g.mu.Lock()
 		g.cur++
 		g.peak = max(g.peak, g.cur)

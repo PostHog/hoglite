@@ -12,6 +12,9 @@ package hoglite
 //   - manifestFormatZstd (1): every object is exactly one zstd frame.
 //     There is no raw fallback for size, incompressibility or any other
 //     reason. A raw object in such a generation is corruption.
+//   - manifestFormatChain (2): as format 1 (every object one zstd frame),
+//     and the start state is the base plus a chain of page deltas
+//     (see delta.go).
 //
 // The writer fixes the format when it publishes a generation (checkpoint
 // CAS) and keeps it until the next one, whatever the Compress flag does

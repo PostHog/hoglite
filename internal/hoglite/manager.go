@@ -49,6 +49,16 @@ type Metrics struct {
 	SegStoredBytes  atomic.Int64
 	BaseBytes       atomic.Int64 // raw base image bytes uploaded
 	BaseStoredBytes atomic.Int64
+
+	// Page-delta checkpoints (format 2). DeltaCheckpoints counts
+	// checkpoints that uploaded a delta or no object at all; Rebases counts
+	// full bases that start a new chain. CheckpointMs is the total time of
+	// the fold, upload and CAS of every checkpoint (writes wait meanwhile).
+	DeltaCheckpoints atomic.Int64
+	DeltaBytes       atomic.Int64 // raw delta bytes uploaded
+	DeltaStoredBytes atomic.Int64
+	Rebases          atomic.Int64
+	CheckpointMs     atomic.Int64
 }
 
 // ewmaUpdate folds a sample into an atomic EWMA with alpha=1/8.
@@ -120,9 +130,12 @@ type Manager struct {
 	claimSem      chan struct{} // claims get their own lane: slow release
 	// checkpoints must never starve a takeover
 	decodeSem chan struct{} // bounds concurrent decoding materializations pod-wide
-	// legacyReadForTest makes materialize read every object raw and skip
-	// the format gate, like a build from before compression. Tests only.
+	// legacyReadForTest makes this manager read like a build from before
+	// compression: every object raw, no format gate, no delta chain.
+	// s1ReadForTest makes it read like the build with compression but
+	// without deltas: the format gate stops at format 1. Tests only.
 	legacyReadForTest bool
+	s1ReadForTest     bool
 
 	maxOpen int // soft cap on simultaneously open tenants
 
@@ -527,7 +540,7 @@ func (m *Manager) Acquire(ctx context.Context, tid string, create bool) (*Tenant
 		// a tenant written by a newer build: refuse before touching any of
 		// its objects. The check sits after the liveness wait, so a tenant
 		// that a live newer peer owns still answers ErrBusy (re-route).
-		if err := checkManifestFormat(tid, mf); err != nil {
+		if err := m.formatGate(tid, mf); err != nil {
 			return nil, err
 		}
 		// lease expired or free: take over
@@ -691,14 +704,36 @@ var errStaleGen = errors.New("generation objects changed during recovery")
 // were busy. Nothing touched the store, so no claim cooldown follows.
 var errDecodeSlotWait = errors.New("waiting for a decode slot")
 
-// materializeLocked downloads the base image and replays the contiguous
-// segment run into dir.
+// formatGate refuses a manifest whose format this build cannot read.
+func (m *Manager) formatGate(tid string, mf *Manifest) error {
+	switch {
+	case m.legacyReadForTest:
+		return nil // the build before compression has no gate
+	case m.s1ReadForTest:
+		return checkManifestFormatMax(tid, mf, manifestFormatZstd)
+	}
+	return checkManifestFormat(tid, mf)
+}
+
+// materializeLocked downloads the base image, applies the delta chain and
+// replays the contiguous segment run into dir.
 func (m *Manager) materializeLocked(ctx context.Context, tid string, mf *Manifest, dir string) error {
 	format := mf.Format
+	chain := format == manifestFormatChain
 	if m.legacyReadForTest {
 		format = manifestFormatRaw // emulate a build from before compression
-	} else if err := checkManifestFormat(tid, mf); err != nil {
+		chain = false              // ... which does not know deltas
+	} else if err := m.formatGate(tid, mf); err != nil {
 		return err
+	} else if m.s1ReadForTest {
+		chain = false
+	}
+	// a delta list outside a chain generation (or a chain without a size)
+	// is a manifest no writer of this build produces: refuse it
+	if !m.legacyReadForTest && !m.s1ReadForTest {
+		if (format != manifestFormatChain && len(mf.Deltas) > 0) || (chain && mf.BaseSize <= 0) {
+			return fmt.Errorf("inconsistent manifest for %s: format %d, %d deltas, base size %d", tid, format, len(mf.Deltas), mf.BaseSize)
+		}
 	}
 	if format != manifestFormatRaw {
 		// decoders hold memory while they run: bound how many
@@ -714,19 +749,31 @@ func (m *Manager) materializeLocked(ctx context.Context, tid string, mf *Manifes
 	dbPath := filepath.Join(dir, "db.sqlite")
 	walPath := filepath.Join(dir, "db.sqlite-wal")
 
-	base, err := os.OpenFile(dbPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+	base, err := os.OpenFile(dbPath, os.O_CREATE|os.O_TRUNC|os.O_RDWR, 0o644) // read too: the chain checks the header
 	if err != nil {
 		return err
 	}
 	// the generation format says how every object of the generation is
 	// stored; there is no content sniffing. A zstd base streams through
 	// the decoder to disk, never whole into memory.
-	if _, _, err := fetchObjectTo(ctx, m.store, mf.BaseKey, base, format, maxBaseRawBytes); err != nil {
+	_, stored, err := fetchObjectTo(ctx, m.store, mf.BaseKey, base, format, maxBaseRawBytes)
+	if err != nil {
 		base.Close()
 		if errors.Is(err, ErrNotFound) {
 			return errStaleGen
 		}
 		return fmt.Errorf("fetch base: %w", err)
+	}
+	if chain {
+		if stored != mf.BaseSize {
+			base.Close()
+			return fmt.Errorf("fetch base: %w: stored size %d, manifest says %d", ErrCorruptObject, stored, mf.BaseSize)
+		}
+		// base + deltas in order = the state at the start of this gen
+		if err := applyChain(ctx, m.store, tid, mf, dir, base); err != nil {
+			base.Close()
+			return err
+		}
 	}
 	if err := base.Close(); err != nil {
 		return err
@@ -793,12 +840,21 @@ func (m *Manager) materializeLocked(ctx context.Context, tid string, mf *Manifes
 	// commit boundaries, so the checksum chain must end exactly at EOF.
 	// A short parse means corruption in supposedly immutable objects —
 	// refuse rather than publish a truncated replacement over history.
-	raw, err := os.ReadFile(walPath)
+	// The check streams: one frame in memory, whatever the WAL size.
+	wf, err := os.Open(walPath)
 	if err != nil {
 		return err
 	}
-	if end := walCommitEnd(raw); end != int64(len(raw)) {
-		return fmt.Errorf("wal replay incomplete: parsed %d of %d bytes (corruption in stored segments)", end, len(raw))
+	defer wf.Close()
+	end, err := walCommitEndReader(wf)
+	if err != nil {
+		return err
+	}
+	if fi, err := wf.Stat(); err != nil || fi.Size() != expect {
+		return fmt.Errorf("wal replay: file size does not match %d segment bytes (%v)", expect, err)
+	}
+	if end != expect {
+		return fmt.Errorf("wal replay incomplete: parsed %d of %d bytes (corruption in stored segments)", end, expect)
 	}
 	return nil
 }
@@ -1123,7 +1179,10 @@ func (m *Manager) Stats() map[string]any {
 		"seg_puts": m.metrics.SegPuts.Load(), "seg_bytes": m.metrics.SegBytes.Load(),
 		"seg_stored_bytes": m.metrics.SegStoredBytes.Load(),
 		"base_bytes":       m.metrics.BaseBytes.Load(), "base_stored_bytes": m.metrics.BaseStoredBytes.Load(),
-		"acquires": m.metrics.Acquires.Load(), "checkpoints": m.metrics.Checkpoints.Load(),
+		"delta_checkpoints": m.metrics.DeltaCheckpoints.Load(), "delta_bytes": m.metrics.DeltaBytes.Load(),
+		"delta_stored_bytes": m.metrics.DeltaStoredBytes.Load(), "rebases": m.metrics.Rebases.Load(),
+		"checkpoint_ms": m.metrics.CheckpointMs.Load(),
+		"acquires":      m.metrics.Acquires.Load(), "checkpoints": m.metrics.Checkpoints.Load(),
 		"proxied": m.metrics.Proxied.Load(), "evictions": m.metrics.Evictions.Load(),
 		"dedup_hits": m.metrics.DedupHits.Load(),
 	}
