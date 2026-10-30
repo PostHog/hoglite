@@ -42,6 +42,7 @@ package hoglite
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"math"
 	"os"
 	"path/filepath"
@@ -182,56 +183,97 @@ func CgroupMemoryLimit() (limit int64, src string, err error) {
 // and the hierarchy path that the mount shows (its root). The process
 // directory is the mount point plus the process path below that root.
 // The memory controller of cgroup v1 wins over cgroup v2 (hybrid layout).
-// Limits of parent cgroups also apply, so the smallest limit from the
-// process cgroup up to the mount point wins. Without mountinfo, the
-// standard mount points apply (/sys/fs/cgroup, /sys/fs/cgroup/memory).
+//
+// Limits of parent cgroups also apply. One mount can show more of the
+// ancestors than another, so the result is the smallest limit over every
+// mount of the hierarchy that contains the process, each from the
+// process cgroup up to its mount point. When no mount contains the
+// process (a cgroup namespace), the mount points are the closest visible
+// cgroups. Without mountinfo, the standard mount points apply
+// (/sys/fs/cgroup, /sys/fs/cgroup/memory).
+//
+// A file that does not exist is skipped; any other read error is
+// returned, so that the start can fail instead of running without a cap.
 func cgroupMemoryLimit(root string) (int64, string, error) {
 	v2path, v1path := "", ""
-	if b, err := os.ReadFile(filepath.Join(root, "proc/self/cgroup")); err == nil {
-		for _, line := range strings.Split(string(b), "\n") {
-			parts := strings.SplitN(line, ":", 3)
-			if len(parts) != 3 {
-				continue
-			}
-			if parts[0] == "0" && parts[1] == "" {
-				v2path = parts[2]
-			}
-			for _, c := range strings.Split(parts[1], ",") {
-				if c == "memory" {
-					v1path = parts[2]
-				}
+	b, err := readOptional(filepath.Join(root, "proc/self/cgroup"))
+	if err != nil {
+		return 0, "", err
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		parts := strings.SplitN(line, ":", 3)
+		if len(parts) != 3 {
+			continue
+		}
+		if parts[0] == "0" && parts[1] == "" {
+			v2path = parts[2]
+		}
+		for _, c := range strings.Split(parts[1], ",") {
+			if c == "memory" {
+				v1path = parts[2]
 			}
 		}
 	}
-	if mounts, err := readMountinfo(filepath.Join(root, "proc/self/mountinfo")); err == nil {
-		if v1path != "" {
-			if mt, ok := pickMount(mounts, v1path, func(m mountEntry) bool {
-				return m.fstype == "cgroup" && hasOpt(m.superopts, "memory")
-			}); ok {
-				return cgroupWalk(filepath.Join(root, mt.point), relCgroupPath(mt.root, v1path), "memory.limit_in_bytes")
-			}
-		}
-		if v2path != "" {
-			if mt, ok := pickMount(mounts, v2path, func(m mountEntry) bool { return m.fstype == "cgroup2" }); ok {
-				return cgroupWalk(filepath.Join(root, mt.point), relCgroupPath(mt.root, v2path), "memory.max")
-			}
+	mounts, err := readMountinfo(filepath.Join(root, "proc/self/mountinfo"))
+	if err != nil {
+		return 0, "", err
+	}
+	if v1path != "" {
+		if ms := filterMounts(mounts, func(m mountEntry) bool {
+			return m.fstype == "cgroup" && hasOpt(m.superopts, "memory")
+		}); len(ms) > 0 {
+			return cgroupMounts(root, ms, v1path, "memory.limit_in_bytes")
 		}
 	}
-	if _, err := os.Stat(filepath.Join(root, "sys/fs/cgroup/cgroup.controllers")); err == nil {
+	if v2path != "" {
+		if ms := filterMounts(mounts, func(m mountEntry) bool { return m.fstype == "cgroup2" }); len(ms) > 0 {
+			return cgroupMounts(root, ms, v2path, "memory.max")
+		}
+	}
+	// no mountinfo, or no cgroup mount in it: the standard mount points
+	if ok, err := exists(filepath.Join(root, "sys/fs/cgroup/cgroup.controllers")); err != nil {
+		return 0, "", err
+	} else if ok {
 		return cgroupWalk(filepath.Join(root, "sys/fs/cgroup"), v2path, "memory.max")
 	}
 	mount := filepath.Join(root, "sys/fs/cgroup/memory")
-	if _, err := os.Stat(mount); err == nil {
+	if ok, err := exists(mount); err != nil {
+		return 0, "", err
+	} else if ok {
 		return cgroupWalk(mount, v1path, "memory.limit_in_bytes")
 	}
 	return 0, "", nil // no cgroup memory controller: no limit
 }
 
+// readOptional reads a file. A file that does not exist gives no data
+// and no error.
+func readOptional(path string) ([]byte, error) {
+	b, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	return b, err
+}
+
+// exists reports whether path exists. Errors other than "does not
+// exist" are returned.
+func exists(path string) (bool, error) {
+	_, err := os.Stat(path)
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	return false, err
+}
+
 // mountEntry is one line of /proc/self/mountinfo.
 type mountEntry struct{ root, point, fstype, superopts string }
 
+// readMountinfo parses mountinfo. A missing file gives no entries.
 func readMountinfo(path string) ([]mountEntry, error) {
-	b, err := os.ReadFile(path)
+	b, err := readOptional(path)
 	if err != nil {
 		return nil, err
 	}
@@ -283,46 +325,70 @@ func hasOpt(opts, want string) bool {
 	return false
 }
 
-// pickMount selects the mount of a hierarchy for the process path p. A
-// mount whose root contains p wins; among those, the deepest root, then
-// the standard mount point.
-func pickMount(mounts []mountEntry, p string, match func(mountEntry) bool) (mountEntry, bool) {
-	var best mountEntry
-	found, bestUnder := false, false
+func filterMounts(mounts []mountEntry, match func(mountEntry) bool) []mountEntry {
+	var out []mountEntry
 	for _, m := range mounts {
-		if !match(m) {
-			continue
-		}
-		under := underCgroup(m.root, p)
-		better := !found ||
-			(under && !bestUnder) ||
-			(under == bestUnder && len(m.root) > len(best.root)) ||
-			(under == bestUnder && len(m.root) == len(best.root) && strings.HasPrefix(m.point, "/sys/fs/cgroup") && !strings.HasPrefix(best.point, "/sys/fs/cgroup"))
-		if better {
-			best, found, bestUnder = m, true, under
+		if match(m) {
+			out = append(out, m)
 		}
 	}
-	return best, found
+	return out
+}
+
+// cgroupMounts returns the smallest limit over the mounts ms of one
+// hierarchy for the process path p (see cgroupMemoryLimit).
+func cgroupMounts(root string, ms []mountEntry, p, file string) (int64, string, error) {
+	var under []mountEntry
+	for _, m := range ms {
+		if underCgroup(m.root, p) {
+			under = append(under, m)
+		}
+	}
+	var best int64
+	var src string
+	take := func(v int64, s string) {
+		if v > 0 && (best == 0 || v < best) {
+			best, src = v, s
+		}
+	}
+	if len(under) == 0 {
+		// no mount shows the process cgroup: each mount point is an
+		// ancestor or the closest visible cgroup
+		for _, m := range ms {
+			v, s, err := cgroupWalk(filepath.Join(root, m.point), "/", file)
+			if err != nil {
+				return 0, "", err
+			}
+			take(v, s)
+		}
+		return best, src, nil
+	}
+	for _, m := range under {
+		v, s, err := cgroupWalk(filepath.Join(root, m.point), relCgroupPath(m.root, p), file)
+		if err != nil {
+			return 0, "", err
+		}
+		take(v, s)
+	}
+	return best, src, nil
 }
 
 // underCgroup reports whether the hierarchy path p is root or below it.
-// A root with ".." (a cgroup namespace shows the mount of a cgroup above
-// its own root this way) never contains p.
+// A root with a ".." element (a cgroup namespace shows the mount of a
+// cgroup above its own root this way) never contains p.
 func underCgroup(root, p string) bool {
-	if strings.Contains(root, "..") {
-		return false
+	for _, e := range strings.Split(root, "/") {
+		if e == ".." {
+			return false
+		}
 	}
 	root, p = filepath.Clean("/"+root), filepath.Clean("/"+p)
 	return root == "/" || p == root || strings.HasPrefix(p, root+"/")
 }
 
-// relCgroupPath returns the process path p relative to the mount root.
-// A p outside the root gives "/": the mount point is then the closest
-// visible cgroup.
+// relCgroupPath returns the process path p relative to the mount root
+// (p must be under root, see underCgroup).
 func relCgroupPath(root, p string) string {
-	if !underCgroup(root, p) {
-		return "/"
-	}
 	root, p = filepath.Clean("/"+root), filepath.Clean("/"+p)
 	if root == "/" {
 		return p
@@ -331,17 +397,26 @@ func relCgroupPath(root, p string) string {
 }
 
 // cgroupWalk returns the smallest limit in file from mount/rel up to
-// mount. A rel that does not exist below mount starts at mount.
+// mount. A rel that does not exist below mount starts at mount (a view
+// that hides the process cgroup).
 func cgroupWalk(mount, rel, file string) (int64, string, error) {
 	dir := filepath.Join(mount, filepath.Clean("/"+rel))
-	if _, err := os.Stat(dir); err != nil {
+	if ok, err := exists(dir); err != nil {
+		return 0, "", err
+	} else if !ok {
 		dir = mount
 	}
 	var best int64
 	var src string
 	for {
 		p := filepath.Join(dir, file)
-		if b, err := os.ReadFile(p); err == nil {
+		b, err := os.ReadFile(p)
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			// the root cgroup has no limit file
+		case err != nil:
+			return 0, "", err
+		default:
 			v, err := parseCgroupLimit(string(b))
 			if err != nil {
 				return 0, "", fmt.Errorf("%s: %w", p, err)

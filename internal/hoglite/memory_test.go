@@ -19,6 +19,7 @@ import (
 	"runtime/debug"
 	"runtime/metrics"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unsafe"
@@ -625,19 +626,28 @@ func disableLookaside(h uintptr) error {
 }
 
 // noLookasideForTest disables lookaside on every connection that a
-// tenant of this test opens (its files are below the test's temp dir).
-func noLookasideForTest(t *testing.T) {
-	name := strings.NewReplacer("/", "_", "#", "_").Replace(t.Name())
+// tenant of this test opens. Its files are below the temp parent of t:
+// all t.TempDir calls of one test share that parent, whatever the test
+// name becomes in the path. hits counts the connections that the hook
+// changed; tests assert it, so a hook that never matches fails.
+func noLookasideForTest(t *testing.T) (hits func() int64) {
+	marker := filepath.Dir(t.TempDir()) + string(os.PathSeparator)
+	var n atomic.Int64
 	sqlite.RegisterConnectionHook(func(c sqlite.ExecQuerierContext, dsn string) error {
-		if !strings.Contains(dsn, name) {
+		if !strings.Contains(dsn, marker) {
 			return nil
 		}
 		v := reflect.ValueOf(c)
 		if v.Kind() != reflect.Pointer || !v.Elem().FieldByName("db").IsValid() {
 			return errNoHandle
 		}
-		return disableLookaside(uintptr(v.Elem().FieldByName("db").Uint()))
+		if err := disableLookaside(uintptr(v.Elem().FieldByName("db").Uint())); err != nil {
+			return err
+		}
+		n.Add(1)
+		return nil
 	})
+	return n.Load
 }
 
 // NaN and infinite fractions fail every comparison; they must not pass
@@ -742,8 +752,9 @@ func TestPinOutOfMemoryHTTP(t *testing.T) {
 	for _, path := range []string{"query", "tx"} {
 		for _, step := range []string{"prepare", "connection", "begin"} {
 			t.Run(path+"/"+step, func(t *testing.T) {
+				hits := func() int64 { return 0 }
 				if step == "begin" {
-					noLookasideForTest(t)
+					hits = noLookasideForTest(t)
 				}
 				m, ten, met := guardTenant(t, testOpts())
 				if step != "prepare" {
@@ -752,6 +763,7 @@ func TestPinOutOfMemoryHTTP(t *testing.T) {
 				if step == "connection" {
 					ten.roDB.SetMaxIdleConns(0)
 				}
+				openBefore := ten.roDB.Stats().OpenConnections
 				srv := httptest.NewServer(NewServer(m, nil).Handler())
 				defer srv.Close()
 				var body []byte
@@ -773,6 +785,15 @@ func TestPinOutOfMemoryHTTP(t *testing.T) {
 				if resp.StatusCode != 507 || ae.Code != "out_of_memory" || met.OutOfMemory.Load() != 1 {
 					t.Fatalf("got %d %+v, out of memory metric %d", resp.StatusCode, ae, met.OutOfMemory.Load())
 				}
+				if step == "begin" {
+					// the warm pin opened no connection: the failure came
+					// from BEGIN or the probe on a connection without
+					// lookaside
+					if hits() == 0 || ten.roDB.Stats().OpenConnections != openBefore {
+						t.Fatalf("setup: lookaside hook hits %d, read connections %d -> %d",
+							hits(), openBefore, ten.roDB.Stats().OpenConnections)
+					}
+				}
 				if !ten.Alive() || countRows(t, m, "t1") != 0 {
 					t.Fatal("tenant unusable after the failed pin")
 				}
@@ -784,9 +805,12 @@ func TestPinOutOfMemoryHTTP(t *testing.T) {
 // SQLITE_NOMEM in BEGIN keeps the tenant open, for a write and a read;
 // the write's txid commits on retry.
 func TestBeginOutOfMemoryKeepsTenant(t *testing.T) {
-	noLookasideForTest(t)
+	hits := noLookasideForTest(t)
 	m, ten, met := guardTenant(t, testOpts())
 	mustQuery(t, m, "t1", "SELECT 1")
+	if hits() < 2 {
+		t.Fatalf("setup: lookaside hook hits %d, want the write and a read connection", hits())
+	}
 	restore := withHeapLimitAt(t, 1)
 	_, _, we := ten.SubmitTx(TxRequest{Client: "c", TxID: "begin", Stmts: []Statement{insertStmt(1, "lost")}})
 	_, re := ten.SubmitQuery(Statement{SQL: "SELECT 1"})
@@ -807,8 +831,11 @@ func TestBeginOutOfMemoryKeepsTenant(t *testing.T) {
 // transaction. endOpenTx must see it and fail the tenant, and nothing
 // ships. Without the check the next BEGIN fails forever.
 func TestRollbackOutOfMemoryPoisonsWrite(t *testing.T) {
-	noLookasideForTest(t)
+	hits := noLookasideForTest(t)
 	_, ten, met := guardTenant(t, testOpts())
+	if hits() == 0 {
+		t.Fatal("setup: lookaside hook never matched")
+	}
 	puts0 := met.SegPuts.Load()
 	restore := func() {}
 	onActor(ten, func() bool { ten.txHook = func() { restore = withHeapLimitAt(t, 1) }; return true })
@@ -953,6 +980,147 @@ func TestWatermarkClearsSlots(t *testing.T) {
 	for i := 1; i < len(pending); i++ {
 		if pending[i].reply != nil || pending[i].outcome.err != nil || pending[i].outcome.dup {
 			t.Fatalf("pending slot %d kept", i)
+		}
+	}
+}
+
+// cgroupFixture writes files below a new temp dir and returns it.
+func cgroupFixture(t *testing.T, files map[string]string) string {
+	t.Helper()
+	root := t.TempDir()
+	for p, s := range files {
+		p = filepath.Join(root, p)
+		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(s), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return root
+}
+
+// mountinfo layouts from the re-review of Q3 (R1, R2) and controls.
+func TestCgroupMountinfoEdges(t *testing.T) {
+	const gib, mib256 = "1073741824\n", "268435456\n"
+	full := "29 1 0:26 / /sys/fs/cgroup rw - cgroup2 cgroup rw\n"
+	leaf := "30 1 0:26 /top/leaf /run/leaf rw - cgroup2 cgroup rw\n"
+	ancestor := map[string]string{"proc/self/cgroup": "0::/top/leaf\n",
+		"sys/fs/cgroup/top/memory.max": mib256, "sys/fs/cgroup/top/leaf/memory.max": gib, "run/leaf/memory.max": gib}
+	with := func(base map[string]string, kv ...string) map[string]string {
+		out := map[string]string{}
+		for k, v := range base {
+			out[k] = v
+		}
+		for i := 0; i < len(kv); i += 2 {
+			out[kv[i]] = kv[i+1]
+		}
+		return out
+	}
+	cases := []struct {
+		name  string
+		files map[string]string
+		want  int64
+	}{
+		// R1: a deeper mount hides the parent limit that the full mount shows
+		{"tighter ancestor, full mount first", with(ancestor, "proc/self/mountinfo", full+leaf), 256 << 20},
+		{"tighter ancestor, leaf mount first", with(ancestor, "proc/self/mountinfo", leaf+full), 256 << 20},
+		{"tighter leaf, both mounts", with(ancestor, "proc/self/mountinfo", full+leaf,
+			"sys/fs/cgroup/top/memory.max", gib, "sys/fs/cgroup/top/leaf/memory.max", mib256, "run/leaf/memory.max", mib256), 256 << 20},
+		{"v1 tighter ancestor", map[string]string{"proc/self/cgroup": "11:memory:/top/leaf\n",
+			"proc/self/mountinfo":                            "30 1 0:27 /top/leaf /run/leaf rw - cgroup cgroup rw,memory\n31 1 0:27 / /sys/fs/cgroup/memory rw - cgroup cgroup rw,memory\n",
+			"sys/fs/cgroup/memory/top/memory.limit_in_bytes": mib256, "sys/fs/cgroup/memory/top/leaf/memory.limit_in_bytes": gib,
+			"run/leaf/memory.limit_in_bytes": gib}, 256 << 20},
+		// R2: ".." inside a name is not a parent element
+		{"dots within a legal name", map[string]string{"proc/self/cgroup": "0::/build..jobs/worker\n",
+			"proc/self/mountinfo":   "29 1 0:26 /build..jobs /run/cgroup rw - cgroup2 cgroup rw\n",
+			"run/cgroup/memory.max": gib, "run/cgroup/worker/memory.max": mib256}, 256 << 20},
+		{"hybrid: memory on v1", map[string]string{"proc/self/cgroup": "11:memory:/tenant/leaf\n0::/ignored\n",
+			"proc/self/mountinfo":       "29 1 0:26 / /run/v2 rw - cgroup2 cgroup rw\n30 1 0:27 /tenant /run/v1 rw - cgroup cgroup rw,memory\n",
+			"run/v2/ignored/memory.max": gib, "run/v1/leaf/memory.limit_in_bytes": mib256}, 256 << 20},
+		{"escaped root and mount point", map[string]string{"proc/self/cgroup": "0::/root name/a\\b/leaf\n",
+			"proc/self/mountinfo":     "29 1 0:26 /root\\040name/a\\134b /run/cg\\040space rw shared:1 - cgroup2 none rw\n",
+			"run/cg space/memory.max": gib, "run/cg space/leaf/memory.max": mib256}, 256 << 20},
+		{"no limit", map[string]string{"proc/self/cgroup": "0::/\n", "proc/self/mountinfo": full, "sys/fs/cgroup/memory.max": "max\n"}, 0},
+		{"no cgroup mounts", map[string]string{"proc/self/cgroup": "", "proc/self/mountinfo": "11 1 0:23 / /proc rw - proc proc rw\n"}, 0},
+		{"no mountinfo: standard mount", map[string]string{"proc/self/cgroup": "0::/a\n",
+			"sys/fs/cgroup/cgroup.controllers": "memory\n", "sys/fs/cgroup/a/memory.max": mib256}, 256 << 20},
+		{"malformed unrelated lines", map[string]string{"proc/self/cgroup": "0::/a\n",
+			"proc/self/mountinfo": "not mountinfo\n1 2 - cgroup2\n29 1 0:26 / /run/cg rw - cgroup2 cgroup rw\n",
+			"run/cg/a/memory.max": mib256}, 256 << 20},
+		{"no mount contains the process: smallest mount point", map[string]string{"proc/self/cgroup": "0::/x/y\n",
+			"proc/self/mountinfo": "29 1 0:26 /a /run/a rw - cgroup2 cgroup rw\n30 1 0:26 /.. /run/b rw - cgroup2 cgroup rw\n",
+			"run/a/memory.max":    gib, "run/b/memory.max": mib256}, 256 << 20},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			n, src, err := cgroupMemoryLimit(cgroupFixture(t, c.files))
+			if err != nil || n != c.want {
+				t.Fatalf("got %d from %q (%v), want %d", n, src, err, c.want)
+			}
+		})
+	}
+}
+
+// A limit file or a metadata file that exists but cannot be read is an
+// error, not "no limit" (re-review of Q3, R3). StartMemoryCaps then fails
+// unless the SQLite limit is explicit.
+func TestCgroupReadFailure(t *testing.T) {
+	base := map[string]string{"proc/self/cgroup": "0::/leaf\n",
+		"proc/self/mountinfo": "29 1 0:26 / /run/cgroup rw - cgroup2 cgroup rw\n", "run/cgroup/memory.max": "max\n"}
+	cases := []struct {
+		name   string
+		damage func(t *testing.T, root string)
+	}{
+		{"limit file unreadable", func(t *testing.T, root string) {
+			p := filepath.Join(root, "run/cgroup/leaf/memory.max")
+			os.MkdirAll(filepath.Dir(p), 0o700)
+			if err := os.WriteFile(p, []byte("268435456\n"), 0); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"limit file is a directory", func(t *testing.T, root string) {
+			os.MkdirAll(filepath.Join(root, "run/cgroup/leaf/memory.max"), 0o700)
+		}},
+		{"mountinfo unreadable", func(t *testing.T, root string) {
+			os.Chmod(filepath.Join(root, "proc/self/mountinfo"), 0)
+		}},
+		{"proc cgroup unreadable", func(t *testing.T, root string) {
+			os.Chmod(filepath.Join(root, "proc/self/cgroup"), 0)
+		}},
+		{"cgroup path through a file", func(t *testing.T, root string) {
+			// stat of the process dir fails with ENOTDIR, not ENOENT
+			os.WriteFile(filepath.Join(root, "proc/self/cgroup"), []byte("0::/leaf/sub\n"), 0o600)
+			os.WriteFile(filepath.Join(root, "run/cgroup/leaf"), nil, 0o600)
+		}},
+		{"cgroup dir not searchable", func(t *testing.T, root string) {
+			d := filepath.Join(root, "run/cgroup/leaf")
+			os.MkdirAll(d, 0o700)
+			os.WriteFile(filepath.Join(d, "memory.max"), []byte("268435456\n"), 0o600)
+			os.Chmod(filepath.Join(root, "run/cgroup"), 0o600)
+			t.Cleanup(func() { os.Chmod(filepath.Join(root, "run/cgroup"), 0o700) })
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if os.Geteuid() == 0 && c.name != "limit file is a directory" && c.name != "cgroup path through a file" {
+				t.Skip("root reads files without permission")
+			}
+			root := cgroupFixture(t, base)
+			c.damage(t, root)
+			if n, src, err := cgroupMemoryLimit(root); err == nil {
+				t.Fatalf("no error: %d from %q", n, src)
+			}
+		})
+	}
+	// absence is not an error: no limit file in the root cgroup, no
+	// mountinfo, no cgroup at all
+	for name, files := range map[string]map[string]string{
+		"no root limit file": {"proc/self/cgroup": "0::/\n", "proc/self/mountinfo": base["proc/self/mountinfo"], "run/cgroup/cgroup.procs": ""},
+		"nothing":            {},
+	} {
+		if n, _, err := cgroupMemoryLimit(cgroupFixture(t, files)); err != nil || n != 0 {
+			t.Fatalf("%s: %d, %v", name, n, err)
 		}
 	}
 }
