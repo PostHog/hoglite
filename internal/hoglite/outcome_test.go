@@ -86,6 +86,15 @@ func TestErrorResponseTaxonomy(t *testing.T) {
 		}
 	}
 
+	// the statement classifier itself never types a cancelled read as a
+	// refusal (the handler would catch it, but other callers may not)
+	for _, e := range []error{drainCancel, drainDeadline} {
+		var rf *RefusedError
+		if errors.As(classifyStmtErr(e), &rf) {
+			t.Errorf("classifyStmtErr(%v) typed a cancelled read as a refusal", e)
+		}
+	}
+
 	q := []struct {
 		name  string
 		err   error
