@@ -167,6 +167,7 @@ func NewManager(store Backend, prefix, id, class, baseDir string, opts TenantOpt
 
 // NewManagerSat additionally sets the saturation-metric budgets.
 func NewManagerSat(store Backend, prefix, id, class, baseDir string, opts TenantOpts, maxOpen int, metrics *Metrics, ctrl ControllerOpts, satCommitBudgetUs, satInflightCap float64) *Manager {
+	normalizeDeltaOpts(&opts)
 	// fencing identity is unique per boot, even when the routing id is a
 	// stable pod name that a replacement pod will reuse. The self-lease
 	// fast path only ever matches THIS process's own manifest writes.

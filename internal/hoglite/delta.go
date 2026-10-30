@@ -60,12 +60,17 @@ const (
 	deltaMagic     = "HLPGDLT1"
 	deltaFixedHdr  = 34
 	maxDeltaKeyLen = 1024
-	// a manifest with a longer chain is corrupt: writers rebase far earlier
-	maxChainLen = 1024
-	// stored deltas download this many at a time during recovery. Each GET
-	// is one round trip, so a chain of 32 costs 4 round trips, not 32.
+	// stored deltas download this many at a time during recovery, and at
+	// most this many sit on local disk (see applyChain). Each GET is one
+	// round trip, so a chain of 32 costs 4 round trips, not 32.
 	deltaFetchParallel = 8
 )
+
+// maxChainLen is the longest chain a reader accepts. Writers never
+// publish a longer one: the checkpoint rebases at min(DeltaMaxChain,
+// maxChainLen), and NewManager clamps DeltaMaxChain to it. A variable
+// only so that tests can lower it.
+var maxChainLen = 1024
 
 // maxDeltaRawBytes is the writer and reader limit of one raw delta: every
 // page of the largest base plus its page number, plus the header.
@@ -381,18 +386,21 @@ func sqlitePageSize(f *os.File) (int64, error) {
 }
 
 // applyChain applies every delta of mf, in order, to the base image in db.
-// Stored deltas download in parallel (bounded) into temp files in dir;
-// they decode and apply one at a time, so one decoder runs per
-// materialization. A missing delta means the chain moved on (errStaleGen),
-// unless the current manifest still names it: that is data loss, and a
-// retry cannot help.
+// Stored deltas download into temp files in dir through a window: at most
+// deltaFetchParallel deltas are in flight or on disk ahead of the one
+// being applied. A slot frees only when its delta is applied and removed,
+// and slots are taken in chain order, so the next delta to apply always
+// has a slot (no deadlock) and local disk holds at most the window. One
+// decoder runs per materialization. A missing delta means the chain moved
+// on (errStaleGen), unless the current manifest still names it: that is
+// data loss, and a retry cannot help.
 func applyChain(ctx context.Context, store Backend, tid string, mf *Manifest, dir string, db *os.File) error {
 	n := len(mf.Deltas)
 	if n == 0 {
 		return nil
 	}
 	if n > maxChainLen {
-		return fmt.Errorf("%w: chain of %d deltas", ErrCorruptObject, n)
+		return fmt.Errorf("%w: chain of %d deltas, the limit is %d", ErrCorruptObject, n, maxChainLen)
 	}
 	ps, err := sqlitePageSize(db)
 	if err != nil {
@@ -405,39 +413,43 @@ func applyChain(ctx context.Context, store Backend, tid string, mf *Manifest, di
 		err  error
 	}
 	res := make([]chan fetched, n)
-	sem := make(chan struct{}, deltaFetchParallel)
-	var wg sync.WaitGroup
-	for i, d := range mf.Deltas {
+	for i := range res {
 		res[i] = make(chan fetched, 1)
-		wg.Add(1)
-		go func(i int, key string) {
-			defer wg.Done()
-			select {
-			case sem <- struct{}{}:
-				defer func() { <-sem }()
-			case <-ctx.Done():
-				res[i] <- fetched{err: ctx.Err()}
-				return
-			}
-			path := filepath.Join(dir, fmt.Sprintf("delta-%04d.zst", i))
-			f, err := os.Create(path)
-			if err != nil {
-				res[i] <- fetched{err: err}
-				return
-			}
-			cw := &countingWriter{w: f}
-			err = store.GetObjectTo(ctx, key, cw)
-			if cerr := f.Close(); err == nil {
-				err = cerr
-			}
-			res[i] <- fetched{path: path, size: cw.n, err: err}
-		}(i, d.Key)
 	}
+	deltaPath := func(i int) string { return filepath.Join(dir, fmt.Sprintf("delta-%04d.zst", i)) }
+	window := make(chan struct{}, deltaFetchParallel)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() { // dispatcher: one slot per delta, in chain order
+		defer wg.Done()
+		for i, d := range mf.Deltas {
+			select {
+			case window <- struct{}{}:
+			case <-ctx.Done():
+				return
+			}
+			wg.Add(1)
+			go func(i int, key string) {
+				defer wg.Done()
+				f, err := os.Create(deltaPath(i))
+				if err != nil {
+					res[i] <- fetched{err: err}
+					return
+				}
+				cw := &countingWriter{w: f}
+				err = store.GetObjectTo(ctx, key, cw)
+				if cerr := f.Close(); err == nil {
+					err = cerr
+				}
+				res[i] <- fetched{path: f.Name(), size: cw.n, err: err}
+			}(i, d.Key)
+		}
+	}()
 	defer func() {
 		cancel()
 		wg.Wait()
 		for i := range mf.Deltas {
-			os.Remove(filepath.Join(dir, fmt.Sprintf("delta-%04d.zst", i)))
+			os.Remove(deltaPath(i))
 		}
 	}()
 	for i, d := range mf.Deltas {
@@ -466,6 +478,7 @@ func applyChain(ctx context.Context, store Backend, tid string, mf *Manifest, di
 		got, err := applyDelta(db, f, deltaExpect{baseKey: mf.BaseKey, index: uint32(i), pageSize: ps})
 		f.Close()
 		os.Remove(r.path)
+		<-window // applied and removed: the next delta may download
 		if err != nil {
 			return fmt.Errorf("fetch delta %s: %w", d.Key, err)
 		}

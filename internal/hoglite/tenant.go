@@ -43,7 +43,8 @@ type TenantOpts struct {
 	// and recovery applies the deltas to the base in order. After this
 	// many deltas the next checkpoint uploads a full base and starts a new
 	// chain. 0 turns deltas off: every checkpoint uploads a full base, in
-	// format 0 or 1, which builds without delta support can read.
+	// format 0 or 1, which builds without delta support can read. Values
+	// above the reader limit (1024) are clamped to it.
 	DeltaMaxChain int
 	// DeltaMaxRatio also starts a new chain when the stored bytes of all
 	// deltas would exceed this fraction of the stored base. Recovery then

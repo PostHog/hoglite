@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -114,7 +116,11 @@ func checkpointNow(t *testing.T, ten *Tenant) ([]byte, Manifest) {
 // base, then every delta in order.
 func reconstruct(t *testing.T, store Backend, mf *Manifest) []byte {
 	t.Helper()
-	dir := t.TempDir()
+	return reconstructIn(t, store, mf, t.TempDir())
+}
+
+func reconstructIn(t *testing.T, store Backend, mf *Manifest, dir string) []byte {
+	t.Helper()
 	f, err := os.Create(filepath.Join(dir, "db"))
 	if err != nil {
 		t.Fatal(err)
@@ -857,6 +863,21 @@ func TestDeltaChainCorruptionRefused(t *testing.T) {
 			mf.Deltas[0].Size = int64(len(d))
 		},
 		"deltas-in-format-1": func(fs *FakeStore, mf *Manifest) { mf.Format = manifestFormatZstd },
+		// a valid zstd frame whose header names the wrong file size before
+		// the delta: only the prevBytes binding can catch it
+		"prev-bytes": func(fs *FakeStore, mf *Manifest) {
+			ctx := context.Background()
+			b, _ := fs.GetObject(ctx, mf.Deltas[1].Key)
+			d, err := decodeBlob(b, maxDeltaRawBytes)
+			if err != nil {
+				panic(err)
+			}
+			prev := binary.BigEndian.Uint64(d[24:32])
+			binary.BigEndian.PutUint64(d[24:32], prev+uint64(binary.BigEndian.Uint32(d[8:12])))
+			enc := encodeBlob(d)
+			fs.PutSegment(ctx, mf.Deltas[1].Key, enc)
+			mf.Deltas[1].Size = int64(len(enc))
+		},
 	}
 	for name, mut := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -883,6 +904,9 @@ func TestDeltaChainCorruptionRefused(t *testing.T) {
 				t.Fatalf("want a loud refusal, not a retry loop: %v", err)
 			}
 			t.Logf("refused: %v", err)
+			if name == "prev-bytes" && !strings.Contains(err.Error(), "applies to a") {
+				t.Fatalf("want the prevBytes refusal, got %v", err)
+			}
 			after := snapshotObjects(fs)
 			if len(after) != len(before) {
 				t.Fatalf("objects changed %d -> %d", len(before), len(after))
@@ -1047,4 +1071,248 @@ func TestDeltaMeasure(t *testing.T) {
 			deltas, float64(len(local))/1e6, float64(up)/ckpts/1e3, float64(raw)/ckpts/1e3,
 			(met.CheckpointMs.Load()-ms0)/ckpts, met.Rebases.Load())
 	}
+}
+
+// chainLimitRun drives a writer configured far above the reader limit
+// (DeltaMaxChain 2048, no ratio limit) up to the limit. The options are
+// clamped; even when the live options are raised again past NewManager,
+// the chain never gets longer than maxChainLen (the short run also checks
+// that the next checkpoint rebases). A crash at a full chain with
+// segments on top recovers on a default reader, whose claim then rebases.
+func chainLimitRun(t *testing.T, long bool) {
+	fs := NewFakeStore()
+	m, _ := newTestManagerOpts(t, fs, "writer", func(o *TenantOpts) {
+		chainOpts(o)
+		o.DeltaMaxChain = 2048
+		o.DeltaMaxRatio = 1e9
+		if long { // 1024 checkpoints on a loaded host
+			o.Lease = 10 * time.Second
+			o.SkewMargin = time.Second
+		}
+	})
+	if m.opts.DeltaMaxChain != maxChainLen {
+		t.Fatalf("DeltaMaxChain %d not clamped to %d", m.opts.DeltaMaxChain, maxChainLen)
+	}
+	mustCreate(t, m, "t1")
+	makeSchema(t, m, "t1")
+	ten := m.LocalTenant("t1")
+	// past the constructor too: the checkpoint itself caps the chain
+	onActor(t, ten, func() { ten.opts.DeltaMaxChain = 4 * maxChainLen })
+	var rows int64
+	fill := func() { // checkpoints until the chain is exactly at the limit
+		for i := 0; ; i++ {
+			mustTx(t, m, "t1", "c", fmt.Sprint(rows), insertStmt(rows, "x"))
+			rows++
+			_, mf := checkpointNow(t, ten)
+			if len(mf.Deltas) > maxChainLen {
+				t.Fatalf("checkpoint %d published a chain of %d, reader limit %d", i, len(mf.Deltas), maxChainLen)
+			}
+			if len(mf.Deltas) == maxChainLen {
+				return
+			}
+			if i > 2*maxChainLen {
+				t.Fatalf("chain does not grow: %d", len(mf.Deltas))
+			}
+		}
+	}
+	fill()
+	if !long {
+		// one checkpoint past a full chain must rebase, then fill again
+		mustTx(t, m, "t1", "c", fmt.Sprint(rows), insertStmt(rows, "x"))
+		rows++
+		if _, mf := checkpointNow(t, ten); len(mf.Deltas) != 0 {
+			t.Fatalf("checkpoint past the limit: chain %d, want a rebase", len(mf.Deltas))
+		}
+		fill()
+	}
+	for i := 0; i < 3; i++ {
+		mustTx(t, m, "t1", "c", fmt.Sprintf("tail%d", i), insertStmt(rows, "tail"))
+		rows++
+	}
+	crashTenant(t, m, "t1")
+	m.stopLease()
+	reader, _ := newTestManagerOpts(t, fs, "reader", chainOpts)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if _, err := reader.Acquire(ctx, "t1", false); err != nil {
+		t.Fatalf("reader at the chain limit: %v", err)
+	}
+	if n := countRows(t, reader, "t1"); n != rows {
+		t.Fatalf("after recovery at the limit: %d rows, want %d", n, rows)
+	}
+	if mf := getManifest(t, fs, "t1"); len(mf.Deltas) != 0 || mf.Format != manifestFormatChain {
+		t.Fatalf("claim at a full chain should rebase: chain %d format %d", len(mf.Deltas), mf.Format)
+	}
+}
+
+// TestDeltaChainReaderLimitFast runs the limit test with a reader limit
+// of 6, so the boundary is cheap to reach.
+func TestDeltaChainReaderLimitFast(t *testing.T) {
+	saved := maxChainLen
+	maxChainLen = 6
+	defer func() { maxChainLen = saved }()
+	chainLimitRun(t, false)
+}
+
+// TestDeltaChainReaderLimit runs it at the real limit (1024 deltas).
+func TestDeltaChainReaderLimit(t *testing.T) {
+	if testing.Short() {
+		t.Skip("1024 checkpoints")
+	}
+	chainLimitRun(t, true)
+}
+
+// TestNormalizeDeltaOpts: unsupported option values are clamped.
+func TestNormalizeDeltaOpts(t *testing.T) {
+	cases := []struct {
+		chain     int
+		ratio     float64
+		wantChain int
+		wantRatio float64
+	}{
+		{32, 0.5, 32, 0.5},
+		{-1, -1, 0, 0},
+		{maxChainLen + 1, math.NaN(), maxChainLen, 0},
+		{1 << 30, math.Inf(1), maxChainLen, math.MaxFloat64},
+	}
+	for _, c := range cases {
+		o := TenantOpts{DeltaMaxChain: c.chain, DeltaMaxRatio: c.ratio}
+		normalizeDeltaOpts(&o)
+		if o.DeltaMaxChain != c.wantChain || o.DeltaMaxRatio != c.wantRatio {
+			t.Errorf("%d/%v -> %d/%v, want %d/%v", c.chain, c.ratio, o.DeltaMaxChain, o.DeltaMaxRatio, c.wantChain, c.wantRatio)
+		}
+	}
+}
+
+// rawDelta builds a raw delta: header h, then one record per page number,
+// each page filled with the low byte of its number.
+func rawDelta(h deltaHeader, pages []uint32) []byte {
+	b := h.marshal()
+	for _, pg := range pages {
+		var n [4]byte
+		binary.BigEndian.PutUint32(n[:], pg)
+		b = append(b, n[:]...)
+		b = append(b, bytes.Repeat([]byte{byte(pg)}, int(h.pageSize))...)
+	}
+	return b
+}
+
+// TestDeltaApplyRejectsMalformed: every header and record check of the
+// delta reader refuses with ErrCorruptObject, on valid zstd frames (the
+// codec checksum does not help here).
+func TestDeltaApplyRejectsMalformed(t *testing.T) {
+	const ps = 512
+	const base = "fake/t/x/ckpt/000001-000001.base"
+	good := deltaHeader{pageSize: ps, nRecords: 2, dbPages: 4, index: 3, prevBytes: 2 * ps, baseKey: base}
+	exp := deltaExpect{baseKey: base, index: 3, pageSize: ps}
+	with := func(f func(h *deltaHeader)) deltaHeader { h := good; f(&h); return h }
+	cases := map[string]struct {
+		raw  []byte
+		exp  deltaExpect
+		want string // part of the error; "" means it must apply
+	}{
+		"valid":             {rawDelta(good, []uint32{2, 4}), exp, ""},
+		"valid-empty":       {rawDelta(with(func(h *deltaHeader) { h.nRecords = 0; h.dbPages = 2 }), nil), exp, ""},
+		"prev-bytes":        {rawDelta(with(func(h *deltaHeader) { h.prevBytes = 3 * ps }), []uint32{2, 4}), exp, "applies to a"},
+		"magic":             {append([]byte("XLPGDLT1"), rawDelta(good, []uint32{2, 4})[8:]...), exp, "bad magic"},
+		"page-size-odd":     {rawDelta(with(func(h *deltaHeader) { h.pageSize = 1000 }), nil), deltaExpect{baseKey: base, index: 3}, "page size"},
+		"page-size-small":   {rawDelta(with(func(h *deltaHeader) { h.pageSize = 256 }), nil), deltaExpect{baseKey: base, index: 3}, "page size"},
+		"page-size-big":     {rawDelta(with(func(h *deltaHeader) { h.pageSize = 131072 }), nil), deltaExpect{baseKey: base, index: 3}, "page size"},
+		"page-size-differs": {rawDelta(with(func(h *deltaHeader) { h.pageSize = 1024; h.prevBytes = 2048 }), nil), exp, "database has"},
+		"index":             {rawDelta(with(func(h *deltaHeader) { h.index = 4 }), []uint32{2, 4}), exp, "position"},
+		"base-key":          {rawDelta(with(func(h *deltaHeader) { h.baseKey = base + "x" }), []uint32{2, 4}), exp, "made for base"},
+		"records-over-size": {rawDelta(with(func(h *deltaHeader) { h.dbPages = 1 }), []uint32{1, 1}), exp, "records for"},
+		"count-too-high":    {rawDelta(with(func(h *deltaHeader) { h.nRecords = 3 }), []uint32{2, 4}), exp, "truncated"},
+		"count-too-low":     {rawDelta(with(func(h *deltaHeader) { h.nRecords = 1 }), []uint32{2, 4}), exp, "data after"},
+		"trailing-bytes":    {append(rawDelta(good, []uint32{2, 4}), 0), exp, "data after"},
+		"unsorted":          {rawDelta(good, []uint32{4, 2}), exp, "after page"},
+		"duplicate":         {rawDelta(good, []uint32{2, 2}), exp, "after page"},
+		"page-zero":         {rawDelta(good, []uint32{0, 2}), exp, "after page"},
+		"page-over-size":    {rawDelta(good, []uint32{2, 5}), exp, "after page"},
+		"truncated-record":  {rawDelta(good, []uint32{2, 4})[:deltaFixedHdr+len(base)+4+ps+100], exp, "truncated"},
+		"truncated-header":  {rawDelta(good, nil)[:20], exp, "truncated"},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			f, err := os.Create(filepath.Join(t.TempDir(), "db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer f.Close()
+			if err := f.Truncate(2 * ps); err != nil {
+				t.Fatal(err)
+			}
+			_, err = applyDelta(f, bytes.NewReader(encodeBlob(c.raw)), c.exp)
+			if c.want == "" {
+				if err != nil {
+					t.Fatalf("valid delta refused: %v", err)
+				}
+				return
+			}
+			if err == nil || !errors.Is(err, ErrCorruptObject) || !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("want a corrupt-object refusal with %q, got %v", c.want, err)
+			}
+		})
+	}
+	// the valid delta wrote its pages and set the size
+	f, _ := os.Create(filepath.Join(t.TempDir(), "db"))
+	defer f.Close()
+	f.Truncate(2 * ps)
+	if _, err := applyDelta(f, bytes.NewReader(encodeBlob(rawDelta(good, []uint32{2, 4}))), exp); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(f.Name())
+	want := append(append(append(make([]byte, ps), bytes.Repeat([]byte{2}, ps)...), make([]byte, ps)...), bytes.Repeat([]byte{4}, ps)...)
+	if !bytes.Equal(b, want) {
+		t.Fatal("valid delta: wrong file content")
+	}
+}
+
+// windowStore holds the GET of the first delta and records how many
+// delta files sit in dir whenever a GET starts.
+type windowStore struct {
+	*FakeStore
+	dir   string
+	first string
+	mu    sync.Mutex
+	peak  int
+}
+
+func (w *windowStore) GetObjectTo(ctx context.Context, key string, wr io.Writer) error {
+	if strings.HasSuffix(key, ".delta") {
+		files, _ := filepath.Glob(filepath.Join(w.dir, "delta-*.zst"))
+		w.mu.Lock()
+		w.peak = max(w.peak, len(files))
+		w.mu.Unlock()
+		if key == w.first {
+			time.Sleep(300 * time.Millisecond) // later GETs would run ahead
+		}
+	}
+	return w.FakeStore.GetObjectTo(ctx, key, wr)
+}
+
+// TestDeltaRecoveryWindow: recovery keeps at most deltaFetchParallel
+// delta files on local disk, also when a slow early GET lets later GETs
+// finish first. The chain still applies correctly and no file is left.
+func TestDeltaRecoveryWindow(t *testing.T) {
+	fs := NewFakeStore()
+	m, _ := newTestManagerOpts(t, fs, "a", chainOpts)
+	chainTenant(t, m, 3*deltaFetchParallel, 0)
+	local, mf := checkpointNow(t, m.LocalTenant("t1"))
+	if len(mf.Deltas) <= 2*deltaFetchParallel {
+		t.Fatalf("chain %d", len(mf.Deltas))
+	}
+	dir := t.TempDir()
+	ws := &windowStore{FakeStore: fs, dir: dir, first: mf.Deltas[0].Key}
+	got := reconstructIn(t, ws, &mf, dir)
+	if !bytes.Equal(got, local) {
+		t.Fatal("reconstruction differs")
+	}
+	if ws.peak > deltaFetchParallel {
+		t.Fatalf("%d delta files on disk at once, window %d", ws.peak, deltaFetchParallel)
+	}
+	if files, _ := filepath.Glob(filepath.Join(dir, "delta-*.zst")); len(files) != 0 {
+		t.Fatalf("left files: %v", files)
+	}
+	t.Logf("peak delta files on disk: %d (window %d, chain %d)", ws.peak, deltaFetchParallel, len(mf.Deltas))
 }

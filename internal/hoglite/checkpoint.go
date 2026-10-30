@@ -3,6 +3,7 @@ package hoglite
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"time"
 )
@@ -33,6 +34,25 @@ func (t *Tenant) logf(format string, args ...any) {
 	}
 }
 
+// normalizeDeltaOpts clamps the delta options to values the writer and
+// every reader of this build support: a chain of at most maxChainLen, no
+// negative cap, and a ratio that is a finite number >= 0 (0: every
+// checkpoint uploads a full base).
+func normalizeDeltaOpts(o *TenantOpts) {
+	if o.DeltaMaxChain < 0 {
+		o.DeltaMaxChain = 0
+	}
+	if o.DeltaMaxChain > maxChainLen {
+		o.DeltaMaxChain = maxChainLen
+	}
+	if math.IsNaN(o.DeltaMaxRatio) || o.DeltaMaxRatio < 0 {
+		o.DeltaMaxRatio = 0
+	}
+	if math.IsInf(o.DeltaMaxRatio, 1) {
+		o.DeltaMaxRatio = math.MaxFloat64
+	}
+}
+
 // deltasOn reports whether this tenant writes chain generations.
 func (t *Tenant) deltasOn() bool { return t.opts.Compress && t.opts.DeltaMaxChain > 0 }
 
@@ -44,7 +64,9 @@ func (t *Tenant) planDelta() *walDelta {
 	if !t.deltasOn() || t.etag == "" || t.mf.Format != manifestFormatChain || t.mf.BaseSize <= 0 {
 		return nil
 	}
-	if len(t.mf.Deltas) >= t.opts.DeltaMaxChain {
+	// rebase at the configured cap, and never past what readers accept,
+	// whatever the options say
+	if len(t.mf.Deltas) >= min(t.opts.DeltaMaxChain, maxChainLen) {
 		return nil // rebase
 	}
 	// SQLite changes the database file only when it folds the WAL. A

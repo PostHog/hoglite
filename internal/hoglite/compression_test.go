@@ -541,6 +541,23 @@ func newS1Manager(t *testing.T, fs *FakeStore, id string) *Manager {
 	return m
 }
 
+// settledObjects waits until the object set has not changed for 300 ms
+// (async deletes after a checkpoint) and returns it.
+func settledObjects(fs *FakeStore) map[string]string {
+	prev := snapshotObjects(fs)
+	for stable, i := 0, 0; stable < 3 && i < 100; i++ {
+		time.Sleep(100 * time.Millisecond)
+		cur := snapshotObjects(fs)
+		if len(cur) == len(prev) {
+			stable++
+		} else {
+			stable = 0
+		}
+		prev = cur
+	}
+	return prev
+}
+
 func snapshotObjects(fs *FakeStore) map[string]string {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
@@ -670,7 +687,9 @@ func oldBuildRefusal(t *testing.T, ctx context.Context, name, hot string, releas
 		}
 	}
 
-	before := snapshotObjects(fs)
+	// the deletes after the last CAS run async: let them finish, so the
+	// snapshot shows only what the old build could change
+	before := settledObjects(fs)
 	beforeMf, beforeTag, _ := fs.GetManifest(ctx, "t1")
 	var old *Manager
 	if reader == "s1" {
