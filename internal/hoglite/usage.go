@@ -53,11 +53,15 @@ package hoglite
 // tenant status endpoint, the top list is also in /v1/info.
 //
 // Lifetime. The counters of a tenant live in its Tenant and start at zero
-// when the tenant opens on this pod. When it closes, the tracker folds its
-// last delta into the pod totals. Work that a read finishes after the
-// close (a read that ignored its cancel for longer than ReadDrainWait) is
-// not counted, nor is a checkpoint that fails the tenant (it is charged
-// after the close). The pod totals never go down.
+// when the tenant opens on this pod. Two parties can still charge after
+// finishClose: the actor (a checkpoint or a write that fails the tenant
+// charges in a defer that runs after the close) and the reads that are
+// still running. Each holds the record (tenantUsage.holds). The actor
+// releases its hold when run returns. The readers release theirs when the
+// last open snapshot ends (readerSet.closeWith); every read charges
+// before it removes its snapshot. The last release retires the record:
+// the tracker folds its final delta into the pod totals. So all work of
+// a tenant is counted, and the pod totals never go down.
 //
 // Not wired into the heat/reclass loop (HeatCommits). A CPU-based whale
 // decision needs its own thresholds and tests, and a wrong threshold moves
@@ -94,23 +98,29 @@ const (
 	usageMinRate = 1e-4
 )
 
-// kindCounters are the counters of one kind. The padding keeps each kind
-// on its own cache line: writes count on the actor, reads on workers.
+// kindCounters are the counters of one kind. Writes count on the actor,
+// reads on the workers, so the kinds must not share a cache line. The heap
+// aligns a Tenant to 8 bytes only, so rounding the size up to 64 is not
+// enough: a full 64-byte gap after each kind (and one before the first,
+// in tenantUsage) keeps every kind off the lines of the others at any
+// start address. TestUsageCountersOwnCacheLines checks real allocations.
 type kindCounters struct {
 	execNs atomic.Int64
 	ops    atomic.Int64 // reads executed, write transactions, checkpoints
 	stmts  atomic.Int64 // statements started
 	rows   atomic.Int64 // result rows
 	bytes  atomic.Int64 // estimated result bytes (resultLimit)
-	_      [24]byte
+	_      [64]byte
 }
 
 // tenantUsage is the accounting of one open tenant. The hot paths only
 // add to the atomic counters. The other fields belong to the tracker and
 // are guarded by usageTracker.mu.
 type tenantUsage struct {
+	_ [64]byte // keeps the counters off the cache lines of other Tenant fields
 	k [numUsageKinds]kindCounters
 
+	holds    atomic.Int32 // parties that can still charge (see release)
 	id       string
 	openedAt time.Time
 	last     usageCounts // counters at the last sample or the close
@@ -262,7 +272,15 @@ func (tr *usageTracker) register(u *tenantUsage, id string, now time.Time) {
 	}
 	u.id = id
 	u.openedAt = now
+	u.holds.Store(2) // the actor and the readers of the tenant
 	tr.live[u] = struct{}{}
+}
+
+// release ends one hold on u. The last one retires it (see Lifetime).
+func (tr *usageTracker) release(u *tenantUsage) {
+	if u.holds.Add(-1) == 0 {
+		tr.retire(u)
+	}
 }
 
 // retire folds the last delta of a closed tenant into the pod totals and

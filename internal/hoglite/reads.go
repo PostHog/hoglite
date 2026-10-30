@@ -188,8 +188,9 @@ func (t *Tenant) pinRead(w *readWork, basis int64) {
 		}
 		err = memErr(err, t.metrics)
 		cancel(nil)
-		t.readers.remove(ar)
+		// charge before remove: the last remove can retire the record
 		t.usage.addTime(kindRead, time.Since(pinStart))
+		t.readers.remove(ar)
 		t.replyRead(w, readOutcome{err: err})
 	}
 	// The reader slot of w guarantees a free pool connection, so this does
@@ -472,10 +473,14 @@ func (t *Tenant) closeReaders() {
 		t.metrics.Logger.Printf("tenant %s closed with %d reads still running", t.ID, t.readers.count())
 	}
 	ro := t.roDB
+	// fn runs after the last read removed its snapshot, and a read charges
+	// its usage before that (readWorker), so the readers' hold on the usage
+	// record ends after their last charge.
 	t.readers.closeWith(func() {
 		if ro != nil {
 			ro.Close()
 		}
+		t.metrics.usage.release(&t.usage)
 	})
 }
 

@@ -615,6 +615,10 @@ func (t *Tenant) Unfreeze() { close(t.debugUnfreeze) }
 // ---------------- actor loop ----------------
 
 func (t *Tenant) run() {
+	// The actor's hold on the usage record ends after its last charge:
+	// a checkpoint or write that fails the tenant charges in a defer that
+	// runs after finishClose (usage.go).
+	defer t.metrics.usage.release(&t.usage)
 	hb := time.NewTicker(t.opts.HeartbeatEvery)
 	defer hb.Stop()
 	var flushTimer *time.Timer
@@ -2045,8 +2049,6 @@ func (t *Tenant) finishClose() {
 	t.dead = true
 	t.db.Close()
 	t.closeReaders()
-	// after the reads drained: their time is in the counters now
-	t.metrics.usage.retire(&t.usage)
 	t.wal.Close()
 	// publish the poison cooldown BEFORE done closes: once done is closed,
 	// LocalTenant can drop us from the registry and an Acquire can start

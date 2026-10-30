@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unsafe"
 )
 
 // usageOpts turns off the size-triggered checkpoints and the periodic
@@ -320,7 +321,7 @@ func TestUsageTopNAndDecay(t *testing.T) {
 	}
 
 	// a retires: its last delta reaches the totals, it leaves the list,
-	// and a late charge after the close is not counted
+	// and a late charge after the retire is not counted
 	a.charge(kindRead, time.Second, nil)
 	before := tr.totals()
 	tr.retire(a)
@@ -596,4 +597,196 @@ func TestUsageConcurrent(t *testing.T) {
 	if live != 0 {
 		t.Fatalf("%d records still live after shutdown", live)
 	}
+}
+
+// failBase fails PutBase while fail is set, after a short delay.
+type failBase struct {
+	Backend
+	fail atomic.Bool
+}
+
+func (b *failBase) PutBase(ctx context.Context, key string, r io.Reader, n int64) error {
+	if b.fail.Load() {
+		time.Sleep(10 * time.Millisecond)
+		return errors.New("test: upload failed")
+	}
+	return b.Backend.PutBase(ctx, key, r, n)
+}
+
+// A checkpoint that fails the tenant charges after finishClose. The pod
+// totals must still include it, with its time (from the review of
+// b744c7d).
+func TestUsageFailedCheckpointCharged(t *testing.T) {
+	met := &Metrics{}
+	backend := &failBase{Backend: NewFakeStore()}
+	m := NewManager(backend, "fake", "a", "standard", t.TempDir(), usageOpts(), 1000, met, ControllerOpts{})
+	defer m.ShutdownAll()
+	ten, err := m.Acquire(context.Background(), "a", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := met.usage.totals()
+	local := ten.usage.load()
+	backend.fail.Store(true)
+	if checkpointNow(ten) {
+		t.Fatal("checkpoint did not fail")
+	}
+	<-ten.done
+	waitFor(t, "record retired", func() bool {
+		met.usage.mu.Lock()
+		defer met.usage.mu.Unlock()
+		return len(met.usage.live) == 0
+	})
+	pod := usageDelta(met.usage.totals(), before)
+	own := usageDelta(ten.usage.load(), local)
+	if own.Ops[kindCheckpoint] != 1 || own.ExecNs[kindCheckpoint] < int64(10*time.Millisecond) {
+		t.Fatalf("tenant counters %+v", own)
+	}
+	if pod != own {
+		t.Fatalf("pod delta %+v, tenant delta %+v", pod, own)
+	}
+}
+
+// A read that ignores its cancel past ReadDrainWait ends after the tenant
+// closed. Its charge still reaches the pod totals: the record retires
+// only when that read ends.
+func TestUsageLateReadCharged(t *testing.T) {
+	met := &Metrics{}
+	o := usageOpts()
+	o.ReadDrainWait = 50 * time.Millisecond
+	m := newReadTestManager(t, NewFakeStore(), o, met)
+	defer m.ShutdownAll()
+	mustCreate(t, m, "a")
+	ten := acquire(t, m, "a")
+	hook, pinned, gate := blockingHook()
+	ten.readHook = hook
+	before := met.usage.totals()
+	read := goQuery(context.Background(), ten, "SELECT 1")
+	waitPinned(t, pinned)
+	ten.Stop(true, "")
+	<-ten.done
+	met.usage.mu.Lock()
+	live := len(met.usage.live)
+	met.usage.mu.Unlock()
+	if live != 1 {
+		t.Fatalf("%d live records while a read runs, want 1", live)
+	}
+	close(gate)
+	recvRead(t, read, 3*time.Second)
+	waitFor(t, "record retired", func() bool {
+		met.usage.mu.Lock()
+		defer met.usage.mu.Unlock()
+		return len(met.usage.live) == 0
+	})
+	d := usageDelta(met.usage.totals(), before)
+	if d.Ops[kindRead] != 1 || d.ExecNs[kindRead] <= 0 {
+		t.Fatalf("late read not in the pod totals: %+v", d)
+	}
+}
+
+// A successful read charges the time of its pin on the actor too. The
+// test holds the only pool connection, so the pin waits for it.
+func TestUsagePinTimeCharged(t *testing.T) {
+	m, ten, met := guardTenant(t, usageOpts())
+	mustQuery(t, m, "t1", "SELECT 1")
+	ten.roDB.SetMaxOpenConns(1)
+	held, err := ten.roDB.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := met.usage.totals()
+	out := goQuery(context.Background(), ten, "SELECT 1")
+	waitFor(t, "actor pin", func() bool { return ten.readers.count() == 1 })
+	time.Sleep(40 * time.Millisecond)
+	held.Close()
+	if res := recvRead(t, out, time.Second); res.err != nil {
+		t.Fatal(res.err)
+	}
+	d := usageDelta(met.usage.totals(), before)
+	if d.Ops[kindRead] != 1 || d.ExecNs[kindRead] < int64(40*time.Millisecond) {
+		t.Fatalf("pin time not charged: ops %d, %v", d.Ops[kindRead], time.Duration(d.ExecNs[kindRead]))
+	}
+}
+
+// A pin that fails charges its time but no read operation: once when the
+// connection wait ends at the caller deadline, once on SQLITE_NOMEM.
+func TestUsageFailedPinCharged(t *testing.T) {
+	m, ten, met := guardTenant(t, usageOpts())
+	mustQuery(t, m, "t1", "SELECT 1")
+	ten.roDB.SetMaxOpenConns(1)
+	held, err := ten.roDB.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := met.usage.totals()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Millisecond)
+	defer cancel()
+	res := recvRead(t, goQuery(ctx, ten, "SELECT 1"), 3*time.Second)
+	held.Close()
+	if res.err == nil {
+		t.Fatal("read without a connection succeeded")
+	}
+	waitFor(t, "pin ended", func() bool { return ten.readers.count() == 0 })
+	d := usageDelta(met.usage.totals(), before)
+	if d.Ops[kindRead] != 0 || d.ExecNs[kindRead] < int64(50*time.Millisecond) {
+		t.Fatalf("failed pin: ops %d, %v", d.Ops[kindRead], time.Duration(d.ExecNs[kindRead]))
+	}
+
+	noLookasideForTest(t)
+	mustQuery(t, m, "t1", "SELECT 1")
+	before = met.usage.totals()
+	restore := withHeapLimitAt(t, 1)
+	_, err = ten.SubmitQuery(Statement{SQL: "SELECT 1"})
+	restore()
+	expectNoMem(t, err)
+	d = usageDelta(met.usage.totals(), before)
+	if d.Ops[kindRead] != 0 || d.ExecNs[kindRead] <= 0 {
+		t.Fatalf("NOMEM pin: %+v", d)
+	}
+}
+
+// Each kind's counters are on cache lines that no other kind and no other
+// field uses, in real heap allocations and at every 8-byte start offset.
+func TestUsageCountersOwnCacheLines(t *testing.T) {
+	const line = 64
+	check := func(base uintptr) string {
+		u := unsafe.Offsetof(Tenant{}.usage)
+		first := base + u                                       // first byte of tenantUsage
+		tail := base + u + unsafe.Offsetof(tenantUsage{}.holds) // first field after the counters
+		var lo, hi [numUsageKinds]uintptr
+		for k := range lo {
+			off := base + u + unsafe.Offsetof(tenantUsage{}.k) + uintptr(k)*unsafe.Sizeof(kindCounters{})
+			lo[k] = (off + unsafe.Offsetof(kindCounters{}.execNs)) / line
+			hi[k] = (off + unsafe.Offsetof(kindCounters{}.bytes) + 7) / line
+			if lo[k] <= (first-1)/line || hi[k] >= tail/line {
+				return fmt.Sprintf("kind %d shares a line with another field", k)
+			}
+			for j := 0; j < k; j++ {
+				if lo[k] <= hi[j] {
+					return fmt.Sprintf("kinds %d and %d share a line", j, k)
+				}
+			}
+		}
+		return ""
+	}
+	for off := uintptr(0); off < line; off += 8 {
+		if msg := check(off); msg != "" {
+			t.Fatalf("start offset %d: %s", off, msg)
+		}
+	}
+	ts := make([]*Tenant, 200)
+	offs := map[uintptr]int{}
+	for i := range ts {
+		ts[i] = new(Tenant)
+		base := uintptr(unsafe.Pointer(ts[i]))
+		offs[base%line]++
+		if msg := check(base); msg != "" {
+			t.Fatalf("allocation at %#x: %s", base, msg)
+		}
+		// the addresses that check computes are the real field addresses
+		if got := uintptr(unsafe.Pointer(&ts[i].usage.k[1].execNs)); got != base+unsafe.Offsetof(Tenant{}.usage)+unsafe.Offsetof(tenantUsage{}.k)+unsafe.Sizeof(kindCounters{}) {
+			t.Fatalf("layout mismatch at %#x", got)
+		}
+	}
+	t.Logf("Tenant start offsets mod %d: %v", line, offs)
 }
