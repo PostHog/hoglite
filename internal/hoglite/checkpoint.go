@@ -97,22 +97,35 @@ func (t *Tenant) planDelta() *walDelta {
 // the last commit frame names. A failed check drops the plan (full base):
 // the file is then still what SQLite wrote, only the delta is in doubt.
 // It returns the database file size after the fold.
+//
+// The caller runs it only after drainReaders: no read snapshot is open,
+// and the actor pins no new one until the checkpoint returns. A busy
+// result therefore means a snapshot outside the reader set, and the
+// TRUNCATE check below fails the tenant, as before deltas.
 func (t *Tenant) foldWAL(ctx context.Context, plan *walDelta) (int64, *walDelta, error) {
+	var folded int64 // frames that PASSIVE copied into the database file
 	if plan != nil {
-		// PASSIVE folds every frame (no reader holds a snapshot on the
-		// actor) and reports SQLite's own frame count
+		// PASSIVE folds every frame (the read drain closed every snapshot)
+		// and reports SQLite's own frame count
 		var busy, logN, ckptN int64
 		if err := t.db.QueryRowContext(ctx, `PRAGMA wal_checkpoint(PASSIVE)`).Scan(&busy, &logN, &ckptN); err != nil {
 			return 0, nil, err
 		}
+		folded = ckptN
 		if busy != 0 || logN != plan.frames || ckptN != plan.frames {
 			t.logf("tenant %s: sqlite folded %d of %d frames (busy %d), parser found %d (full base)",
 				t.ID, ckptN, logN, busy, plan.frames)
 			plan = nil
 		}
+		if t.foldHook != nil {
+			t.foldHook()
+		}
 	}
 	var busy, logN, ckptN int64
 	if err := t.db.QueryRowContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`).Scan(&busy, &logN, &ckptN); err != nil {
+		if folded > 0 {
+			return 0, nil, &walFoldedError{frames: folded, err: err}
+		}
 		return 0, nil, err
 	}
 	// a blocked fold leaves WAL bytes behind, and the next gen's segment
@@ -139,6 +152,22 @@ func (t *Tenant) foldWAL(ctx context.Context, plan *walDelta) (int64, *walDelta,
 	}
 	return fi.Size(), plan, nil
 }
+
+// walFoldedError is a TRUNCATE failure after PASSIVE copied frames into
+// the database file. SQLite then counts those frames as folded. The next
+// write transaction can restart the WAL at its start and overwrite bytes
+// that segments already shipped. So the checkpoint must not be skipped
+// (skipNoMemCheckpoint), and the tenant fails instead.
+type walFoldedError struct {
+	frames int64
+	err    error
+}
+
+func (e *walFoldedError) Error() string {
+	return fmt.Sprintf("%v (after %d frames were folded)", e.err, e.frames)
+}
+
+func (e *walFoldedError) Unwrap() error { return e.err }
 
 // prepareCheckpointUpload picks the object for this checkpoint. With a
 // plan it builds a delta, unless the chain would exceed DeltaMaxRatio.

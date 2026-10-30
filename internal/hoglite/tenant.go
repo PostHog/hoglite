@@ -321,6 +321,7 @@ type Tenant struct {
 	readDone  chan readResult       // worker outcomes whose basis was not yet durable at pin time
 	readHook  func(context.Context) // test hook: runs in the worker after the pin
 	txHook    func()                // test hook: runs on the actor after the statements of a write
+	foldHook  func()                // test hook: runs in foldWAL after a PASSIVE fold, before TRUNCATE
 	// ckptDeferUntil delays size-triggered checkpoints after one was
 	// skipped because reads did not drain. Actor-owned.
 	ckptDeferUntil time.Time
@@ -1716,9 +1717,10 @@ func (t *Tenant) checkpointLocked(newClass string) bool {
 		sd.seg.done = true
 		t.advanceWatermark()
 	}
-	// TRUNCATE needs a WAL with no open read snapshot. Only the actor
-	// pins snapshots (pinRead), and the actor stays in this function until
-	// the TRUNCATE is done, so no new snapshot can start. Wait for the
+	// The fold (foldWAL: PASSIVE for a delta, then TRUNCATE) needs a WAL
+	// with no open read snapshot. Only the actor pins snapshots (pinRead),
+	// and the actor stays in this function until the fold is done, so no
+	// new snapshot can start. Wait for the
 	// pinned ones to end: bounded, then canceled. This runs after the
 	// segment drain, so a skip still leaves every commit durable and acked.
 	if !t.drainReaders() {
@@ -1935,8 +1937,15 @@ func (t *Tenant) checkpointLocked(newClass string) bool {
 // shrank fails the tenant. Durability is unaffected: every segment is in
 // S3. A claim never skips (the checkpoint is the acquisition), and a
 // class change keeps the poison path.
+//
+// A delta checkpoint folds in two steps (foldWAL). SQLITE_NOMEM in the
+// PASSIVE step is the case above. SQLITE_NOMEM in the TRUNCATE step after
+// PASSIVE folded frames is not: SQLite counts the WAL as folded, and the
+// next write can restart the WAL at its start, under the shipped offsets.
+// That case fails the tenant (walFoldedError).
 func (t *Tenant) skipNoMemCheckpoint(err error, newClass string) bool {
-	if !isNoMem(err) || !t.claimed || newClass != "" {
+	var folded *walFoldedError
+	if !isNoMem(err) || errors.As(err, &folded) || !t.claimed || newClass != "" {
 		return false
 	}
 	end, perr := t.currentCommitEnd()

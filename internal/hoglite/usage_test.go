@@ -625,6 +625,9 @@ func TestUsageFailedCheckpointCharged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// a commit gives the checkpoint an object to upload: a delta
+	// checkpoint with nothing new uploads nothing and cannot fail here
+	makeSchema(t, m, "a")
 	before := met.usage.totals()
 	local := ten.usage.load()
 	backend.fail.Store(true)
