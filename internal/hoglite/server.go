@@ -277,10 +277,34 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) (int, any)
 func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) (int, any) {
 	// test/ops helper: drop everything under the tenant prefix
 	tid := r.PathValue("tid")
-	// never delete under a live remote owner: fence first or refuse
-	if mf, err := s.mgr.OwnerOf(r.Context(), tid); err == nil && mf != nil &&
-		mf.Owner != "" && s.ownerLive(r.Context(), mf.Owner) && mf.Owner != s.mgr.ID() {
-		return 409, apiError{Error: "tenant has a live owner; release it first", Owner: mf.OwnerAddr}
+	if !validTID(tid) {
+		return 400, apiError{Error: "bad tenant id"}
+	}
+	mf, err := s.mgr.OwnerOf(r.Context(), tid)
+	if err != nil {
+		// A failed ownership read must not fall through to deletion: a
+		// blind purge can race a live remote owner.
+		return 500, apiError{Error: err.Error()}
+	}
+	if mf != nil && mf.Owner != "" && mf.Owner != s.mgr.ID() && s.ownerLive(r.Context(), mf.Owner) {
+		// Live remote owner: route to it exactly like /tx and /release.
+		// Deletion executes AT the owner (it stops its own actor first),
+		// so the never-delete-under-a-live-remote-owner invariant is
+		// preserved; without routing, a lifecycle caller behind a Service
+		// could only delete when the load balancer happened to land on
+		// the owning pod.
+		addr := mf.OwnerAddr
+		if addr == "" {
+			addr = mf.Owner
+		}
+		if base, ok := s.peers[addr]; ok && r.Header.Get("x-hw-noproxy") == "" {
+			s.mgr.metrics.Proxied.Add(1)
+			if s.proxyTo(w, r, base+r.URL.Path, nil) {
+				return 0, nil // response written
+			}
+		}
+		// Owner not routable from here: tell the caller where to go.
+		return 421, apiError{Error: "tenant owned elsewhere", Owner: addr, Class: mf.Class}
 	}
 	if t := s.mgr.LocalTenant(tid); t != nil {
 		t.Stop(false, "")
@@ -574,7 +598,13 @@ func (s *Server) handleRelease(w http.ResponseWriter, r *http.Request) (int, any
 		// release can only happen where the tenant is owned. Without this,
 		// a lifecycle caller behind a Service can only release when the
 		// load balancer happens to land on the owning pod.
-		if mf, err := s.mgr.OwnerOf(r.Context(), tid); err == nil && mf != nil &&
+		mf, err := s.mgr.OwnerOf(r.Context(), tid)
+		if err != nil {
+			// A failed ownership read must not be answered "released":
+			// the caller would proceed to delete under a live owner.
+			return 500, apiError{Error: err.Error()}
+		}
+		if mf != nil &&
 			mf.Owner != "" && mf.Owner != s.mgr.ID() && s.ownerLive(r.Context(), mf.Owner) {
 			addr := mf.OwnerAddr
 			if addr == "" {

@@ -221,3 +221,66 @@ func TestReleaseRoutesToOwner(t *testing.T) {
 		t.Fatalf("release of unowned tenant: %d %v", code, out)
 	}
 }
+
+func TestDeleteRoutesToOwner(t *testing.T) {
+	c := newTestCluster(t, "a", "b")
+	if code, out, _ := c.do(t, "a", "PUT", "/v1/tenants/dr", map[string]any{}); code != 200 {
+		t.Fatalf("create: %d %v", code, out)
+	}
+	// Delete via the NON-owner routes to the owner, exactly like /tx and
+	// /release. The deletion executes AT the owner (which stops its own
+	// actor first); without routing, a lifecycle caller behind a Service
+	// could only delete when the load balancer happened to land on the
+	// owning pod — the old 409 made multi-pod catalog drops mostly fail.
+	code, out, _ := c.do(t, "b", "DELETE", "/v1/tenants/dr", nil)
+	if code != 200 {
+		t.Fatalf("delete via non-owner: %d %v", code, out)
+	}
+	// The delete really happened on the owner: the durable state is gone...
+	mf, _, _ := c.fs.GetManifest(context.Background(), "dr")
+	if mf != nil {
+		t.Fatal("manifest survived routed delete")
+	}
+	// ...and the owner's local actor was stopped, not orphaned.
+	if c.mgrs["a"].LocalTenant("dr") != nil {
+		t.Fatal("owner kept the tenant after routed delete")
+	}
+	// Deleting the gone tenant again is idempotently OK (the drop flow
+	// retries the delete on transient failures).
+	if code, out, _ := c.do(t, "b", "DELETE", "/v1/tenants/dr", nil); code != 200 {
+		t.Fatalf("re-delete of deleted tenant: %d %v", code, out)
+	}
+}
+
+func TestDeleteUnroutableOwnerHints421(t *testing.T) {
+	c := newTestCluster(t, "a", "b")
+	if code, out, _ := c.do(t, "a", "PUT", "/v1/tenants/du", map[string]any{}); code != 200 {
+		t.Fatalf("create: %d %v", code, out)
+	}
+	// A pod whose peer table cannot reach the live owner cannot proxy the
+	// delete: it must answer 421 with the owner hint so the caller can
+	// route to the owner itself (the same contract as /tx and /release).
+	noPeers := httptest.NewServer(NewServer(c.mgrs["b"], map[string]string{}).Handler())
+	defer noPeers.Close()
+	req, _ := http.NewRequest("DELETE", noPeers.URL+"/v1/tenants/du", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("delete via unroutable peer: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 421 {
+		t.Fatalf("expected 421, got %d", resp.StatusCode)
+	}
+	var out map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	owner, _ := out["owner"].(string)
+	if owner == "" || owner == "b" {
+		t.Fatalf("421 without a usable owner hint: %v", out)
+	}
+	// And the tenant survived the refusal.
+	if mf, _, _ := c.fs.GetManifest(context.Background(), "du"); mf == nil {
+		t.Fatal("tenant deleted despite the 421")
+	}
+}
