@@ -1383,8 +1383,14 @@ func (t *Tenant) cutSegment() {
 	t.segs = append(t.segs, s)
 	t.metrics.SegPuts.Add(1)
 	t.metrics.SegBytes.Add(int64(len(data)))
+	// The gauge counts running segment PUTs, so the PUT goroutine retires
+	// it, not whoever reads segDone. Its outcome has three consumers: the
+	// actor loop (onSegDone), the checkpoint drain (checkpointLocked), and
+	// nobody at all once the tenant is dead (failQueued drops t.segs and
+	// the actor is gone). A decrement at a consumer misses the other two.
 	t.metrics.InflightSegs.Add(1)
 	go func() {
+		defer t.metrics.InflightSegs.Add(-1)
 		// compress off the actor, once per segment (not per attempt). The
 		// key keeps the RAW WAL offset; recovery uses decoded lengths.
 		stored, err := segmentObject(s.data, format)
@@ -1591,8 +1597,7 @@ func (t *Tenant) writeDeadline() time.Time {
 // Acks are always in offset order: a later segment never acknowledges
 // before an earlier one. Actor-loop only.
 func (t *Tenant) onSegDone(sd segDone) {
-	<-t.sem
-	t.metrics.InflightSegs.Add(-1)
+	<-t.sem // the PUT goroutine already retired its InflightSegs count
 	if sd.err != nil {
 		t.failLocked(fmt.Errorf("segment put %s: %w", sd.seg.key, sd.err))
 		return
@@ -1733,7 +1738,7 @@ func (t *Tenant) checkpointLocked(newClass string) bool {
 	// drain in-flight segments
 	for len(t.segs) > 0 {
 		sd := <-t.segDone
-		<-t.sem
+		<-t.sem // as in onSegDone: InflightSegs is retired by the PUT goroutine
 		t.progressMs.Store(time.Now().UnixMilli())
 		if sd.err != nil {
 			t.failLocked(fmt.Errorf("drain: %w", sd.err))
