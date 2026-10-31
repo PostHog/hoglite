@@ -18,9 +18,10 @@ import (
 // its true value (0 when idle) and never goes below zero.
 
 // segGateStore holds each segment PUT while armed until the test sends
-// one token on gate.
+// one token on gate. delay (ns) slows every segment PUT.
 type segGateStore struct {
 	*FakeStore
+	delay   atomic.Int64
 	armed   atomic.Bool
 	entered chan string
 	gate    chan struct{}
@@ -31,6 +32,9 @@ func newSegGateStore() *segGateStore {
 }
 
 func (s *segGateStore) PutSegment(ctx context.Context, key string, data []byte) error {
+	if d := s.delay.Load(); d > 0 {
+		time.Sleep(time.Duration(d))
+	}
 	if s.armed.Load() {
 		select {
 		case s.entered <- key:
@@ -103,6 +107,7 @@ func TestInflightSegsCheckpointDrainReturnsToZero(t *testing.T) {
 	met := &Metrics{}
 	m := NewManager(fs, "fake", "a", "standard", t.TempDir(), deltaTestOpts(), 1000, met, ControllerOpts{})
 	defer m.ShutdownAll()
+	defer fs.armed.Store(false) // runs first: a failed check must not leave the shutdown drain behind a held PUT
 	mustCreate(t, m, "t1")
 	makeSchema(t, m, "t1")
 	ten := m.LocalTenant("t1")
@@ -222,6 +227,7 @@ func TestInflightSegsDeadTenantReturnsToZero(t *testing.T) {
 			met := &Metrics{}
 			m := NewManager(fs, "fake", "a", "standard", t.TempDir(), deltaTestOpts(), 1000, met, ControllerOpts{})
 			defer m.ShutdownAll()
+			defer fs.armed.Store(false) // runs first: a failed check must not leave the shutdown drain behind a held PUT
 			mustCreate(t, m, "t1")
 			makeSchema(t, m, "t1")
 			ten := m.LocalTenant("t1")
@@ -271,6 +277,7 @@ func TestInflightSegsDrainFailureReturnsToZero(t *testing.T) {
 	o := deltaTestOpts()
 	m := NewManager(fs, "fake", "a", "standard", t.TempDir(), o, 1000, met, ControllerOpts{})
 	defer m.ShutdownAll()
+	defer fs.armed.Store(false) // runs first: a failed check must not leave the shutdown drain behind a held PUT
 	mustCreate(t, m, "t1")
 	makeSchema(t, m, "t1")
 	ten := m.LocalTenant("t1")

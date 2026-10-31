@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	mrand "math/rand"
 	"os"
 	"path/filepath"
@@ -42,7 +43,18 @@ type Metrics struct {
 	// CommitEwmaUs is the EWMA of full commit latency (submit to durable
 	// ack) across the pod. It is the primary autoscaling signal: it rises
 	// as soon as S3 queueing starts, well before client-visible timeouts.
+	// It only moves when a commit ends, so it holds the last burst's value
+	// on an idle pod; Saturation decays it by CommitLastMs and
+	// CommitsInflight (see satLatencyFactor).
 	CommitEwmaUs atomic.Int64
+	// CommitLastMs is when the last commit that fed CommitEwmaUs ended
+	// (unix ms, 0 = never). CommitsInflight counts commits between
+	// submit and outcome.
+	CommitLastMs    atomic.Int64
+	CommitsInflight atomic.Int64
+	// saturation decay of the latency term (0 = default); tests shorten it
+	satIdleGraceNs atomic.Int64
+	satHalfLifeNs  atomic.Int64
 
 	// Stored (possibly compressed) bytes PUT for segments and base images.
 	// SegBytes is the raw WAL byte count; raw vs stored gives the ratio.
@@ -168,7 +180,8 @@ type Manager struct {
 	maxOpen int // soft cap on simultaneously open tenants
 
 	// autoscaling knobs: Saturation reports max(commitEWMA/satCommitBudget,
-	// inflightSegs/satInflightCap). HPA targets a value below 1.0.
+	// inflightSegs/satInflightCap). HPA targets a value below 1.0. The
+	// latency term decays once the pod is idle (Metrics.satDecay).
 	satCommitBudgetUs float64
 	satInflightCap    float64
 
@@ -1205,13 +1218,105 @@ func (m *Manager) OpenCount() int {
 // operating limit". It is the maximum of the commit-latency ratio and the
 // in-flight-segment ratio — the two signals that preceded degradation in
 // the 10k ramp (queueing behind S3, not CPU). HPA should target < 1.0.
+//
+// The latency term is the EWMA of the commits that ended last. It only
+// moves when a commit ends, so without decay one slow burst would pin an
+// idle pod above 1 for good, and the autoscaler would never scale in.
+// Once the pod is idle the term decays (satLatencyFactor); any commit in
+// flight or ended within the grace keeps it at full value.
 func (m *Manager) Saturation() float64 {
-	lat := float64(m.metrics.CommitEwmaUs.Load()) / m.satCommitBudgetUs
+	return m.saturationAt(time.Now())
+}
+
+func (m *Manager) saturationAt(now time.Time) float64 {
+	grace, halfLife := m.metrics.satDecay()
+	f := satLatencyFactor(now, m.metrics.CommitLastMs.Load(), m.metrics.CommitsInflight.Load(), grace, halfLife)
+	lat := f * float64(m.metrics.CommitEwmaUs.Load()) / m.satCommitBudgetUs
 	inf := float64(m.metrics.InflightSegs.Load()) / m.satInflightCap
 	if inf > lat {
 		return inf
 	}
 	return lat
+}
+
+// Saturation decay defaults. The grace is two KEDA polling intervals
+// (15s): a pod under any real load ends commits every few milliseconds,
+// so the grace never elapses while it serves traffic, and the term under
+// load is exactly the EWMA it always was. After the grace the term halves
+// every 30s: from 2.0 it falls below the 0.7 scaling threshold about 75s
+// after the last commit. The HPA scale-down stabilization (600s) still
+// asks for ten quiet minutes before a pod goes, so a short lull between
+// bursts does not scale in.
+const (
+	defaultSatIdleGrace = 30 * time.Second
+	defaultSatHalfLife  = 30 * time.Second
+)
+
+// satDecay returns the idle grace and half-life of the latency term.
+func (m *Metrics) satDecay() (grace, halfLife time.Duration) {
+	grace, halfLife = time.Duration(m.satIdleGraceNs.Load()), time.Duration(m.satHalfLifeNs.Load())
+	if grace <= 0 {
+		grace = defaultSatIdleGrace
+	}
+	if halfLife <= 0 {
+		halfLife = defaultSatHalfLife
+	}
+	return grace, halfLife
+}
+
+// commitStart marks a commit in flight. A commit that starts on an idle
+// pod (no other commit in flight, none ended within the grace) first
+// folds the decay into the stored EWMA: from now on the factor is 1, and
+// without the fold the stale burst value would reappear for as long as
+// this commit runs and then be what its sample folds into (one fast
+// commit after a slow burst would read as 7/8 of the old latency).
+// Folding keeps the signal continuous: the commit moves it one EWMA step
+// from what the pod showed, as under load.
+func (m *Metrics) commitStart(now time.Time) {
+	if m.CommitsInflight.Add(1) > 1 {
+		return
+	}
+	grace, halfLife := m.satDecay()
+	f := satLatencyFactor(now, m.CommitLastMs.Load(), 0, grace, halfLife)
+	if f >= 1 {
+		return
+	}
+	for {
+		cur := m.CommitEwmaUs.Load()
+		if cur == 0 {
+			return
+		}
+		// floor at 1us: ewmaUpdate seeds a zero EWMA with the next sample,
+		// which would turn one commit after a long idle into the whole signal
+		next := max(int64(float64(cur)*f), 1)
+		if m.CommitEwmaUs.CompareAndSwap(cur, next) {
+			return
+		}
+	}
+}
+
+// commitDone ends a commit that started at t0 and feeds the EWMA.
+func (m *Metrics) commitDone(t0 time.Time) {
+	now := time.Now()
+	ewmaUpdate(&m.CommitEwmaUs, now.Sub(t0).Microseconds())
+	m.CommitLastMs.Store(now.UnixMilli())
+	m.CommitsInflight.Add(-1)
+}
+
+// satLatencyFactor scales the commit-latency term of Saturation: 1 while
+// a commit is in flight or the last one ended within grace, then
+// 2^(-(idle-grace)/halfLife). It depends only on time and commit state,
+// never on how often Saturation is read, and it is monotone over an idle
+// stretch: no oscillation without a commit.
+func satLatencyFactor(now time.Time, lastMs, inflight int64, grace, halfLife time.Duration) float64 {
+	if inflight > 0 || lastMs == 0 || halfLife <= 0 {
+		return 1 // a commit in flight is the pod at work; lastMs 0: the EWMA is 0 too
+	}
+	over := now.Sub(time.UnixMilli(lastMs)) - grace
+	if over <= 0 {
+		return 1
+	}
+	return math.Exp2(-over.Seconds() / halfLife.Seconds())
 }
 
 func (m *Manager) Stats() map[string]any {

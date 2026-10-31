@@ -529,9 +529,8 @@ func (t *Tenant) SubmitTxCtx(ctx context.Context, req TxRequest) ([]QueryResult,
 	case <-t.done:
 		return nil, false, t.deadError()
 	}
-	defer func() {
-		ewmaUpdate(&t.metrics.CommitEwmaUs, time.Since(t0).Microseconds())
-	}()
+	t.metrics.commitStart(t0)
+	defer t.metrics.commitDone(t0)
 	select {
 	case o := <-w.reply:
 		return o.results, o.dup, o.err
