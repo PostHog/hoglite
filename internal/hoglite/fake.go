@@ -32,6 +32,9 @@ type FakeStore struct {
 	// whose client sees a failure (timeout after commit). Called before
 	// storing; returning true stores the object AND returns an error.
 	LatePutSegment func(key string) bool
+	// FailPutBase fails a base-image PUT (checkpoint upload) without
+	// storing it.
+	FailPutBase func(key string) bool
 	// CorruptObject flips a byte in the named object, once.
 	CorruptObject func(key string) bool
 }
@@ -108,6 +111,9 @@ func (f *FakeStore) PutSegment(ctx context.Context, key string, data []byte) err
 
 func (f *FakeStore) PutBase(ctx context.Context, key string, r io.Reader, size int64) error {
 	f.delay()
+	if f.FailPutBase != nil && f.FailPutBase(key) {
+		return fmt.Errorf("injected base failure: %s", key)
+	}
 	b, err := io.ReadAll(r)
 	if err != nil {
 		return err
