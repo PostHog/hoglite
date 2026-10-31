@@ -35,6 +35,54 @@ package hoglite
 // goroutines. A caller that gives up drops its parked result: an
 // AfterFunc on the request context tells the actor (readAbandon).
 
+// Interior reads
+//
+// The durability wait exists for results that reach a caller: a read that
+// shows applied-but-not-durable state lets a caller act on a commit that
+// can vanish with the owner, and after recovery snapshot ids and other
+// counters are reused under a basis that already saw them (P0-5,
+// readWait). An interior read skips the wait. It is for one shape only: a
+// read whose result is used to decide a write of the same caller, and is
+// shown to no one. Its outcome is computed on the pinned snapshot at its
+// basis exactly like any read (pinRead), so it is a consistent snapshot of
+// applied state, just not a durable one.
+//
+// Why the write it decides cannot be acknowledged on a commit that is
+// lost. Let the read see commit N, applied but not durable.
+//
+//  1. Within one Tenant value (one incarnation) applied state only grows.
+//     Nothing rolls a commit back while the actor runs: every durability
+//     failure (segment PUT, checkpoint CAS, lease lapse, watchdog,
+//     poison) ends the incarnation through failLocked, and a dead
+//     incarnation applies and acknowledges nothing.
+//  2. A write W applied by the same incarnation after the read lands after
+//     N in its WAL, and acks are in WAL order (advanceWatermark): W is
+//     acknowledged only once every byte before it, N included, is
+//     durable. If N is lost, the incarnation died first and W is never
+//     acknowledged by it. A dedup replay of W waits the same way
+//     (cutSegment re-anchors it at submittedOff).
+//  3. Across incarnations 2 does not hold: the next owner recovers
+//     without N, and a commit there can reuse N's counters, so a guard
+//     built from the read can pass against different state. So the read
+//     returns its incarnation token, and the caller sends it as
+//     TxRequest.Incarnation on W. runTx refuses a token of another
+//     incarnation with errIncarnationChanged (412 incarnation_changed,
+//     definitely not applied), after the dedup lookup: a W that is
+//     durable already (applied by the reader's incarnation and replayed
+//     here) still answers with its receipt, and a W replayed here can
+//     only be there with N, because recovery replays a WAL prefix.
+//
+// What the caller must hold up, outside the engine: the read's result
+// may lead to no write at all (a refusal, a cached answer). That outcome
+// rests on N and must not reach anyone as is. The caller decides it again
+// on an ordinary, parked read. Reads for an operation other than the
+// write they feed (another tenant, a background job, a response body) are
+// never interior: nothing orders their effects behind the write.
+//
+// Opt-in is explicit on both sides: TenantOpts.InteriorReads (off by
+// default) on the engine, and TxRequest.Interior on a read-only /tx sent
+// through SubmitInteriorReadCtx. SubmitTxCtx and /query never take it.
+
 import (
 	"context"
 	"database/sql"
@@ -266,8 +314,13 @@ func (t *Tenant) pinRead(w *readWork, basis int64) {
 		abort(err)
 		return
 	}
+	// An interior read is delivered like a durable one: on the snapshot at
+	// basis, with no durability wait (see "Interior reads" at the top).
+	if w.interior {
+		t.metrics.InteriorReads.Add(1)
+	}
 	pr := &pinnedRead{w: w, ctx: ctx, cancel: cancel, conn: conn, db: h, tx: tx, ar: ar,
-		basis: basis, gen: t.mf.Gen, durable: basis <= t.durableOff, pinTime: time.Since(pinStart)}
+		basis: basis, gen: t.mf.Gen, durable: basis <= t.durableOff || w.interior, pinTime: time.Since(pinStart)}
 	// A free worker takes the read; start one only when every free worker
 	// is already spoken for. The send never blocks: each queued pin holds
 	// a reader slot, and pinCh has room for MaxReaders.
@@ -502,8 +555,9 @@ func (t *Tenant) onReadDone(rr readResult) {
 		case <-t.done:
 		}
 	})
-	t.readWaits = append(t.readWaits, readWait{end: rr.basis, w: w, out: rr.out, stop: stop})
+	t.readWaits = append(t.readWaits, readWait{end: rr.basis, w: w, out: rr.out, stop: stop, since: time.Now()})
 	t.metrics.ParkedReads.Add(1)
+	t.metrics.ParkedReadsTotal.Add(1)
 	t.cutSegment()
 }
 
@@ -519,6 +573,7 @@ func (t *Tenant) releaseReadWait(rw readWait) {
 func (t *Tenant) unparkRead(rw readWait) {
 	rw.stop()
 	t.metrics.ParkedReads.Add(-1)
+	t.metrics.ParkedReadUs.Add(time.Since(rw.since).Microseconds())
 }
 
 // abandonRead drops the parked result of w after its caller gave up. The

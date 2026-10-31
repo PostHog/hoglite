@@ -219,6 +219,10 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) (int, any
 	fmt.Fprintf(&b, "hoglite_parked_reads %d\n", m.ParkedReads.Load())
 	fmt.Fprintf(&b, "hoglite_parked_read_bytes %d\n", m.ParkedBytes.Load())
 	fmt.Fprintf(&b, "hoglite_parked_reads_waiting %d\n", m.ParkWaiting.Load())
+	fmt.Fprintf(&b, "hoglite_parked_reads_total %d\n", m.ParkedReadsTotal.Load())
+	fmt.Fprintf(&b, "hoglite_parked_read_us_total %d\n", m.ParkedReadUs.Load())
+	fmt.Fprintf(&b, "hoglite_interior_reads_total %d\n", m.InteriorReads.Load())
+	fmt.Fprintf(&b, "hoglite_incarnation_fenced_total %d\n", m.IncarnationFenced.Load())
 	fmt.Fprintf(&b, "hoglite_commit_latency_ewma_us %d\n", m.CommitEwmaUs.Load())
 	fmt.Fprintf(&b, "hoglite_read_timeouts_total %d\n", m.ReadTimeouts.Load())
 	fmt.Fprintf(&b, "hoglite_write_timeouts_total %d\n", m.WriteTimeouts.Load())
@@ -513,6 +517,23 @@ func (s *Server) handleTx(w http.ResponseWriter, r *http.Request) (int, any) {
 		return 400, apiError{Error: "client and txid required"}
 	}
 	w.Header().Set("x-hw-owner", s.mgr.ID())
+	if req.Interior {
+		// interior read (reads.go): read-only only; the token names the
+		// incarnation that served it and is empty when the tenant parked
+		// the read (TenantOpts.InteriorReads off)
+		if !allReadOnly(req.Stmts) {
+			return 400, apiError{Error: ErrInteriorMisuse.Error()}
+		}
+		results, inc, err := t.SubmitInteriorReadCtx(r.Context(), req)
+		if err != nil {
+			return txErrorResponse(err, true, s.mgr.ID())
+		}
+		out := map[string]any{"results": results, "dup": false}
+		if inc != "" {
+			out["incarnation"] = inc
+		}
+		return 200, out
+	}
 	results, dup, err := t.SubmitTxCtx(r.Context(), req)
 	if err != nil {
 		code, body := txErrorResponse(err, allReadOnly(req.Stmts), s.mgr.ID())

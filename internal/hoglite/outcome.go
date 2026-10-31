@@ -41,6 +41,11 @@ const (
 	CodeRefused        = "refused"
 	CodeNotApplied     = "not_applied"
 	CodeOutcomeUnknown = "outcome_unknown"
+	// CodeIncarnationChanged: a fenced write (TxRequest.Incarnation) met
+	// another incarnation than the one that served its interior read, and
+	// its txid has no receipt here. Definitely not applied; the caller
+	// decides the write again on a fresh read (reads.go).
+	CodeIncarnationChanged = "incarnation_changed"
 
 	// StatusOutcomeUnknown is the HTTP status of an ambiguous /tx answer.
 	StatusOutcomeUnknown = 504
@@ -65,6 +70,14 @@ type RefusedError struct{ Err error }
 func (e *RefusedError) Error() string { return e.Err.Error() }
 
 func (e *RefusedError) Unwrap() error { return e.Err }
+
+// errIncarnationChanged refuses a fenced write in another incarnation
+// (runTx). It is a definite not-applied: the statements never ran.
+var errIncarnationChanged = errors.New("incarnation changed since the interior read this write was decided on; decide it again on a fresh read")
+
+// ErrInteriorMisuse refuses an interior request outside its one shape: a
+// read-only /tx sent through SubmitInteriorReadCtx.
+var ErrInteriorMisuse = errors.New("interior applies to read-only transactions only, through the interior entry point")
 
 // outcomeUnknown wraps err unless it already carries the classification.
 func outcomeUnknown(err error) error {
@@ -173,6 +186,10 @@ func txErrorResponse(err error, readOnly bool, owner string) (int, apiError) {
 			GuardIndex: ef.Index + 1, GuardKind: ef.Guard}
 	case errors.As(err, &ou):
 		return StatusOutcomeUnknown, apiError{Error: err.Error(), Code: CodeOutcomeUnknown, Owner: owner}
+	case errors.Is(err, errIncarnationChanged):
+		return 412, apiError{Error: err.Error(), Code: CodeIncarnationChanged, Owner: owner}
+	case errors.Is(err, ErrInteriorMisuse):
+		return 400, apiError{Error: err.Error()}
 	case isGuardErr(err):
 		code, ae, _ := guardStatus(err)
 		ae.Owner = owner
