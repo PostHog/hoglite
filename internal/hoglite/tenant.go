@@ -1387,9 +1387,13 @@ func (t *Tenant) cutSegment() {
 	// actor loop (onSegDone), the checkpoint drain (checkpointLocked), and
 	// nobody at all once the tenant is dead (failQueued drops t.segs and
 	// the actor is gone). A decrement at a consumer misses the other two.
+	// It is retired BEFORE the outcome is handed over, not deferred past
+	// it: the hand-off is what lets the actor ack the segment's commits,
+	// so a deferred decrement let a caller hold its ack while the gauge
+	// still counted the finished PUT (an idle pod reading one segment in
+	// flight; TestSaturationDecaysAfterSlowBurst failed on it under load).
 	t.metrics.InflightSegs.Add(1)
 	go func() {
-		defer t.metrics.InflightSegs.Add(-1)
 		// compress off the actor, once per segment (not per attempt). The
 		// key keeps the RAW WAL offset; recovery uses decoded lengths.
 		stored, err := segmentObject(s.data, format)
@@ -1451,6 +1455,7 @@ func (t *Tenant) cutSegment() {
 			time.Sleep(time.Duration(backoff) * time.Millisecond)
 		}
 	done:
+		t.metrics.InflightSegs.Add(-1) // the PUT is over; see above
 		select {
 		case t.segDone <- segDone{seg: s, err: err}:
 		case <-t.done:
