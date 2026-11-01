@@ -222,7 +222,7 @@ type Manager struct {
 	mu      sync.Mutex
 	tenants map[string]*Tenant
 	closing map[string]chan struct{} // tenants mid-Stop; Acquire must wait
-	opening map[string]*sync.Mutex   // singleflight per tenant
+	opening map[string]chan struct{} // completion signals for tenant opens
 	// poisonedAt records ungraceful tenant deaths. A mass-poison event
 	// (S3 stall) otherwise turns into a takeover storm: hundreds of
 	// replays+checkpoints hitting the already-degraded store at once.
@@ -247,7 +247,7 @@ func NewManagerSat(store Backend, prefix, id, class, baseDir string, opts Tenant
 		store: store, prefix: strings.Trim(prefix, "/"), id: id, routeID: routeID, class: class, baseDir: baseDir, opts: opts,
 		metrics: metrics, maxOpen: maxOpen,
 		satCommitBudgetUs: satCommitBudgetUs, satInflightCap: satInflightCap,
-		tenants: map[string]*Tenant{}, opening: map[string]*sync.Mutex{}, closing: map[string]chan struct{}{},
+		tenants: map[string]*Tenant{}, opening: map[string]chan struct{}{}, closing: map[string]chan struct{}{},
 		poisonedAt: map[string]time.Time{},
 		hot:        map[string]int{}, lastFlip: map[string]time.Time{},
 	}
@@ -543,16 +543,22 @@ func (m *Manager) acquire(ctx context.Context, tid string, create bool, confirmL
 	}
 	// singleflight
 	m.mu.Lock()
-	sf, ok := m.opening[tid]
+	done, ok := m.opening[tid]
 	if !ok {
-		sf = &sync.Mutex{}
-		sf.Lock()
-		m.opening[tid] = sf
+		done = make(chan struct{})
+		m.opening[tid] = done
 		m.mu.Unlock()
 	} else {
 		m.mu.Unlock()
-		sf.Lock() // wait for the in-flight open
-		sf.Unlock()
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-done:
+		}
+		// Cancellation wins if both signals are ready.
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		// leader finished; loop normally (tenant now exists or create failed)
 		return m.acquire(ctx, tid, create, confirmLiveOwner)
 	}
@@ -560,7 +566,7 @@ func (m *Manager) acquire(ctx context.Context, tid string, create bool, confirmL
 		m.mu.Lock()
 		delete(m.opening, tid)
 		m.mu.Unlock()
-		sf.Unlock()
+		close(done)
 	}()
 
 	deadline := time.Now().Add(m.opts.Lease + 15*time.Second)
