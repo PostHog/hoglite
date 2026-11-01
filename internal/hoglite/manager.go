@@ -44,6 +44,10 @@ type Metrics struct {
 	// CAS to a peer that created the tenant first (the designed fence
 	// outcome of a cold-start race, not a fault).
 	CreateRacesLost atomic.Int64
+	// QueryBatches counts /v1/query-batch requests (a peer's sub-batch
+	// included); QueryBatchItems counts the items they carried.
+	QueryBatches    atomic.Int64
+	QueryBatchItems atomic.Int64
 	// CommitEwmaUs is the EWMA of full commit latency (submit to durable
 	// ack) across the pod. It is the primary autoscaling signal: it rises
 	// as soon as S3 queueing starts, well before client-visible timeouts.
