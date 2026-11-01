@@ -580,6 +580,14 @@ func TestUsageConcurrent(t *testing.T) {
 	default:
 	}
 	m.ShutdownAll()
+	// ShutdownAll returns once each tenant has closed; the actor gives up
+	// its hold on the usage record a moment later, when run returns
+	// (usage.go, Lifetime). Wait for the last records to retire.
+	waitFor(t, "usage records to retire", func() bool {
+		met.usage.mu.Lock()
+		defer met.usage.mu.Unlock()
+		return len(met.usage.live) == 0
+	})
 	tot := usageDelta(met.usage.totals(), base)
 	// every successful read and write ran and was charged before its reply;
 	// failed ones (tenant closing) may add a few more
@@ -590,12 +598,6 @@ func TestUsageConcurrent(t *testing.T) {
 	// close canceled before their row
 	if tot.Stmts[kindRead] != tot.Ops[kindRead] || tot.Rows[kindRead] > tot.Ops[kindRead] || tot.Rows[kindRead] < reads.Load() {
 		t.Fatalf("read statements %d rows %d, ops %d, successful %d", tot.Stmts[kindRead], tot.Rows[kindRead], tot.Ops[kindRead], reads.Load())
-	}
-	met.usage.mu.Lock()
-	live := len(met.usage.live)
-	met.usage.mu.Unlock()
-	if live != 0 {
-		t.Fatalf("%d records still live after shutdown", live)
 	}
 }
 
