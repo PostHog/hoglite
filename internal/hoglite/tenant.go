@@ -553,14 +553,14 @@ func (t *Tenant) SubmitTxCtx(ctx context.Context, req TxRequest) ([]QueryResult,
 		o := t.submitRead(ctx, &readWork{stmts: req.Stmts, tx: true})
 		return o.results, false, o.err
 	}
-	t0 := time.Now()
+	t0 := t.metrics.satClock()
 	w := &txWork{req: req, reply: make(chan txOutcome, 1)}
 	select {
 	case t.writeCh <- w:
 	case <-t.done:
 		return nil, false, t.deadError()
 	}
-	t.metrics.commitStart(t0)
+	t.metrics.commitStart()
 	defer t.metrics.commitDone(t0)
 	select {
 	case o := <-w.reply:
