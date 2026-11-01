@@ -347,7 +347,17 @@ func ownerAddr(mf *Manifest) string {
 // from the owner so that every "existing" has the same shape, with the
 // owner's routable address.
 func (s *Server) createAtLiveOwner(r *http.Request, tid string, raw []byte) (int, any, bool) {
-	if s.mgr.LocalTenant(tid) != nil {
+	if t := s.mgr.LocalTenant(tid); t != nil {
+		if r.Header.Get("x-hw-noproxy") != "" && t.leaseExpiring() {
+			// A peer asks whether we hold it, and its write gate is
+			// closed: we lost the pod lease (KillLease, a lapse), or the
+			// watchdog fenced it. failAll poisons tenants on goroutines,
+			// so for a moment the tenant is still in the registry and
+			// Acquire would return it; confirming then has the peer name
+			// a dead pod as the owner. Deny, and the peer takes the slow
+			// path that waits our lease out.
+			return 421, apiError{Error: "not owner: write gate closed"}, true
+		}
 		return 0, nil, false // ours: Acquire returns it without a store read
 	}
 	ctx := r.Context()

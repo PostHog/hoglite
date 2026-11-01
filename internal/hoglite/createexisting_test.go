@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -500,5 +501,42 @@ func TestCreateConfirmationLosingRaceAnswers421(t *testing.T) {
 	}
 	if c.mets["c"].Proxied.Load() != 0 {
 		t.Fatal("the confirmation was forwarded on")
+	}
+}
+
+// The window inside TestCreateJustAfterOwnerDeathAcquires/lease-lost, held
+// open: the owner has lost its pod lease but failAll's poison has not yet
+// removed the tenant from its registry (it runs on goroutines). Asked to
+// confirm, the owner must deny; the create must not answer "existing".
+// CI run 41303215740 (attempt 2) caught the old code confirming here.
+func TestCreateConfirmDeniedByFencedOwner(t *testing.T) {
+	fs := NewFakeStore()
+	c := newRaceCluster(t, fs, fs, "a", "b")
+	seedTenant(t, c, "a", "t1", 2)
+	a := c.mgrs["a"]
+	a.stopLease()
+	a.leaseLost.Store(true) // KillLease without failAll: the tenant stays open
+	if a.LocalTenant("t1") == nil {
+		t.Fatal("precondition: t1 still open on a")
+	}
+
+	req, _ := http.NewRequest(http.MethodPut, c.servers["a"].URL+"/v1/tenants/t1", strings.NewReader(`{}`))
+	req.Header.Set("x-hw-noproxy", "1")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 421 {
+		t.Fatalf("confirm from an owner without its lease: %d, want 421", resp.StatusCode)
+	}
+
+	code, out, took := createVia(t, c, "b", "t1")
+	t.Logf("create via b: %d %v (%v)", code, out, took)
+	if out["existing"] != nil {
+		t.Fatalf("answered existing for a tenant whose owner lost its lease: %d %v", code, out)
+	}
+	if code != 200 || out["owner"] != c.mgrs["b"].ID() {
+		t.Fatalf("want b to acquire the tenant, got %d %v", code, out)
 	}
 }
