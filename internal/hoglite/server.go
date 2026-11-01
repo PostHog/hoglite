@@ -205,6 +205,7 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) (int, any
 	fmt.Fprintf(&b, "hoglite_rebases_total %d\n", m.Rebases.Load())
 	fmt.Fprintf(&b, "hoglite_checkpoint_ms_total %d\n", m.CheckpointMs.Load())
 	fmt.Fprintf(&b, "hoglite_acquires_total %d\n", m.Acquires.Load())
+	fmt.Fprintf(&b, "hoglite_create_races_lost_total %d\n", m.CreateRacesLost.Load())
 	fmt.Fprintf(&b, "hoglite_checkpoints_total %d\n", m.Checkpoints.Load())
 	fmt.Fprintf(&b, "hoglite_proxied_total %d\n", m.Proxied.Load())
 	fmt.Fprintf(&b, "hoglite_evictions_total %d\n", m.Evictions.Load())

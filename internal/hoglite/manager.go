@@ -40,6 +40,10 @@ type Metrics struct {
 	SweptObjects atomic.Int64
 	AcquireWait  atomic.Int64 // ms spent waiting for leases
 	InflightSegs atomic.Int64 // gauge: segment PUTs currently in flight
+	// CreateRacesLost counts create-only claims that lost the manifest
+	// CAS to a peer that created the tenant first (the designed fence
+	// outcome of a cold-start race, not a fault).
+	CreateRacesLost atomic.Int64
 	// CommitEwmaUs is the EWMA of full commit latency (submit to durable
 	// ack) across the pod. It is the primary autoscaling signal: it rises
 	// as soon as S3 queueing starts, well before client-visible timeouts.
@@ -540,6 +544,7 @@ func (m *Manager) Acquire(ctx context.Context, tid string, create bool) (*Tenant
 
 	deadline := time.Now().Add(m.opts.Lease + 15*time.Second)
 	attempts := 0
+	lostCreate := false
 	for {
 		attempts++
 		if m.draining.Load() {
@@ -557,7 +562,15 @@ func (m *Manager) Acquire(ctx context.Context, tid string, create bool) (*Tenant
 			if !create {
 				return nil, ErrNoTenant
 			}
-			return m.createTenant(ctx, tid, "")
+			t, err := m.createTenant(ctx, tid, "")
+			if errors.Is(err, errCreateLost) {
+				// a peer created it between our read and our CAS (every
+				// replica of a cold pool creates the same tenants at once).
+				// Re-read the manifest and act as a client of the winner.
+				lostCreate = true
+				continue
+			}
+			return t, err
 		}
 		// a create on an existing tenant with a dead lease is a no-op:
 		// the tenant exists, the retry path for catalog creation is safe
@@ -577,6 +590,12 @@ func (m *Manager) Acquire(ctx context.Context, tid string, create bool) (*Tenant
 				return nil, lerr
 			}
 			if live {
+				if lostCreate {
+					// the winner just claimed it and heartbeats: waiting
+					// out its lease would only stall the create. The
+					// tenant exists; route to the owner.
+					return nil, fmt.Errorf("%w: %s created by %s", ErrBusy, tid, mf.Owner)
+				}
 				wait := time.Duration(until-now)*time.Millisecond + m.opts.SkewMargin
 				if time.Now().Add(wait).After(deadline) {
 					return nil, fmt.Errorf("%w: %s held by %s", ErrBusy, tid, mf.Owner)
@@ -663,6 +682,10 @@ func (m *Manager) createTenant(ctx context.Context, tid, class string) (*Tenant,
 	okCh := make(chan bool, 1)
 	t.ctlCh <- func() { okCh <- t.claimLocked("") }
 	if !(<-okCh) {
+		if errors.Is(t.deadErr, errCreateLost) {
+			os.RemoveAll(dir) // never registered: nothing reads it
+			return nil, t.deadErr
+		}
 		return nil, fmt.Errorf("create checkpoint failed: %v", t.deadErr)
 	}
 	// same TOCTOU guard as the takeover path: check draining under the lock
@@ -1017,6 +1040,9 @@ func (m *Manager) reclassLoop() {
 func (m *Manager) notePoisoned(t *Tenant) {
 	if t.deadErr == nil || m.leaseLost.Load() {
 		return // graceful release, or the pod itself is dead
+	}
+	if errors.Is(t.deadErr, errCreateLost) {
+		return // lost a create race: the winner is live, nothing to damp
 	}
 	m.recordPoison(t.ID)
 }

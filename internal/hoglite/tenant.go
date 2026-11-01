@@ -1951,11 +1951,20 @@ func (t *Tenant) checkpointLocked(newClass string) bool {
 			// manifest does NOT name it (we genuinely lost).
 			// The claim uploaded only up.key: the base and deltas of the
 			// chain it extends belong to the winner too, never delete them.
-			if t.claimAttempt != "" {
+			// A create (etag "", not yet claimed) uploads under its own
+			// fresh instance dir, which nothing else ever writes.
+			creating := !t.claimed && t.etag == ""
+			if t.claimAttempt != "" || creating {
 				if cur, _, rerr := t.store.GetManifest(casCtx, t.ID); rerr == nil && cur != nil && up.key != "" && !manifestNames(cur, up.key) {
 					ctx2, cancel2 := context.WithTimeout(context.Background(), 15*time.Second)
 					_ = t.store.DeleteObjects(ctx2, up.key)
 					cancel2()
+					if creating {
+						// a peer created the tenant first: the designed
+						// fence outcome, not a fault
+						t.loseCreateLocked(cur)
+						return false
+					}
 				}
 				t.claimAttempt = ""
 			}
@@ -2092,6 +2101,28 @@ func (t *Tenant) shutdown(release bool, newClass string) {
 	// graceful close: let in-flight reads finish inside the grace before
 	// finishClose cancels the rest
 	t.readers.waitIdle(t.opts.ReadDrainWait, t.bumpProgress)
+	t.finishClose()
+}
+
+// errCreateLost: a create-only claim lost the manifest CAS because a peer
+// created the tenant first. It wraps ErrCAS. Acquire re-reads the manifest
+// and treats the winner as the owner.
+var errCreateLost = fmt.Errorf("create lost to a peer: %w", ErrCAS)
+
+// loseCreateLocked closes a tenant whose create lost the race to a peer.
+// Unlike failLocked it is not a poison: the tenant never served, never
+// registered and owns nothing in the store (the caller has deleted its
+// base), so no cooldown follows and the log line says what happened.
+func (t *Tenant) loseCreateLocked(winner *Manifest) {
+	if t.dead {
+		return
+	}
+	t.metrics.CreateRacesLost.Add(1)
+	if t.metrics.Logger != nil {
+		t.metrics.Logger.Printf("tenant %s: create race lost to %s, using it as the owner", t.ID, winner.Owner)
+	}
+	t.deadErr = errCreateLost
+	t.failQueued(errCreateLost)
 	t.finishClose()
 }
 
