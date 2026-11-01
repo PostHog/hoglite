@@ -1,8 +1,17 @@
 name: CI
 
 # Builds and tests every commit on main and every pull request.
-# The ECR release workflow reads the result of the go-checks job for
-# a main commit before it publishes that commit.
+# The ECR release workflow reads the conclusion of this whole run for a
+# main commit before it publishes that commit, so every job here gates
+# a release.
+#
+# The race tests run as two jobs in parallel. internal/hoglite/slow_test.go
+# says which tests are slow and why. Each job passes go test an explicit
+# -timeout (TEST_TIMEOUT_S) well above its measured time, and the job's
+# timeout-minutes sits above that, so a run that is too slow ends with
+# go test's own report of the running tests rather than a runner kill.
+# go-test-report.py prints each package's share of the budget and warns
+# past half of it, while the run is still green.
 
 on:
   push:
@@ -37,10 +46,19 @@ jobs:
         run: go build ./...
 
       - name: Vet
-        run: go vet ./...
+        run: |
+          go vet ./...
+          go vet -tags slow ./...
 
+      # everything but the *_slow_test.go files: about 4 minutes
       - name: Test with the race detector
-        run: go test -race ./...
+        env:
+          TEST_TIMEOUT_S: 720
+        run: |
+          rc=0
+          go test -race -timeout "${TEST_TIMEOUT_S}s" -json ./... > "$RUNNER_TEMP/race.json" || rc=$?
+          python3 .github/scripts/go-test-report.py "$RUNNER_TEMP/race.json" "$TEST_TIMEOUT_S"
+          exit "$rc"
 
       - name: Check gofmt
         run: |
@@ -50,6 +68,37 @@ jobs:
             echo "$out"
             exit 1
           fi
+
+  go-race-slow:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out the commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # only the tests of the *_slow_test.go files: about 4 minutes
+      - name: Test the slow tests with the race detector
+        env:
+          TEST_TIMEOUT_S: 720
+        run: |
+          tests=$(sed -n 's/^func \(Test[A-Za-z0-9_]*\)(t \*testing\.T).*/\1/p' internal/hoglite/*_slow_test.go | paste -sd'|' -)
+          if [[ -z $tests ]]; then
+            echo "::error::no tests in internal/hoglite/*_slow_test.go"
+            exit 1
+          fi
+          echo "slow tests: $tests"
+          rc=0
+          go test -race -tags slow -timeout "${TEST_TIMEOUT_S}s" -run "^(${tests})\$" -json ./internal/hoglite > "$RUNNER_TEMP/race.json" || rc=$?
+          python3 .github/scripts/go-test-report.py "$RUNNER_TEMP/race.json" "$TEST_TIMEOUT_S"
+          exit "$rc"
 
   script-tests:
     runs-on: ubuntu-latest
