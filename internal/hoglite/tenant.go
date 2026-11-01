@@ -79,6 +79,11 @@ type TenantOpts struct {
 	UsageTopN     int
 	UsageInterval time.Duration
 	UsageHalfLife time.Duration
+	// InteriorReads lets a read-only /tx that sets "interior" skip the
+	// durability wait (reads.go, "Interior reads"). Off by default: an
+	// interior request is then served as an ordinary parked read, and the
+	// caller gets no incarnation token. Turning it off is the rollback.
+	InteriorReads bool
 }
 
 func DefaultOpts() TenantOpts {
@@ -147,6 +152,17 @@ type TxRequest struct {
 	// dedup hit a mismatched FP is a 422-class error, not a replayed result:
 	// idempotency keys may never be reused for a different request.
 	FP string `json:"fp,omitempty"`
+	// Interior asks for an interior read (reads.go, "Interior reads"):
+	// only for a read-only transaction, only through SubmitInteriorReadCtx
+	// (SubmitTxCtx refuses it), and only honoured when the tenant has
+	// TenantOpts.InteriorReads on.
+	Interior bool `json:"interior,omitempty"`
+	// Incarnation fences a write to the tenant incarnation that served the
+	// interior read it was decided on: the token that read returned. A
+	// write whose token names another incarnation is refused, not applied,
+	// unless its txid already has a dedup receipt (runTx). Empty means no
+	// fence.
+	Incarnation string `json:"incarnation,omitempty"`
 }
 
 type txWork struct {
@@ -228,7 +244,11 @@ type readWork struct {
 	ctx   context.Context
 	stmts []Statement
 	tx    bool // read-only /tx: run every statement with its guards
-	reply chan readOutcome
+	// interior: deliver the outcome on the snapshot at its basis without
+	// the durability wait (reads.go, "Interior reads"). Set only by
+	// SubmitInteriorReadCtx on a tenant with TenantOpts.InteriorReads.
+	interior bool
+	reply    chan readOutcome
 	// taken decides who returns the admission slots: the first party to
 	// set it (the actor on receipt, or the submitter that gives up) owns
 	// the release.
@@ -356,6 +376,10 @@ type Tenant struct {
 	claimGen   int64        // manager leaseGen at claim time; mismatch = fenced
 	claimEpoch int64        // manifest epoch of THIS incarnation (immutable after open)
 	claimInst  string       // manifest instance of THIS incarnation
+	// incarnation names this Tenant value: the tenant id and a random
+	// part drawn at open. Interior reads return it and a fenced write must
+	// match it (reads.go, "Interior reads"). Immutable after open.
+	incarnation string
 
 	debugUnfreeze chan struct{} // test hook
 
@@ -397,10 +421,11 @@ type segDone struct {
 // so parked results stay bounded (reads.go). Read-only /tx outcomes park
 // here the same way: they run on the reader path.
 type readWait struct {
-	end  int64
-	w    *readWork
-	out  readOutcome
-	stop func() bool // stops the abandon callback of onReadDone
+	end   int64
+	w     *readWork
+	out   readOutcome
+	stop  func() bool // stops the abandon callback of onReadDone
+	since time.Time   // when it parked (ParkedReadUs)
 }
 
 func openTenant(id string, dir string, mf *Manifest, etag string, store Backend, prefix, self, routeID string, opts TenantOpts, metrics *Metrics, clock leaseClock) (*Tenant, error) {
@@ -419,10 +444,11 @@ func openTenant(id string, dir string, mf *Manifest, etag string, store Backend,
 		ID: id, store: store, prefix: prefix, opts: opts, self: self, routeID: routeID, dir: dir, clock: clock,
 		dbPath: filepath.Join(dir, "db.sqlite"), walPath: filepath.Join(dir, "db.sqlite-wal"),
 		mf: mf, etag: etag, claimEpoch: mf.Epoch, claimInst: mf.Instance,
-		segDone: make(chan segDone, 256),
-		sem:     make(chan struct{}, opts.Inflight),
-		writeCh: make(chan *txWork, 4096),
-		readCh:  make(chan *readWork, 4096),
+		incarnation: id + "/" + newInstanceID(),
+		segDone:     make(chan segDone, 256),
+		sem:         make(chan struct{}, opts.Inflight),
+		writeCh:     make(chan *txWork, 4096),
+		readCh:      make(chan *readWork, 4096),
 		// Each outcome here still holds its tenant reader slot (until it
 		// is delivered or dropped), so the buffer never fills and a worker
 		// never waits for the actor.
@@ -518,6 +544,11 @@ func (t *Tenant) SubmitTx(req TxRequest) ([]QueryResult, bool, error) {
 // its durable outcome so a retry can never race it. Only the server-side
 // WriteTimeout stops a write, and it rolls the write back (applyTx).
 func (t *Tenant) SubmitTxCtx(ctx context.Context, req TxRequest) ([]QueryResult, bool, error) {
+	if req.Interior {
+		// an interior read has its own entry point, so that no caller of
+		// the ordinary path can opt in by passing a request through
+		return nil, false, ErrInteriorMisuse
+	}
 	if allReadOnly(req.Stmts) {
 		o := t.submitRead(ctx, &readWork{stmts: req.Stmts, tx: true})
 		return o.results, false, o.err
@@ -542,6 +573,28 @@ func (t *Tenant) SubmitTxCtx(ctx context.Context, req TxRequest) ([]QueryResult,
 		}
 		return nil, false, t.deadError()
 	}
+}
+
+// SubmitInteriorReadCtx runs a read-only transaction whose result is
+// interior: it decides a write of the same caller and reaches no one else
+// (reads.go, "Interior reads"). With TenantOpts.InteriorReads on, the
+// outcome is delivered on the snapshot at its basis without the
+// durability wait, and incarnation names this Tenant: the caller must send
+// it as TxRequest.Incarnation on the write it decides. With the option off
+// the read parks like any other and incarnation is empty.
+func (t *Tenant) SubmitInteriorReadCtx(ctx context.Context, req TxRequest) (results []QueryResult, incarnation string, err error) {
+	if !req.Interior || !allReadOnly(req.Stmts) {
+		return nil, "", ErrInteriorMisuse
+	}
+	if !t.opts.InteriorReads {
+		o := t.submitRead(ctx, &readWork{stmts: req.Stmts, tx: true})
+		return o.results, "", o.err
+	}
+	o := t.submitRead(ctx, &readWork{stmts: req.Stmts, tx: true, interior: true})
+	if o.err != nil {
+		return nil, "", o.err
+	}
+	return o.results, t.incarnation, nil
 }
 
 func (t *Tenant) SubmitQuery(st Statement) (QueryResult, error) {
@@ -736,7 +789,9 @@ func (t *Tenant) run() {
 				return
 			}
 			t.pinRead(r, basis)
-			if basis > t.durableOff {
+			// an interior read does not wait, so it ships nothing early:
+			// the write it decides closes the batch as usual
+			if basis > t.durableOff && !r.interior {
 				t.cutSegment() // ship pending bytes so the watermark can pass
 			}
 		case rr := <-t.readDone:
@@ -1052,6 +1107,18 @@ func (t *Tenant) runTx(ctx context.Context, tx *sql.Tx, req TxRequest, lim *resu
 			o.err = err
 			return o
 		}
+	}
+	// The incarnation fence comes after the dedup lookup: a txid whose
+	// commit this incarnation holds (applied here, or replayed from S3)
+	// answers with its receipt whatever token it carries, so a retry of a
+	// durable commit is never refused. Without a receipt, a write decided
+	// on an interior read of another incarnation must not apply: that read
+	// may have seen commits this incarnation never had (reads.go,
+	// "Interior reads").
+	if req.Incarnation != "" && req.Incarnation != t.incarnation {
+		t.metrics.IncarnationFenced.Add(1)
+		o.err = errIncarnationChanged
+		return o
 	}
 	if o.results, o.err = execTxStatements(ctx, tx, req.Stmts, lim); o.err != nil {
 		// a statement-level failure refuses the set (422); anything else

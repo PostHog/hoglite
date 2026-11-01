@@ -81,6 +81,16 @@ type Metrics struct {
 	ParkedReads atomic.Int64
 	ParkedBytes atomic.Int64
 	ParkWaiting atomic.Int64
+	// ParkedReadsTotal counts results that parked, ParkedReadUs the time
+	// from park to release or drop, summed (a parked result that is
+	// dropped by failQueued is not counted in ParkedReadUs).
+	ParkedReadsTotal atomic.Int64
+	ParkedReadUs     atomic.Int64
+	// interior reads (reads.go): reads delivered without the durability
+	// wait, and fenced writes refused because their interior read came
+	// from another incarnation
+	InteriorReads     atomic.Int64
+	IncarnationFenced atomic.Int64
 	// query guards (guards.go): reads and write transactions stopped at
 	// their deadline, and queries refused for a too large result
 	ReadTimeouts   atomic.Int64

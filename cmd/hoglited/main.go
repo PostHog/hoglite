@@ -60,8 +60,12 @@ func main() {
 		usageTopN   = flag.Int("usage-top-n", 20, "tenants with the most read plus write time that get their own series in /metrics (negative = none)")
 		usageEvery  = flag.Duration("usage-interval", 10*time.Second, "sample period of the per-tenant usage rates")
 		usageHalf   = flag.Duration("usage-half-life", time.Minute, "half-life of the decayed per-tenant usage rates")
+		interior    = mustBoolSettingVar("interior-reads", "HL_INTERIOR_READS", false, "serve read-only /tx requests that set \"interior\" without the durability wait, fenced to this incarnation (default off; off serves them as ordinary parked reads, which is the rollback). Only for reads whose result decides a write of the same caller and is shown to no one")
 	)
 	flag.Parse()
+	// a setting that changes a durability guarantee is logged at start, so
+	// an operator can check what the process took from its manifest
+	log.Printf("-interior-reads=%v", *interior)
 	// memory caps first: before any tenant opens (memory.go). A cap that
 	// cannot be set stops the start; -sqlite-heap-limit=-1 opts out of
 	// the SQLite cap.
@@ -191,6 +195,7 @@ func main() {
 	opts.UsageTopN = *usageTopN
 	opts.UsageInterval = *usageEvery
 	opts.UsageHalfLife = *usageHalf
+	opts.InteriorReads = *interior
 	if opts.WriteTimeout < 0 || opts.WriteTimeout >= 60*time.Second {
 		log.Printf("WARNING: -write-timeout %v: a write holds the tenant actor; the actor watchdog fails a tenant over after about 70s without progress", opts.WriteTimeout)
 	}
