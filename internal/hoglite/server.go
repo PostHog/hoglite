@@ -282,7 +282,11 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) (int, any)
 	if code, out, done := s.createAtLiveOwner(r, tid, raw); done {
 		return code, out
 	}
-	_, err := s.mgr.Acquire(r.Context(), tid, true)
+	// A peer can create the tenant after the initial manifest read.
+	// Singleflight followers also need to confirm that owner before waiting.
+	_, err := s.mgr.acquire(r.Context(), tid, true, func(mf *Manifest) bool {
+		return r.Header.Get("x-hw-noproxy") != "" || s.confirmOwner(r, tid, mf, raw) == ownerConfirmed
+	})
 	if err != nil {
 		// create on an existing tenant is a no-op success (idempotent):
 		// if the manifest exists, the tenant exists, regardless of who

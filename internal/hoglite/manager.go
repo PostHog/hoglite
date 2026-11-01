@@ -480,6 +480,12 @@ func (m *Manager) ownerLeaseLive(ctx context.Context, owner string) (bool, int64
 // Acquire returns the open tenant, acquiring or re-acquiring ownership as
 // needed. create=true creates the tenant when missing.
 func (m *Manager) Acquire(ctx context.Context, tid string, create bool) (*Tenant, error) {
+	return m.acquire(ctx, tid, create, nil)
+}
+
+// acquire lets an HTTP create confirm a live owner before waiting for its lease.
+// A nil callback preserves the normal takeover behavior.
+func (m *Manager) acquire(ctx context.Context, tid string, create bool, confirmLiveOwner func(*Manifest) bool) (*Tenant, error) {
 	if m.draining.Load() {
 		return nil, ErrClosed
 	}
@@ -544,7 +550,7 @@ func (m *Manager) Acquire(ctx context.Context, tid string, create bool) (*Tenant
 		sf.Lock() // wait for the in-flight open
 		sf.Unlock()
 		// leader finished; loop normally (tenant now exists or create failed)
-		return m.Acquire(ctx, tid, create)
+		return m.acquire(ctx, tid, create, confirmLiveOwner)
 	}
 	defer func() {
 		m.mu.Lock()
@@ -583,8 +589,7 @@ func (m *Manager) Acquire(ctx context.Context, tid string, create bool) (*Tenant
 			}
 			return t, err
 		}
-		// a create on an existing tenant with a dead lease is a no-op:
-		// the tenant exists, the retry path for catalog creation is safe
+		// A local tenant can become available while this caller waits.
 		if create {
 			if t := m.LocalTenant(tid); t != nil && t.Alive() {
 				return t, nil
@@ -601,11 +606,10 @@ func (m *Manager) Acquire(ctx context.Context, tid string, create bool) (*Tenant
 				return nil, lerr
 			}
 			if live {
-				if lostCreate {
-					// the winner just claimed it and heartbeats: waiting
-					// out its lease would only stall the create. The
-					// tenant exists; route to the owner.
-					return nil, fmt.Errorf("%w: %s created by %s", ErrBusy, tid, mf.Owner)
+				if lostCreate || (create && confirmLiveOwner != nil && confirmLiveOwner(mf)) {
+					// A queued create can observe the winner without losing a CAS.
+					// Let the server confirm the owner without a lease wait.
+					return nil, fmt.Errorf("%w: %s held by %s", ErrBusy, tid, mf.Owner)
 				}
 				wait := time.Duration(until-now)*time.Millisecond + m.opts.SkewMargin
 				if time.Now().Add(wait).After(deadline) {

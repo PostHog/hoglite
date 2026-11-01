@@ -51,6 +51,118 @@ func (s *casHoldStore) PutManifestCAS(ctx context.Context, tid string, m *Manife
 // acquire deadline (lease+15 s).
 const promptCreate = time.Second
 
+// createReadBarrierStore holds the initial missing-manifest reads until every create arrives.
+type createReadBarrierStore struct {
+	Backend
+	tid     string
+	callers int64
+	reads   atomic.Int64
+	release chan struct{}
+}
+
+func (s *createReadBarrierStore) GetManifest(ctx context.Context, tid string) (*Manifest, string, error) {
+	mf, etag, err := s.Backend.GetManifest(ctx, tid)
+	if tid == s.tid && err == nil && mf == nil {
+		n := s.reads.Add(1)
+		if n == s.callers {
+			close(s.release)
+		}
+		if n <= s.callers {
+			select {
+			case <-s.release:
+			case <-ctx.Done():
+				return nil, "", ctx.Err()
+			}
+		}
+	}
+	return mf, etag, err
+}
+
+func TestCreateConcurrentFreshTenantAnswersAtOnce(t *testing.T) {
+	const perReplica = 8
+	ids := []string{"a", "b", "c"}
+	fs := NewFakeStore()
+	bs := &createReadBarrierStore{
+		Backend: fs, tid: registryTID, callers: int64(perReplica * len(ids)), release: make(chan struct{}),
+	}
+	c := newRaceClusterOpts(t, DefaultOpts(), bs, fs, ids...)
+	for _, m := range c.mgrs {
+		t.Cleanup(m.ShutdownAll)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	type result struct {
+		id   string
+		code int
+		out  map[string]any
+		err  error
+		took time.Duration
+	}
+	results := make(chan result, perReplica*len(ids))
+	for _, id := range ids {
+		for range perReplica {
+			go func() {
+				start := time.Now()
+				req, err := http.NewRequestWithContext(ctx, http.MethodPut, c.servers[id].URL+"/v1/tenants/"+registryTID, nil)
+				r := result{id: id, err: err}
+				if err == nil {
+					resp, err := http.DefaultClient.Do(req)
+					r.err = err
+					if err == nil {
+						r.code = resp.StatusCode
+						r.err = json.NewDecoder(resp.Body).Decode(&r.out)
+						resp.Body.Close()
+					}
+				}
+				r.took = time.Since(start)
+				results <- r
+			}()
+		}
+	}
+	var replies []result
+	var maxTook time.Duration
+	for range perReplica * len(ids) {
+		r := <-results
+		replies = append(replies, r)
+		maxTook = max(maxTook, r.took)
+		if r.err != nil || r.code != 200 {
+			t.Errorf("%s: create returns %d %v (%v) after %v", r.id, r.code, r.out, r.err, r.took)
+		}
+		if r.took > promptCreate {
+			t.Errorf("%s: create takes %v, want < %v", r.id, r.took, promptCreate)
+		}
+	}
+	t.Logf("%d creates finish within %v", len(replies), maxTook)
+	mf := mustManifest(t, fs, registryTID)
+	for _, r := range replies {
+		if r.id != mf.OwnerAddr && (r.out["existing"] != true || r.out["owner"] != mf.OwnerAddr) {
+			t.Errorf("%s: want existing with owner %s, got %v", r.id, mf.OwnerAddr, r.out)
+		}
+	}
+	var acquires int64
+	for _, id := range ids {
+		acquires += c.mets[id].Acquires.Load()
+		if wait := c.mets[id].AcquireWait.Load(); wait != 0 {
+			t.Errorf("%s waits %d ms for a lease during concurrent creates", id, wait)
+		}
+		if id != mf.OwnerAddr && c.mgrs[id].LocalTenant(registryTID) != nil {
+			t.Errorf("%s opens a local tenant that %s owns", id, mf.OwnerAddr)
+		}
+		if lines := c.logs[id].matching("poisoned"); len(lines) != 0 {
+			t.Errorf("%s poisons a tenant during concurrent creates: %v", id, lines)
+		}
+	}
+	if acquires != 1 {
+		t.Errorf("concurrent creates acquire %d tenants, want 1", acquires)
+	}
+	if mf.Epoch != 1 {
+		t.Errorf("ownership changes during concurrent creates: epoch %d", mf.Epoch)
+	}
+	if objects := unnamedObjects(fs, registryTID, mf); len(objects) != 0 {
+		t.Errorf("concurrent creates leave orphaned objects: %v", objects)
+	}
+}
+
 // The production report: a 3-replica pool behind one Service, production
 // lease settings. The registry tenant is owned by one pod; hoglake's
 // ensureRegistry PUT lands on any pod. On a non-owner it slept out the
