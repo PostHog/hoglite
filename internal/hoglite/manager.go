@@ -59,6 +59,17 @@ type Metrics struct {
 	// saturation decay of the latency term (0 = default); tests shorten it
 	satIdleGraceNs atomic.Int64
 	satHalfLifeNs  atomic.Int64
+	// satMu orders commitStart, commitDone and saturationAt, so that a
+	// read sees the EWMA, CommitLastMs and CommitsInflight of one moment.
+	// Without it a read could pair an old CommitLastMs with a just-zeroed
+	// CommitsInflight (a long commit ending reads as an idle pod: a dip to
+	// the decayed value), or see a commit in flight before commitStart
+	// folds the decay (a spike to the stale burst value). Writers still
+	// store through the atomics, so plain loads elsewhere stay valid.
+	satMu sync.Mutex
+	// satNow is the clock of the saturation signal (nil = time.Now).
+	// Tests set it before first use to drive the decay without sleeping.
+	satNow func() time.Time
 
 	// Stored (possibly compressed) bytes PUT for segments and base images.
 	// SegBytes is the raw WAL byte count; raw vs stored gives the ratio.
@@ -1261,13 +1272,16 @@ func (m *Manager) OpenCount() int {
 // Once the pod is idle the term decays (satLatencyFactor); any commit in
 // flight or ended within the grace keeps it at full value.
 func (m *Manager) Saturation() float64 {
-	return m.saturationAt(time.Now())
+	return m.saturationAt(m.metrics.satClock())
 }
 
 func (m *Manager) saturationAt(now time.Time) float64 {
 	grace, halfLife := m.metrics.satDecay()
-	f := satLatencyFactor(now, m.metrics.CommitLastMs.Load(), m.metrics.CommitsInflight.Load(), grace, halfLife)
-	lat := f * float64(m.metrics.CommitEwmaUs.Load()) / m.satCommitBudgetUs
+	m.metrics.satMu.Lock()
+	lastMs, inflight, ewma := m.metrics.CommitLastMs.Load(), m.metrics.CommitsInflight.Load(), m.metrics.CommitEwmaUs.Load()
+	m.metrics.satMu.Unlock()
+	f := satLatencyFactor(now, lastMs, inflight, grace, halfLife)
+	lat := f * float64(ewma) / m.satCommitBudgetUs
 	inf := float64(m.metrics.InflightSegs.Load()) / m.satInflightCap
 	if inf > lat {
 		return inf
@@ -1287,6 +1301,14 @@ const (
 	defaultSatIdleGrace = 30 * time.Second
 	defaultSatHalfLife  = 30 * time.Second
 )
+
+// satClock reads the clock of the saturation signal.
+func (m *Metrics) satClock() time.Time {
+	if m.satNow != nil {
+		return m.satNow()
+	}
+	return time.Now()
+}
 
 // satDecay returns the idle grace and half-life of the latency term.
 func (m *Metrics) satDecay() (grace, halfLife time.Duration) {
@@ -1308,32 +1330,31 @@ func (m *Metrics) satDecay() (grace, halfLife time.Duration) {
 // commit after a slow burst would read as 7/8 of the old latency).
 // Folding keeps the signal continuous: the commit moves it one EWMA step
 // from what the pod showed, as under load.
-func (m *Metrics) commitStart(now time.Time) {
+//
+// The fold and the in-flight count change under satMu, so no read sees
+// the commit in flight with the stale value still stored.
+func (m *Metrics) commitStart() {
+	grace, halfLife := m.satDecay()
+	m.satMu.Lock()
+	defer m.satMu.Unlock()
 	if m.CommitsInflight.Add(1) > 1 {
 		return
 	}
-	grace, halfLife := m.satDecay()
-	f := satLatencyFactor(now, m.CommitLastMs.Load(), 0, grace, halfLife)
-	if f >= 1 {
-		return
-	}
-	for {
-		cur := m.CommitEwmaUs.Load()
-		if cur == 0 {
-			return
-		}
+	f := satLatencyFactor(m.satClock(), m.CommitLastMs.Load(), 0, grace, halfLife)
+	if cur := m.CommitEwmaUs.Load(); f < 1 && cur != 0 {
 		// floor at 1us: ewmaUpdate seeds a zero EWMA with the next sample,
 		// which would turn one commit after a long idle into the whole signal
-		next := max(int64(float64(cur)*f), 1)
-		if m.CommitEwmaUs.CompareAndSwap(cur, next) {
-			return
-		}
+		m.CommitEwmaUs.Store(max(int64(float64(cur)*f), 1))
 	}
 }
 
-// commitDone ends a commit that started at t0 and feeds the EWMA.
+// commitDone ends a commit that started at t0 and feeds the EWMA. The
+// three updates are one step under satMu: a read never sees the commit
+// gone with CommitLastMs still at the previous end.
 func (m *Metrics) commitDone(t0 time.Time) {
-	now := time.Now()
+	m.satMu.Lock()
+	defer m.satMu.Unlock()
+	now := m.satClock()
 	ewmaUpdate(&m.CommitEwmaUs, now.Sub(t0).Microseconds())
 	m.CommitLastMs.Store(now.UnixMilli())
 	m.CommitsInflight.Add(-1)

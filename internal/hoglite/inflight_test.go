@@ -18,9 +18,11 @@ import (
 // its true value (0 when idle) and never goes below zero.
 
 // segGateStore holds each segment PUT while armed until the test sends
-// one token on gate. delay (ns) slows every segment PUT.
+// one token on gate. delay (ns) slows every segment PUT: it sleeps, or,
+// with clock set, advances the clock by delay and returns at once.
 type segGateStore struct {
 	*FakeStore
+	clock   *satClock
 	delay   atomic.Int64
 	armed   atomic.Bool
 	entered chan string
@@ -33,7 +35,11 @@ func newSegGateStore() *segGateStore {
 
 func (s *segGateStore) PutSegment(ctx context.Context, key string, data []byte) error {
 	if d := s.delay.Load(); d > 0 {
-		time.Sleep(time.Duration(d))
+		if s.clock != nil {
+			s.clock.Advance(time.Duration(d))
+		} else {
+			time.Sleep(time.Duration(d))
+		}
 	}
 	if s.armed.Load() {
 		select {
