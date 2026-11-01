@@ -283,7 +283,11 @@ func TestFailedCommitWithFramesPoisons(t *testing.T) {
 	_, end0, _ := walState(t, ten)
 	puts0 := met.SegPuts.Load()
 	restore := func() {}
-	ten.txHook = func() { restore = withHeapLimit(t, 0) } // after the statements, before COMMIT
+	// After the statements, before COMMIT. The limit is below anything
+	// that can be freed: at "current use" any free elsewhere in the
+	// process (another test's leftover connection closing) would leave
+	// room for the COMMIT.
+	ten.txHook = func() { restore = withHeapLimitAt(t, 1) }
 	_, _, err = ten.SubmitTx(TxRequest{Client: "c", TxID: "x", Stmts: []Statement{insertStmt(1, "lost"),
 		{SQL: `INSERT INTO big SELECT x, zeroblob(3000) FROM
 			(WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c LIMIT 6000) SELECT x FROM c)`}}})
