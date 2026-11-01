@@ -261,26 +261,158 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) (int, any)
 	if !validTID(tid) {
 		return 400, apiError{Error: "bad tenant id"}
 	}
+	raw, _ := io.ReadAll(http.MaxBytesReader(nil, r.Body, 64<<20))
 	var body struct {
 		Class string `json:"class"`
 	}
-	decodeBody(r, &body)
+	if len(bytes.TrimSpace(raw)) > 0 {
+		dec := json.NewDecoder(bytes.NewReader(raw))
+		dec.UseNumber()
+		dec.Decode(&body)
+	}
 	if body.Class != "" && body.Class != s.mgr.class {
 		return s.proxyOr421(w, r, tid, "/v1/tenants/"+tid, nil)
+	}
+	// A tenant that already exists under a live peer: answer at once
+	// instead of entering Acquire, which would wait out the owner's lease
+	// (it only waits so it can take a dead owner's tenant over) and, with
+	// the owner heartbeating, sleep until its deadline (15.5 s in
+	// production). That outlasts hoglake's 8 s budget, so on a pool of
+	// several replicas every create that landed on a non-owner failed.
+	if code, out, done := s.createAtLiveOwner(r, tid, raw); done {
+		return code, out
 	}
 	_, err := s.mgr.Acquire(r.Context(), tid, true)
 	if err != nil {
 		// create on an existing tenant is a no-op success (idempotent):
 		// if the manifest exists, the tenant exists, regardless of who
 		// currently owns it
-		if errors.Is(err, ErrBusy) || errors.Is(err, ErrWrongClass) {
+		if errors.Is(err, ErrWrongClass) {
 			if mf, _, gerr := s.mgr.store.GetManifest(r.Context(), tid); gerr == nil && mf != nil {
-				return 200, map[string]any{"tenant": tid, "owner": mf.OwnerAddr, "existing": true}
+				return 200, existingBody(tid, mf)
+			}
+		}
+		if errors.Is(err, ErrBusy) {
+			// a live peer holds it: it won a create race against us just
+			// now, or it heartbeat through the whole acquire wait. Answer
+			// "existing" only if it confirms (or cannot be asked, as before
+			// this check existed); one that does not answer gets a
+			// retryable 503, never a claim that it owns the tenant.
+			if mf, _, gerr := s.mgr.store.GetManifest(r.Context(), tid); gerr == nil && mf != nil {
+				if r.Header.Get("x-hw-noproxy") != "" {
+					// a peer's confirmation request: we do not hold it
+					return 421, apiError{Error: "not owner", Owner: ownerAddr(mf), Class: mf.Class}
+				}
+				switch s.confirmOwner(r, tid, mf, raw) {
+				case ownerConfirmed, ownerUnroutable:
+					return 200, existingBody(tid, mf)
+				default:
+					return 503, apiError{Error: "tenant owner " + ownerAddr(mf) + " did not confirm the tenant; retry"}
+				}
 			}
 		}
 		return errCode(err), acquireError(err)
 	}
 	return 200, map[string]any{"tenant": tid, "owner": s.mgr.ID()}
+}
+
+// existingBody is the answer to a create of a tenant that already exists.
+func existingBody(tid string, mf *Manifest) map[string]any {
+	return map[string]any{"tenant": tid, "owner": ownerAddr(mf), "existing": true}
+}
+
+// ownerAddr is the routable address of mf's owner, never the fencing id.
+func ownerAddr(mf *Manifest) string {
+	if mf.OwnerAddr != "" {
+		return mf.OwnerAddr
+	}
+	if i := strings.Index(mf.Owner, "."); i > 0 {
+		return mf.Owner[:i]
+	}
+	return mf.Owner
+}
+
+// createAtLiveOwner answers a create of a tenant whose manifest names a
+// live peer, without the lease wait. done=false sends the caller on to
+// Acquire: no manifest (create), no owner or an expired lease (take it
+// over), our own manifest, or a peer that did not confirm.
+//
+// A fresh pod lease is not proof of life: a pod that crashed keeps a valid
+// lease for up to lease+skew (15.5 s in production). So the pod we were
+// sent to forwards the create to the owner, the way /tx is routed, and
+// answers "existing" only when the owner answers 200 for the tenant. An
+// owner that is gone, or no longer holds it, sends us into Acquire, which
+// waits its lease out and takes the tenant over: slow, but it never names
+// a dead pod as the owner. The answer is built here rather than streamed
+// from the owner so that every "existing" has the same shape, with the
+// owner's routable address.
+func (s *Server) createAtLiveOwner(r *http.Request, tid string, raw []byte) (int, any, bool) {
+	if s.mgr.LocalTenant(tid) != nil {
+		return 0, nil, false // ours: Acquire returns it without a store read
+	}
+	ctx := r.Context()
+	mf, _, err := s.mgr.store.GetManifest(ctx, tid)
+	if err != nil || mf == nil || mf.Owner == "" || mf.Owner == s.mgr.ID() {
+		return 0, nil, false
+	}
+	if mf.Class != "" && mf.Class != s.mgr.class {
+		return 0, nil, false // Acquire answers ErrWrongClass at once
+	}
+	live, _, err := s.mgr.ownerLeaseLive(ctx, mf.Owner)
+	if err != nil || !live {
+		return 0, nil, false
+	}
+	if r.Header.Get("x-hw-noproxy") != "" {
+		// a peer asked us to confirm a tenant another live pod holds: we
+		// are not its owner, and waiting out that pod's lease here would
+		// stall the peer. Say so at once.
+		return 421, apiError{Error: "not owner", Owner: ownerAddr(mf), Class: mf.Class}, true
+	}
+	if s.confirmOwner(r, tid, mf, raw) == ownerConfirmed {
+		s.mgr.metrics.Proxied.Add(1)
+		return 200, existingBody(tid, mf), true
+	}
+	return 0, nil, false
+}
+
+type ownerCheck int
+
+const (
+	ownerConfirmed  ownerCheck = iota // the owner answered 200 for the tenant
+	ownerDenied                       // transport error, timeout or non-200
+	ownerUnroutable                   // not in our peer table: cannot ask
+)
+
+// confirmOwner forwards the create to mf's owner and reports whether it
+// holds the tenant. The owner answers from its local copy in about a
+// millisecond; the 2 s cap bounds a wedged owner, after which the caller
+// takes the slow path. A pod restarted under the owner's name (StatefulSet
+// pods keep their names) is a new incarnation that does not hold the
+// tenant: it answers 421, which counts as a denial.
+func (s *Server) confirmOwner(r *http.Request, tid string, mf *Manifest, raw []byte) ownerCheck {
+	base, ok := s.peers[ownerAddr(mf)]
+	if !ok {
+		return ownerUnroutable
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, base+"/v1/tenants/"+tid, bytes.NewReader(raw))
+	if err != nil {
+		return ownerDenied
+	}
+	req.Header.Set("x-hw-noproxy", "1")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := s.client.Do(req)
+	if err != nil {
+		s.mgr.metrics.ProxyFails.Add(1)
+		return ownerDenied
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return ownerDenied
+	}
+	return ownerConfirmed
 }
 
 func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) (int, any) {
