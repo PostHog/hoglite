@@ -140,10 +140,7 @@ func (s *Server) wrap(h func(http.ResponseWriter, *http.Request) (int, any)) htt
 			}
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(code)
-		enc := json.NewEncoder(w)
-		enc.Encode(body)
+		writeJSON(w, code, body)
 	}
 }
 
@@ -796,8 +793,30 @@ func (s *Server) handleShutdown(w http.ResponseWriter, r *http.Request) (int, an
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(code)
-	json.NewEncoder(w).Encode(v)
+	dst := &jsonResponseWriter{w: w, code: code}
+	enc := json.NewEncoder(dst)
+	if err := enc.Encode(v); err != nil && !dst.started {
+		dst.code = http.StatusInternalServerError
+		_ = enc.Encode(apiError{Error: "encode response: " + err.Error()})
+	}
+}
+
+// jsonResponseWriter delays the status until the encoder writes its value.
+// The encoder buffers the complete value before Write.
+// An encoding error allows a 500 response without another buffer.
+// Do not append an error body after a transport error.
+type jsonResponseWriter struct {
+	w       http.ResponseWriter
+	code    int
+	started bool
+}
+
+func (w *jsonResponseWriter) Write(p []byte) (int, error) {
+	if !w.started {
+		w.w.WriteHeader(w.code)
+		w.started = true
+	}
+	return w.w.Write(p)
 }
 
 var tidOK = func() func(string) bool {
