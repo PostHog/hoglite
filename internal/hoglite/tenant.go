@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -1128,7 +1129,11 @@ func (t *Tenant) runTx(ctx context.Context, tx *sql.Tx, req TxRequest, lim *resu
 		return o
 	}
 	if req.Client != "" && req.TxID != "" && !o.readOnly {
-		raw, _ := json.Marshal(o.results)
+		raw, err := json.Marshal(o.results)
+		if err != nil {
+			o.err = classifyStmtErr(fmt.Errorf("encode transaction result: %w", err))
+			return o
+		}
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO _hw_dedup(client, txid, result, reqfp) VALUES(?,?,?,?)`,
 			req.Client, req.TxID, string(raw), req.FP); err != nil {
@@ -1328,6 +1333,11 @@ func drainRows(rows *sql.Rows, lim *resultLimit) (QueryResult, error) {
 			return QueryResult{}, err
 		}
 		for i, v := range vals {
+			// JSON cannot encode non-finite numbers.
+			// Refuse the result before a write commits its dedup receipt.
+			if f, ok := v.(float64); ok && (math.IsInf(f, 0) || math.IsNaN(f)) {
+				return QueryResult{}, fmt.Errorf("query result contains a non-finite number: %v", f)
+			}
 			vals[i] = jsonValue(v)
 		}
 		out.Rows = append(out.Rows, vals)
