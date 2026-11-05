@@ -1,10 +1,10 @@
 # 🐗 hoglite
 
-hoglite serves independent SQLite databases over HTTP with durable storage in S3.
+hoglite is a multi-tenant SQLite service with an HTTP API and durable storage in S3.
 
 ## Good at
 
-- Many small, independent databases.
+- Multi-tenant workloads with many small databases.
 - Short transactions with one writer per tenant.
 - Recovering tenants on another replica after a failure.
 - Reducing storage traffic through group commits, compression, and delta checkpoints.
