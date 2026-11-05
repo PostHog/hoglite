@@ -25,6 +25,11 @@ import (
 )
 
 func main() {
+	if handled, code := runVersion(os.Args[1:], os.Stdout, os.Stderr); handled {
+		os.Exit(code)
+	}
+	// Register for normal help; runVersion handles inspection before startup.
+	flag.Bool("version", false, versionUsage)
 	var (
 		id          = flag.String("id", envOr("HL_ID", defaultID()), "replica id (default: host-pid-random)")
 		addr        = flag.String("addr", envOr("HL_ADDR", ":9101"), "listen address")

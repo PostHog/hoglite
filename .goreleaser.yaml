@@ -1,0 +1,37 @@
+version: 2
+project_name: hoglite
+
+builds:
+  - main: ./cmd/hoglited
+    binary: hoglited
+    env:
+      - CGO_ENABLED=0
+    goos: [linux]
+    goarch: [amd64, arm64]
+    flags:
+      - -mod=readonly
+      - -trimpath
+    ldflags:
+      - -X main.version=build-{{ .FullCommit }} -X main.commit={{ .FullCommit }}
+
+archives:
+  - formats: [binary]
+    name_template: "hoglited-{{ .Os }}-{{ .Arch }}"
+
+checksum:
+  name_template: checksums.txt
+  extra_files:
+    - glob: LICENSE
+
+changelog:
+  disable: true
+
+source:
+  enabled: false
+
+release:
+  prerelease: true
+  make_latest: false
+  target_commitish: "{{ .FullCommit }}"
+  extra_files:
+    - glob: LICENSE
