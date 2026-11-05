@@ -29,7 +29,7 @@ func buildHoglited(t *testing.T, ldflags string) string {
 	return binary
 }
 
-func runHoglited(t *testing.T, binary, interior string, args ...string) (string, string, int) {
+func runHoglited(t *testing.T, binary string, settings map[string]string, args ...string) (string, string, int) {
 	t.Helper()
 	dir := filepath.Join(t.TempDir(), "must-not-be-created")
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -41,9 +41,12 @@ func runHoglited(t *testing.T, binary, interior string, args ...string) (string,
 		}
 	}
 	cmd.Env = append(cmd.Env,
-		"HL_DIR="+dir, "HL_INTERIOR_READS="+interior,
+		"HL_DIR="+dir,
 		"AWS_CONFIG_FILE="+filepath.Join(dir, "invalid-config"),
 		"AWS_SHARED_CREDENTIALS_FILE="+filepath.Join(dir, "invalid-credentials"))
+	for name, value := range settings {
+		cmd.Env = append(cmd.Env, name+"="+value)
+	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()
@@ -68,7 +71,7 @@ func TestHoglitedVersionCLI(t *testing.T) {
 	binary := buildHoglited(t, "")
 	for _, arg := range []string{"-version", "--version", "-version=true", "--version=true"} {
 		t.Run(arg, func(t *testing.T) {
-			stdout, stderr, code := runHoglited(t, binary, "invalid-deployment-value", arg)
+			stdout, stderr, code := runHoglited(t, binary, map[string]string{"HL_INTERIOR_READS": "invalid-deployment-value"}, arg)
 			if code != 0 || stdout != "hoglited dev (commit unknown)\n" || stderr != "" {
 				t.Fatalf("exit %d; stdout %q; stderr %q", code, stdout, stderr)
 			}
@@ -84,7 +87,7 @@ func TestHoglitedVersionCLI(t *testing.T) {
 			{"-version", "extra"}, {"extra", "-version"},
 			{"-version", "--version"}, {"--", "-version"},
 		} {
-			stdout, stderr, code := runHoglited(t, binary, "invalid-deployment-value", args...)
+			stdout, stderr, code := runHoglited(t, binary, map[string]string{"HL_INTERIOR_READS": "invalid-deployment-value"}, args...)
 			if code != 2 || stdout != "" || !strings.Contains(stderr, "-version") {
 				t.Errorf("%q: exit %d; stdout %q; stderr %q", args, code, stdout, stderr)
 			}
@@ -95,7 +98,7 @@ func TestHoglitedVersionCLI(t *testing.T) {
 	})
 
 	t.Run("help", func(t *testing.T) {
-		stdout, stderr, code := runHoglited(t, binary, "", "-help")
+		stdout, stderr, code := runHoglited(t, binary, nil, "-help")
 		if code != 0 || stdout != "" {
 			t.Fatalf("exit %d; stdout %q; stderr %q", code, stdout, stderr)
 		}
@@ -113,11 +116,11 @@ func TestHoglitedVersionCLI(t *testing.T) {
 			code     int
 			want     string
 		}{
-			{"invalid-deployment-value", nil, 2, "HL_INTERIOR_READS must be one of"},
+			{"invalid-deployment-value", nil, 2, "HL_INTERIOR_READS: strconv.ParseBool:"},
 			{"", []string{"-sqlite-heap-limit=-1"}, 1, "-bucket / HL_BUCKET required"},
 			{"", []string{"-unknown"}, 2, "flag provided but not defined"},
 		} {
-			stdout, stderr, code := runHoglited(t, binary, tc.interior, tc.args...)
+			stdout, stderr, code := runHoglited(t, binary, map[string]string{"HL_INTERIOR_READS": tc.interior}, tc.args...)
 			if code != tc.code || stdout != "" || !strings.Contains(stderr, tc.want) {
 				t.Errorf("%q: exit %d; stdout %q; stderr %q", tc.args, code, stdout, stderr)
 			}
@@ -128,7 +131,7 @@ func TestHoglitedVersionCLI(t *testing.T) {
 func TestHoglitedVersionLinkerMetadata(t *testing.T) {
 	const revision = "0123456789abcdef0123456789abcdef01234567"
 	binary := buildHoglited(t, "-X main.version=v1.2.3 -X main.commit="+revision)
-	stdout, stderr, code := runHoglited(t, binary, "invalid-deployment-value", "-version")
+	stdout, stderr, code := runHoglited(t, binary, map[string]string{"HL_INTERIOR_READS": "invalid-deployment-value"}, "-version")
 	want := "hoglited v1.2.3 (commit " + revision + ")\n"
 	if code != 0 || stdout != want || stderr != "" {
 		t.Fatalf("exit %d; stdout %q; stderr %q; want %q", code, stdout, stderr, want)
