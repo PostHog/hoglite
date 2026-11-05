@@ -111,6 +111,3 @@ jobs:
 
       - name: Test the release script against a mocked registry
         run: python3 .github/scripts/ecr-release-test.py
-
-      - name: Test the public release helper against a mocked API
-        run: python3 .github/scripts/public-release-test.py

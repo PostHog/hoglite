@@ -11,17 +11,19 @@ on:
 permissions:
   contents: read
 
-# Full commit hashes prevent collisions between releases.
 concurrency:
   group: public-binary-release-${{ github.event.workflow_run.head_sha || github.event.pull_request.head.sha || github.sha }}
   cancel-in-progress: false
+
+env:
+  RELEASE_SHA: ${{ github.event.workflow_run.head_sha || github.event.pull_request.head.sha }}
 
 defaults:
   run:
     shell: bash --noprofile --norc -Eeuo pipefail {0}
 
 jobs:
-  gate:
+  test:
     if: >-
       github.repository == 'PostHog/hoglite' &&
       (
@@ -34,24 +36,6 @@ jobs:
           github.event.workflow_run.head_repository.full_name == github.repository
         )
       )
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    outputs:
-      sha: ${{ steps.gate.outputs.sha }}
-      publish: ${{ steps.gate.outputs.publish }}
-    steps:
-      - name: Check out workflow tools
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          ref: ${{ github.workflow_sha }}
-          persist-credentials: false
-          sparse-checkout: .github/scripts
-      - name: Validate the source event
-        id: gate
-        run: python3 .github/scripts/public-release.py gate
-
-  build:
-    needs: gate
     strategy:
       fail-fast: false
       matrix:
@@ -69,118 +53,101 @@ jobs:
             goos: darwin
             goarch: arm64
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 45
+    timeout-minutes: 30
     env:
       CGO_ENABLED: '0'
       GOFLAGS: -mod=readonly
       EXPECTED_GOOS: ${{ matrix.goos }}
       EXPECTED_GOARCH: ${{ matrix.goarch }}
-      RELEASE_SHA: ${{ needs.gate.outputs.sha }}
     steps:
-      - name: Check out the tested source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.gate.outputs.sha }}
+          ref: ${{ env.RELEASE_SHA }}
           persist-credentials: false
-      - name: Set up Go
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: go.mod
-          cache: true
-      - name: Verify native target and source
+      - name: Verify the native target
         run: |
           test "$(go env GOOS)" = "$EXPECTED_GOOS"
           test "$(go env GOARCH)" = "$EXPECTED_GOARCH"
           test "$(go env GOHOSTOS)" = "$EXPECTED_GOOS"
           test "$(go env GOHOSTARCH)" = "$EXPECTED_GOARCH"
           test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
-      - name: Test release helpers without network writes
-        run: python3 .github/scripts/public-release-test.py
-      - name: Run native ordinary tests
+      - name: Run native tests
         run: go test -timeout 20m ./...
-      - name: Exercise SQLite and WAL on the native target
-        run: go test -count=1 -timeout 10m -run '^Test(SQLite|WAL)' ./internal/hoglite
-      - name: Build and smoke test hoglited
+      - name: Smoke test the native executable
         run: |
-          mkdir -p "$RUNNER_TEMP/public-binaries"
-          binary="$RUNNER_TEMP/public-binaries/hoglited-$EXPECTED_GOOS-$EXPECTED_GOARCH"
-          version="build-$RELEASE_SHA"
-          go build -trimpath -ldflags "-X main.version=$version -X main.commit=$RELEASE_SHA" -o "$binary" ./cmd/hoglited
-          test "$("$binary" -version)" = "hoglited $version (commit $RELEASE_SHA)"
+          binary="$RUNNER_TEMP/hoglited"
+          go build -trimpath -ldflags "-X main.version=build-$RELEASE_SHA -X main.commit=$RELEASE_SHA" -o "$binary" ./cmd/hoglited
+          test "$("$binary" -version)" = "hoglited build-$RELEASE_SHA (commit $RELEASE_SHA)"
           "$binary" -help > "$RUNNER_TEMP/hoglited-help.txt" 2>&1
           grep -F -- '-version' "$RUNNER_TEMP/hoglited-help.txt"
-      - name: Retain only the target binary
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-        with:
-          name: binary-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: ${{ runner.temp }}/public-binaries/hoglited-${{ matrix.goos }}-${{ matrix.goarch }}
-          if-no-files-found: error
-          retention-days: 7
 
-  package:
-    needs: [gate, build]
+  snapshot:
+    needs: test
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
-      - name: Check out the tested license and packaging tools
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.gate.outputs.sha }}
+          ref: ${{ env.RELEASE_SHA }}
+          fetch-depth: 0
           persist-credentials: false
-      - name: Collect this run's binaries
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
-          pattern: binary-*
-          merge-multiple: true
-          digest-mismatch: error
-          path: ${{ runner.temp }}/public-assets
-      - name: Verify the complete release package
-        run: |
-          cp LICENSE "$RUNNER_TEMP/public-assets/"
-          python3 .github/scripts/public-release.py manifest --directory "$RUNNER_TEMP/public-assets"
-      - name: Retain the explicit release asset set
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+          go-version-file: go.mod
+      - name: Validate release packaging without publishing
+        uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
         with:
-          name: public-release-assets
-          path: |
-            ${{ runner.temp }}/public-assets/hoglited-linux-amd64
-            ${{ runner.temp }}/public-assets/hoglited-linux-arm64
-            ${{ runner.temp }}/public-assets/hoglited-darwin-amd64
-            ${{ runner.temp }}/public-assets/hoglited-darwin-arm64
-            ${{ runner.temp }}/public-assets/checksums.txt
-            ${{ runner.temp }}/public-assets/LICENSE
-          if-no-files-found: error
-          retention-days: 7
+          version: v2.20.0
+          args: release --snapshot --clean
 
   publish:
-    needs: [gate, package]
-    if: >-
-      needs.gate.outputs.publish == 'true' &&
-      github.repository == 'PostHog/hoglite' &&
-      github.event_name == 'workflow_run' &&
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.event == 'push' &&
-      github.event.workflow_run.head_branch == 'main' &&
-      github.event.workflow_run.head_repository.full_name == github.repository
+    needs: test
+    if: github.event_name == 'workflow_run'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       contents: write
     steps:
-      # This job never executes downloaded binaries or build artifacts.
-      - name: Check out trusted publisher tools
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.workflow_sha }}
+          ref: ${{ env.RELEASE_SHA }}
+          fetch-depth: 0
           persist-credentials: false
-          sparse-checkout: .github/scripts
-      - name: Download this run's complete release package
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
-          name: public-release-assets
-          digest-mismatch: error
-          path: ${{ runner.temp }}/public-assets
-      - name: Verify or publish the exact tested commit
+          go-version-file: go.mod
+      - name: Prepare the tested main revision
+        id: release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 .github/scripts/public-release.py publish --directory "$RUNNER_TEMP/public-assets"
+        run: |
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+          test -z "$(git status --porcelain)"
+          tip=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')
+          [[ "$tip" =~ ^[0-9a-f]{40}$ ]]
+          if [[ "$tip" != "$RELEASE_SHA" ]]; then
+            echo 'Skip the superseded revision.'
+            exit 0
+          fi
+          tag="build-$RELEASE_SHA"
+          if git show-ref --verify --quiet "refs/tags/$tag"; then
+            test "$(git rev-parse "$tag^{commit}")" = "$RELEASE_SHA"
+          else
+            git tag "$tag" "$RELEASE_SHA"
+          fi
+          echo 'publish=true' >> "$GITHUB_OUTPUT"
+      - name: Publish binaries with GoReleaser
+        if: steps.release.outputs.publish == 'true'
+        uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
+        with:
+          version: v2.20.0
+          # The preceding step validates source and tag identity for non-SemVer tags.
+          args: release --clean --skip=validate
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GORELEASER_CURRENT_TAG: build-${{ env.RELEASE_SHA }}
