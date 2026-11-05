@@ -65,6 +65,12 @@ Flags override their environment defaults.
 | `-prefix` | `HL_PREFIX` |
 | `-data-bucket` | `HL_DATA_BUCKET` |
 | `-peers` | `HL_PEERS` |
+| `-compress` | `HL_COMPRESS` |
+| `-delta-checkpoints` | `HL_DELTA_CHECKPOINTS` |
+| `-interior-reads` | `HL_INTERIOR_READS` |
+
+Boolean settings use Go's standard parser.
+Invalid environment values stop startup.
 
 ## HTTP API
 

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -48,8 +49,8 @@ func main() {
 		forceFormat = flag.Bool("force-format", false, "adopt a pre-marker prefix as the current format (dangerous: old-layout tenants are invisible)")
 		satCommitMs = flag.Float64("sat-commit-ms", 500, "commit-latency budget in ms for the saturation metric (1.0 = at limit)")
 		satInflight = flag.Float64("sat-inflight-cap", 128, "in-flight segment cap for the saturation metric")
-		compress    = flag.Bool("compress", envOr("HL_COMPRESS", "true") != "false", "publish new generations zstd-compressed (base and every WAL segment; applies from the next checkpoint per tenant; reads accept both). Pods of a build without compression support cannot take over a compressed tenant: set false while such pods may still run, then enable in a second rollout")
-		deltaCkpt   = flag.Bool("delta-checkpoints", envOr("HL_DELTA_CHECKPOINTS", "true") != "false", "checkpoints upload page deltas instead of full bases (needs -compress; applies from the next checkpoint per tenant; reads accept both). Pods of a build without delta support cannot take over such a tenant: set false while such pods may still run, then enable in a second rollout")
+		compress    = flag.Bool("compress", envBool("HL_COMPRESS", true), "publish new generations zstd-compressed (base and every WAL segment; applies from the next checkpoint per tenant; reads accept both). Pods of a build without compression support cannot take over a compressed tenant: set false while such pods may still run, then enable in a second rollout")
+		deltaCkpt   = flag.Bool("delta-checkpoints", envBool("HL_DELTA_CHECKPOINTS", true), "checkpoints upload page deltas instead of full bases (needs -compress; applies from the next checkpoint per tenant; reads accept both). Pods of a build without delta support cannot take over such a tenant: set false while such pods may still run, then enable in a second rollout")
 		maxQueries  = flag.Int("max-queries", 0, "pod-wide cap on queries admitted at once across all tenants (0 = 2 x GOMAXPROCS, min 4)")
 		maxReaders  = flag.Int("max-readers", 4, "concurrent read snapshots per tenant")
 		maxParked   = flag.Int64("max-parked-bytes", 0, "pod-wide cap on estimated bytes of read results that wait for durability (0 = max-queries x max-result-bytes; negative = off; a single result above the cap parks alone, so set it to at least max-result-bytes for a strict cap)")
@@ -65,12 +66,11 @@ func main() {
 		usageTopN   = flag.Int("usage-top-n", 20, "tenants with the most read plus write time that get their own series in /metrics (negative = none)")
 		usageEvery  = flag.Duration("usage-interval", 10*time.Second, "sample period of the per-tenant usage rates")
 		usageHalf   = flag.Duration("usage-half-life", time.Minute, "half-life of the decayed per-tenant usage rates")
-		interior    = mustBoolSettingVar("interior-reads", "HL_INTERIOR_READS", false, "serve read-only /tx requests that set \"interior\" without the durability wait, fenced to this incarnation (default off; off serves them as ordinary parked reads, which is the rollback). Only for reads whose result decides a write of the same caller and is shown to no one")
+		interior    = flag.Bool("interior-reads", envBool("HL_INTERIOR_READS", false), "serve read-only /tx requests that set \"interior\" without the durability wait, fenced to this incarnation (default off; off serves them as ordinary parked reads, which is the rollback). Only for reads whose result decides a write of the same caller and is shown to no one")
 	)
 	flag.Parse()
-	// a setting that changes a durability guarantee is logged at start, so
-	// an operator can check what the process took from its manifest
-	log.Printf("-interior-reads=%v", *interior)
+	// Log the effective settings before storage initialization.
+	log.Printf("-compress=%v -delta-checkpoints=%v -interior-reads=%v", *compress, *deltaCkpt, *interior)
 	// memory caps first: before any tenant opens (memory.go). A cap that
 	// cannot be set stops the start; -sqlite-heap-limit=-1 opts out of
 	// the SQLite cap.
@@ -267,4 +267,19 @@ func envOr(k, def string) string {
 		return v
 	}
 	return def
+}
+
+// envBool uses the same Boolean spellings as flag.Bool.
+// An unset or empty variable uses def. An invalid value stops startup.
+func envBool(k string, def bool) bool {
+	raw := os.Getenv(k)
+	if raw == "" {
+		return def
+	}
+	v, err := strconv.ParseBool(raw)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "hoglited: %s: %v\n", k, err)
+		os.Exit(2)
+	}
+	return v
 }
