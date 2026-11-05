@@ -122,7 +122,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - name: Check out tested notices and packaging tools
+      - name: Check out the tested license and packaging tools
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ needs.gate.outputs.sha }}
@@ -134,9 +134,9 @@ jobs:
           merge-multiple: true
           digest-mismatch: error
           path: ${{ runner.temp }}/public-assets
-      - name: Add notices and verify the complete asset allowlist
+      - name: Verify the complete release package
         run: |
-          cp LICENSE THIRD_PARTY_NOTICES "$RUNNER_TEMP/public-assets/"
+          cp LICENSE "$RUNNER_TEMP/public-assets/"
           python3 .github/scripts/public-release.py manifest --directory "$RUNNER_TEMP/public-assets"
       - name: Retain the explicit release asset set
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
@@ -149,7 +149,6 @@ jobs:
             ${{ runner.temp }}/public-assets/hoglited-darwin-arm64
             ${{ runner.temp }}/public-assets/checksums.txt
             ${{ runner.temp }}/public-assets/LICENSE
-            ${{ runner.temp }}/public-assets/THIRD_PARTY_NOTICES
           if-no-files-found: error
           retention-days: 7
 

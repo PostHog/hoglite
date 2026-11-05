@@ -26,7 +26,7 @@ REPO = "PostHog/hoglite"
 PAYLOADS = {
     "hoglited-linux-amd64", "hoglited-linux-arm64",
     "hoglited-darwin-amd64", "hoglited-darwin-arm64",
-    "LICENSE", "THIRD_PARTY_NOTICES",
+    "LICENSE",
 }
 
 
@@ -128,7 +128,7 @@ class AssetTests(AssetFixture):
 
     def test_symlinks_are_never_assets(self):
         (self.path / "LICENSE").unlink()
-        (self.path / "LICENSE").symlink_to(self.path / "THIRD_PARTY_NOTICES")
+        (self.path / "LICENSE").symlink_to(self.path / "hoglited-linux-amd64")
         with self.assertRaises(release.ReleaseError):
             self.make_manifest()
 
@@ -263,9 +263,9 @@ class PublishTests(AssetFixture):
     def test_new_release_is_verified_before_publication(self):
         self.publish()
         self.assertFalse(self.fake.release["draft"])
-        self.assertEqual(len(self.fake.assets), 7)
+        self.assertEqual(len(self.fake.assets), len(self.fake.manifest))
         self.assertEqual([x[0] for x in self.fake.writes()],
-                         ["POST"] * 9 + ["PATCH"])
+                         ["POST"] * (len(self.fake.manifest) + 2) + ["PATCH"])
         count = len(self.fake.writes())
         self.publish()
         self.assertEqual(len(self.fake.writes()), count)
@@ -296,7 +296,7 @@ class PublishTests(AssetFixture):
         self.fake.main_shas = [SHA, OTHER]
         self.publish()
         self.assertTrue(self.fake.release["draft"])
-        self.assertEqual(len(self.fake.assets), 7)
+        self.assertEqual(len(self.fake.assets), len(self.fake.manifest))
         self.assertFalse(any(call[0] == "PATCH" for call in self.fake.writes()))
 
     def test_main_ref_api_failure_stops_before_writes(self):
@@ -348,7 +348,7 @@ class PublishTests(AssetFixture):
         self.assertEqual(self.fake.writes()[0][1],
                          "repos/" + REPO + "/releases/assets/" + str(asset_id))
         self.assertFalse(self.fake.release["draft"])
-        self.assertEqual(len(self.fake.assets), 7)
+        self.assertEqual(len(self.fake.assets), len(self.fake.manifest))
 
     def test_delete_accepts_empty_204_response(self):
         self.fake.seed(draft=True)
@@ -439,7 +439,7 @@ class PublishTests(AssetFixture):
     def test_partial_matching_draft_resumes_without_overwrite(self):
         self.fake.seed(draft=True, names=["LICENSE"])
         self.publish()
-        self.assertEqual(len(self.fake.writes()), 7)
+        self.assertEqual(len(self.fake.writes()), len(self.fake.manifest))
         self.assertFalse(self.fake.release["draft"])
 
     def test_target_and_tag_mismatches_fail_without_writes(self):
@@ -556,7 +556,7 @@ class PublishTests(AssetFixture):
         self.fake.fail_path = None
         self.publish()
         self.assertFalse(self.fake.release["draft"])
-        self.assertEqual(len(self.fake.assets), 7)
+        self.assertEqual(len(self.fake.assets), len(self.fake.manifest))
 
     def test_uploaded_digest_mismatch_blocks_publication(self):
         self.fake.corrupt_upload = True

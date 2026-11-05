@@ -14,7 +14,7 @@ REPOSITORY = "PostHog/hoglite"
 PAYLOADS = frozenset({
     "hoglited-linux-amd64", "hoglited-linux-arm64",
     "hoglited-darwin-amd64", "hoglited-darwin-arm64",
-    "LICENSE", "THIRD_PARTY_NOTICES",
+    "LICENSE",
 })
 ASSETS = PAYLOADS | {"checksums.txt"}
 
@@ -57,7 +57,7 @@ def decide(kind, event, repository):
 
 
 def manifest(directory, create=False):
-    """Allow only six payloads and their canonical SHA-256 manifest."""
+    """Allow only five payloads and their canonical SHA-256 manifest."""
     directory = Path(directory)
     names = {path.name for path in directory.iterdir()}
     expected = PAYLOADS if create and "checksums.txt" not in names else ASSETS
