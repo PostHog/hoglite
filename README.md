@@ -16,6 +16,22 @@ hoglite is a multi-tenant SQLite service with an HTTP API and durable storage in
 - Large analytical queries.
 - Direct access from untrusted clients. The API has no authentication or TLS.
 
+## Scale
+
+- **Per replica:** `-max-open` defaults to 5,000 open tenants.
+  This is a soft eviction target, not a tested capacity guarantee.
+- **Across replicas:** 100 replicas at that target provide 500,000 nominal open-tenant slots.
+  More tenants can remain stored in S3 without staying open.
+- **Per tenant:** One tenant uses one replica's local disk.
+  Its data can exceed RAM because recovery streams snapshots.
+  A 10 GiB database needs more than 10 GiB of disk for WAL and checkpoint headroom.
+- **Larger replicas:** More CPU, RAM, and disk can support more active tenants or larger databases.
+  One tenant's writes still execute serially.
+
+These figures describe configuration and sizing, not benchmarked limits.
+Actual capacity depends on workload, database sizes, local storage, and S3 throughput.
+The project does not publish a verified maximum tenant size or fleet size.
+
 ## Quick start
 
 Download a binary from [Releases](https://github.com/PostHog/hoglite/releases).
