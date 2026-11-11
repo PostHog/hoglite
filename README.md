@@ -60,6 +60,7 @@ Flags override their environment defaults.
 | --- | --- |
 | `-id` | `HL_ID` |
 | `-addr` | `HL_ADDR` |
+| `-metrics-port` | `HL_METRICS_PORT` |
 | `-dir` | `HL_DIR` |
 | `-bucket` | `HL_BUCKET` |
 | `-prefix` | `HL_PREFIX` |
@@ -119,8 +120,15 @@ Its default is `hoglake`.
 The token must name exactly that audience and `hoglite`.
 
 Fleet operators use explicit metadata-pair tokens without catalog routing.
-Scrapers need operator authority when enforcement is enabled.
-Unauthenticated metrics and shutdown hooks do not work under enforcement.
+Scrapers on the API listener need operator authority when enforcement is enabled.
+Optionally set `HL_METRICS_PORT` or `-metrics-port` to expose only `GET /metrics` on a separate listener.
+It uses the API listener's bind host.
+It defaults to disabled (`0`).
+
+Restrict that port to monitoring workloads through network policy.
+It exposes no health, SQL, tenant administration, or shutdown routes.
+The API listener's `/metrics` route still requires operator authority.
+Unauthenticated shutdown hooks do not work under enforcement.
 Use SIGTERM for graceful shutdown.
 
 Hoglake forwards its request's verified JWT through the real adapter and peer routing.
