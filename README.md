@@ -14,7 +14,7 @@ hoglite is a multi-tenant SQLite service with an HTTP API and durable storage in
 - Parallel writes within one tenant.
 - SQL joins across tenants.
 - Large analytical queries.
-- Direct access from untrusted clients. The API has no authentication or TLS.
+- Direct access from untrusted clients. The API is internal raw SQL, without built-in TLS.
 
 ## Scale
 
@@ -68,9 +68,64 @@ Flags override their environment defaults.
 | `-compress` | `HL_COMPRESS` |
 | `-delta-checkpoints` | `HL_DELTA_CHECKPOINTS` |
 | `-interior-reads` | `HL_INTERIOR_READS` |
+| `-auth-mode` | `HL_AUTH_MODE` |
+| `-auth-issuer` | `HL_AUTH_ISSUER` |
+| `-auth-backend-id` | `HL_AUTH_BACKEND_ID` |
+| `-auth-jwks-file` | `HL_AUTH_JWKS_FILE` |
+| `-auth-jwks-url` | `HL_AUTH_JWKS_URL` |
 
 Boolean settings use Go's standard parser.
 Invalid environment values stop startup.
+
+### Offline JWT authentication
+
+Authentication defaults to `off` for existing local development.
+Set `-auth-mode=enforce`, the issuer URL, this backend's UUID, and exactly one public JWKS source.
+Missing configuration, private keys, malformed keys, or an unavailable initial source fail startup.
+No signing keys belong in hoglite.
+
+Hoglite accepts ES256 and RS256, with a required `kid`, issuer, expiry, subject, and token identifier.
+Metadata tokens carry the explicit audience pair `["hoglake","hoglite"]`, never `hogtower-vend`.
+Their `rtg.b` must be `hoglite`.
+Their `rtg.be` must match the configured backend UUID.
+Their opaque `rtg.t` must equal every requested tenant identifier.
+Catalog names and organization identifiers never become tenant identifiers.
+
+Tenant tokens require one catalog grant containing `read`, `write`, `maintenance`, or `admin`.
+Unknown grant words are ignored only when a recognized permission remains.
+
+Reads use SQLite's existing `query_only` connections, including read-only transactions.
+Predicate grants, scoped tokens, and unsupported scope constraints are refused on reads and writes.
+Provisioning, deletion, ownership control, status, metrics, and fleet operations require operator authority.
+Catalog-bound operators cannot administer another tenant or the fleet.
+Health remains unauthenticated.
+
+Verified unsupported grants receive 403.
+Malformed or expired credentials receive 401.
+Clock checks use Hoglake's sixty-second tolerance.
+
+The configured file or URL supplies public keys, not token introspection.
+Keys refresh asynchronously after one minute on use, with globally bounded unknown-key refreshes every thirty seconds.
+Unknown keys fail closed during refresh.
+Cached verification never waits for network access.
+Failed refreshes preserve cached keys.
+Expiry checks still apply.
+
+Publish overlapping keys until previously issued tokens expire.
+Before enabling enforcement, update issuance and drain legacy single-audience tokens for their remaining fifteen-minute lifetime.
+
+For custom metadata audiences, set `HL_AUTH_UPSTREAM_AUDIENCE` or `-auth-upstream-audience`.
+Its default is `hoglake`.
+The token must name exactly that audience and `hoglite`.
+
+Fleet operators use explicit metadata-pair tokens without catalog routing.
+Scrapers need operator authority when enforcement is enabled.
+Unauthenticated metrics and shutdown hooks do not work under enforcement.
+Use SIGTERM for graceful shutdown.
+
+Hoglake forwards its request's verified JWT through the real adapter and peer routing.
+Keep this service on its existing trusted network.
+JWT verification does not make raw SQL a public customer API or provide TLS.
 
 ## HTTP API
 

@@ -16,6 +16,7 @@ import (
 
 type Server struct {
 	mgr    *Manager
+	auth   *JWTAuth
 	peers  map[string]string // replica id -> base URL
 	client *http.Client
 
@@ -57,9 +58,20 @@ func (s *Server) ownerLive(ctx context.Context, owner string) bool {
 func NewServer(mgr *Manager, peers map[string]string) *Server {
 	return &Server{
 		mgr: mgr, peers: peers,
-		client:     &http.Client{Timeout: 120 * time.Second},
+		client: &http.Client{
+			Timeout: 120 * time.Second,
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		},
 		ownerCache: map[string]ownerCacheEntry{}, ownerCacheT: time.Second,
 	}
+}
+
+// WithAuth attaches startup-validated offline authentication before serving.
+func (s *Server) WithAuth(auth *JWTAuth) *Server {
+	s.auth = auth
+	return s
 }
 
 func (s *Server) Handler() http.Handler {
@@ -133,6 +145,15 @@ func guardStatus(err error) (int, apiError, bool) {
 
 func (s *Server) wrap(h func(http.ResponseWriter, *http.Request) (int, any)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		var refusal int
+		r, refusal = s.authorize(r)
+		if refusal != 0 {
+			if refusal == http.StatusUnauthorized {
+				w.Header().Set("WWW-Authenticate", "Bearer")
+			}
+			writeJSON(w, refusal, apiError{Error: "request not authorized", Code: "refused"})
+			return
+		}
 		code, body := h(w, r)
 		if body == nil {
 			if code > 0 {
@@ -416,6 +437,7 @@ func (s *Server) confirmOwner(r *http.Request, tid string, mf *Manifest, raw []b
 	}
 	req.Header.Set("x-hw-noproxy", "1")
 	req.Header.Set("Content-Type", "application/json")
+	forwardAuthority(req, r)
 	resp, err := s.client.Do(req)
 	if err != nil {
 		s.mgr.metrics.ProxyFails.Add(1)
@@ -646,10 +668,6 @@ func (s *Server) handleTx(w http.ResponseWriter, r *http.Request) (int, any) {
 	if err != nil {
 		return 400, apiError{Error: err.Error()}
 	}
-	t := s.localOrProxy(w, r, tid, r.URL.Path, body)
-	if t == nil {
-		return 0, nil // response already written
-	}
 	var req TxRequest
 	dec := json.NewDecoder(bytes.NewReader(body))
 	dec.UseNumber()
@@ -662,6 +680,14 @@ func (s *Server) handleTx(w http.ResponseWriter, r *http.Request) (int, any) {
 	if req.Client == "" || req.TxID == "" {
 		// exactly-once under retries requires an idempotency key
 		return 400, apiError{Error: "client and txid required"}
+	}
+	if a := authority(r); a != nil && !a.write && !allReadOnly(req.Stmts) {
+		return 403, apiError{Error: "read-only authority", Code: "refused"}
+	}
+	// Read-only transactions use SubmitTxCtx's SQLite query_only reader path.
+	t := s.localOrProxy(w, r, tid, r.URL.Path, body)
+	if t == nil {
+		return 0, nil // response already written
 	}
 	w.Header().Set("x-hw-owner", s.mgr.ID())
 	if req.Interior {
