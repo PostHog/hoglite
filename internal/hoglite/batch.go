@@ -88,6 +88,14 @@ func (s *Server) handleQueryBatch(w http.ResponseWriter, r *http.Request) (int, 
 	if len(req.Queries) > maxBatchQueries {
 		return 400, apiError{Error: fmt.Sprintf("%d queries in one batch; at most %d", len(req.Queries), maxBatchQueries)}
 	}
+	// Validate the complete batch before ownership lookups or execution.
+	if a := authority(r); a != nil {
+		for _, q := range req.Queries {
+			if q.Tenant != a.tenant {
+				return 403, apiError{Error: "batch tenant not authorized", Code: "refused"}
+			}
+		}
+	}
 	s.mgr.metrics.QueryBatches.Add(1)
 	s.mgr.metrics.QueryBatchItems.Add(int64(len(req.Queries)))
 
@@ -123,7 +131,7 @@ func (s *Server) handleQueryBatch(w http.ResponseWriter, r *http.Request) (int, 
 		wg.Add(1)
 		go func(base string, idx []int) {
 			defer wg.Done()
-			answers, ok := s.forwardBatch(ctx, base, req.Queries, idx)
+			answers, ok := s.forwardBatch(r, base, req.Queries, idx)
 			mu.Lock()
 			defer mu.Unlock()
 			for k, i := range idx {
@@ -179,7 +187,7 @@ func (s *Server) batchPeer(ctx context.Context, tid string) string {
 // x-hw-noproxy. ok is false when the peer could not answer the batch as a
 // whole (transport error, an engine without this endpoint, a malformed
 // answer); the caller then sends each item down the single-item path.
-func (s *Server) forwardBatch(ctx context.Context, base string, all []BatchQuery, idx []int) ([]BatchAnswer, bool) {
+func (s *Server) forwardBatch(r *http.Request, base string, all []BatchQuery, idx []int) ([]BatchAnswer, bool) {
 	sub := batchRequest{Queries: make([]BatchQuery, len(idx))}
 	for k, i := range idx {
 		sub.Queries[k] = all[i]
@@ -188,12 +196,13 @@ func (s *Server) forwardBatch(ctx context.Context, base string, all []BatchQuery
 	if err != nil {
 		return nil, false
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/v1/query-batch", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, base+"/v1/query-batch", bytes.NewReader(body))
 	if err != nil {
 		return nil, false
 	}
 	req.Header.Set("x-hw-noproxy", "1")
 	req.Header.Set("Content-Type", "application/json")
+	forwardAuthority(req, r)
 	s.mgr.metrics.Proxied.Add(1)
 	resp, err := s.client.Do(req)
 	if err != nil {
@@ -226,10 +235,12 @@ func (s *Server) queryOne(r *http.Request, peerOnly bool, q BatchQuery) BatchAns
 		return errorAnswer(400, err.Error())
 	}
 	sub.Header.Set("Content-Type", "application/json")
+	forwardAuthority(sub, r)
 	if peerOnly {
 		sub.Header.Set("x-hw-noproxy", "1")
 	}
 	sub.SetPathValue("tid", q.Tenant)
+	sub.Pattern = "POST /v1/t/{tid}/query"
 	rec := &bufferedResponse{header: http.Header{}}
 	s.wrap(s.handleQuery)(rec, sub)
 	status := rec.status
