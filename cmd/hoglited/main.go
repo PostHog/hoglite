@@ -34,6 +34,7 @@ func main() {
 	var (
 		id           = flag.String("id", envOr("HL_ID", defaultID()), "replica id (default: host-pid-random)")
 		addr         = flag.String("addr", envOr("HL_ADDR", ":9101"), "listen address")
+		metricsPort  = flag.String("metrics-port", envOr("HL_METRICS_PORT", "0"), "metrics-only listener port on the API's bind host (0 = disabled)")
 		class        = flag.String("class", envOr("HL_CLASS", "standard"), "replica class")
 		dir          = flag.String("dir", envOr("HL_DIR", "/tmp/hoglite-"+envOr("HL_ID", "r1")), "local cache dir")
 		bucket       = flag.String("bucket", envOr("HL_BUCKET", ""), "S3 bucket")
@@ -75,6 +76,10 @@ func main() {
 		authUpstream = flag.String("auth-upstream-audience", envOr("HL_AUTH_UPSTREAM_AUDIENCE", ""), "upstream metadata audience (default hoglake)")
 	)
 	flag.Parse()
+	metricsAddr, err := metricsAddress(*addr, *metricsPort)
+	if err != nil {
+		log.Fatal(err)
+	}
 	auth, err := hoglite.NewJWTAuth(context.Background(), hoglite.AuthConfig{
 		Mode: *authMode, Issuer: *authIssuer, BackendID: *authBackend, JWKSFile: *authFile, JWKSURL: *authURL,
 		UpstreamAudience: *authUpstream,
@@ -247,6 +252,16 @@ func main() {
 	srv := hoglite.NewServer(mgr, peers).WithAuth(auth)
 
 	httpSrv := &http.Server{Addr: *addr, Handler: srv.Handler()}
+	var metricsSrv *http.Server
+	if metricsAddr != "" {
+		metricsSrv = &http.Server{Addr: metricsAddr, Handler: srv.MetricsHandler(), ReadHeaderTimeout: 5 * time.Second}
+		go func() {
+			log.Printf("metrics-only listener on %s", metricsAddr)
+			if err := metricsSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				log.Fatal(err)
+			}
+		}()
+	}
 	go func() {
 		log.Printf("hoglited %s class=%s listening on %s bucket=%s prefix=%s", *id, *class, *addr, *bucket, *prefix)
 		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -266,6 +281,9 @@ func main() {
 		log.Printf("drain timed out; exiting anyway")
 	}
 	fmt.Println(httpSrv.Shutdown(context.Background()))
+	if metricsSrv != nil {
+		fmt.Println(metricsSrv.Shutdown(context.Background()))
+	}
 }
 
 func defaultID() string {

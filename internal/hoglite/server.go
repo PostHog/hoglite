@@ -103,6 +103,21 @@ func (s *Server) Handler() http.Handler {
 	return mux
 }
 
+// MetricsHandler exposes only metrics on a separately restricted listener.
+// The API listener still requires operator authority for its metrics route.
+func (s *Server) MetricsHandler() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /metrics", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", http.MethodGet)
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		s.handleMetrics(w, r)
+	})
+	return mux
+}
+
 type apiError struct {
 	Error string `json:"error"`
 	Owner string `json:"owner,omitempty"`
