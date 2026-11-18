@@ -28,6 +28,8 @@ import (
 // AuthConfig enables offline verification using public keys only.
 type AuthConfig struct {
 	Mode, Issuer, BackendID, JWKSFile, JWKSURL, UpstreamAudience string
+	ScopedNamespaceEnabled                                       bool
+	ScopedNamespacePredicateFields                               []string
 }
 
 type verificationKey struct {
@@ -38,6 +40,8 @@ type verificationKey struct {
 // JWTAuth caches only public keys. The issuer is never consulted about tokens.
 type JWTAuth struct {
 	issuer, backend, upstream string
+	scopedNamespaceEnabled    bool
+	scopedNamespaceFields     map[string]bool
 	fetch                     func(context.Context) ([]byte, error)
 	now                       func() time.Time
 	mu                        sync.Mutex
@@ -56,6 +60,10 @@ const (
 // NewJWTAuth fails boot on invalid enforcement configuration or unusable keys.
 // Off preserves the internal service's legacy development behavior.
 func NewJWTAuth(ctx context.Context, cfg AuthConfig) (*JWTAuth, error) {
+	fields, err := scopedNamespaceConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
 	if cfg.Mode == "" || cfg.Mode == "off" {
 		if cfg.Issuer != "" || cfg.BackendID != "" || cfg.JWKSFile != "" || cfg.JWKSURL != "" || cfg.UpstreamAudience != "" {
 			log.Print("warning: JWT authentication is off despite partial authentication configuration")
@@ -82,7 +90,10 @@ func NewJWTAuth(ctx context.Context, cfg AuthConfig) (*JWTAuth, error) {
 	if upstream == "hoglite" || upstream == "hogtower-vend" || len(upstream) > 256 || strings.TrimSpace(upstream) != upstream {
 		return nil, errors.New("invalid upstream metadata audience")
 	}
-	a := &JWTAuth{issuer: cfg.Issuer, backend: cfg.BackendID, upstream: upstream, now: time.Now}
+	a := &JWTAuth{
+		issuer: cfg.Issuer, backend: cfg.BackendID, upstream: upstream, now: time.Now,
+		scopedNamespaceEnabled: cfg.ScopedNamespaceEnabled, scopedNamespaceFields: fields,
+	}
 	if cfg.JWKSFile != "" {
 		a.fetch = func(context.Context) ([]byte, error) {
 			f, err := os.Open(cfg.JWKSFile)
@@ -343,7 +354,19 @@ type authorityKey struct{}
 var errUnsupportedAuthority = errors.New("verified authority is not supported")
 
 func (a *JWTAuth) verify(ctx context.Context, raw string) (*requestAuthority, error) {
-	if len(raw) > maxTokenSize {
+	payload, err := metadataTokenPayload(raw, maxTokenSize)
+	if err != nil {
+		return nil, err
+	}
+	claims, err := a.verifyMetadataToken(ctx, raw)
+	if err != nil {
+		return nil, err
+	}
+	return a.legacyAuthority(raw, claims, payload)
+}
+
+func metadataTokenPayload(raw string, maxSize int) (map[string]json.RawMessage, error) {
+	if len(raw) > maxSize {
 		return nil, errors.New("token too large")
 	}
 	parts := strings.Split(raw, ".")
@@ -382,6 +405,10 @@ func (a *JWTAuth) verify(ctx context.Context, raw string) (*requestAuthority, er
 			}
 		}
 	}
+	return payload, nil
+}
+
+func (a *JWTAuth) verifyMetadataToken(ctx context.Context, raw string) (*tokenClaims, error) {
 	claims := &tokenClaims{}
 	token, err := jwt.ParseWithClaims(raw, claims, func(t *jwt.Token) (any, error) {
 		kid, ok := t.Header["kid"].(string)
@@ -410,6 +437,10 @@ func (a *JWTAuth) verify(ctx context.Context, raw string) (*requestAuthority, er
 	if claims.Subject == "" || claims.ID == "" {
 		return nil, errors.New("missing token identity")
 	}
+	return claims, nil
+}
+
+func (a *JWTAuth) legacyAuthority(raw string, claims *tokenClaims, payload map[string]json.RawMessage) (*requestAuthority, error) {
 	if claims.Kind != "tenant" && claims.Kind != "operator" {
 		return nil, errUnsupportedAuthority
 	}

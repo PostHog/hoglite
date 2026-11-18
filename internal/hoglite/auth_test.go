@@ -249,6 +249,17 @@ func TestJWTAuthHoglakeOwnedMetadataVectors(t *testing.T) {
 				if err == nil {
 					t.Fatal("raw SQL widened a canonical constrained grant")
 				}
+				// A nil manager ensures that refusal precedes ownership or storage work.
+				h := NewServer(nil, nil).WithAuth(a).Handler()
+				for _, route := range []struct{ path, body string }{
+					{"/v1/t/t_3fa8c1d9e2_1/query", `{"sql":"SELECT 1"}`},
+					{"/v1/t/t_3fa8c1d9e2_1/tx", `{"read_only":true,"statements":[{"sql":"SELECT 1"}]}`},
+					{"/v1/query-batch", `{"queries":[{"tenant":"t_3fa8c1d9e2_1","sql":"SELECT 1"}]}`},
+				} {
+					if got := authRequest(t, h, "POST", route.path, v.Token, route.body).Code; got != http.StatusForbidden {
+						t.Errorf("scoped token on %s: got %d, want 403", route.path, got)
+					}
+				}
 				return
 			}
 			if err != nil {

@@ -100,6 +100,9 @@ func (s *Server) Handler() http.Handler {
 		// fault-injection endpoint for tests and drills; off by default
 		mux.HandleFunc("POST /v1/debug/crash/{tid}", s.wrap(s.handleCrash))
 	}
+	if s.auth != nil && s.auth.scopedNamespaceEnabled {
+		return s.scopedNamespaceRoutes(mux)
+	}
 	return mux
 }
 
