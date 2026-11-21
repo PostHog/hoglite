@@ -322,6 +322,9 @@ type Tenant struct {
 
 	mf   *Manifest
 	etag string
+	// dataPath is Manifest.DataPath at open. The manifest never changes it,
+	// so the HTTP goroutines read this copy instead of t.mf (actor-owned).
+	dataPath string
 
 	db       *sql.DB
 	roDB     *sql.DB // query_only read path; WAL allows concurrent readers
@@ -445,6 +448,7 @@ func openTenant(id string, dir string, mf *Manifest, etag string, store Backend,
 		ID: id, store: store, prefix: prefix, opts: opts, self: self, routeID: routeID, dir: dir, clock: clock,
 		dbPath: filepath.Join(dir, "db.sqlite"), walPath: filepath.Join(dir, "db.sqlite-wal"),
 		mf: mf, etag: etag, claimEpoch: mf.Epoch, claimInst: mf.Instance,
+		dataPath:    mf.DataPath,
 		incarnation: id + "/" + newInstanceID(),
 		segDone:     make(chan segDone, 256),
 		sem:         make(chan struct{}, opts.Inflight),
@@ -1426,7 +1430,7 @@ func (t *Tenant) cutSegment() {
 	// generation. A zstd generation never takes a raw segment, and no
 	// reader accepts a zstd segment above maxSegmentRawBytes: fail before
 	// any ack of this batch rather than publish an unreadable object.
-	format := t.mf.Format
+	format := manifestCodec(t.mf)
 	if format != manifestFormatRaw && end-t.submittedOff > maxSegmentRawBytes {
 		t.failLocked(fmt.Errorf("%w: batch of %d bytes, limit %d", errSegmentTooLarge, end-t.submittedOff, maxSegmentRawBytes))
 		return
@@ -1929,8 +1933,9 @@ func (t *Tenant) checkpointLocked(newClass string) bool {
 	// the new generation holds only objects this incarnation writes (the
 	// base or delta above and the segments cut after this CAS; cutSegment
 	// reads t.mf.Format) plus, in a chain gen, the chain it extends. All
-	// of them are zstd in a chain gen. So the format follows the upload.
-	nm.Format = up.format
+	// of them are zstd in a chain gen. So the codec follows the upload;
+	// the flags follow the manifest's content (its DataPath).
+	nm.Format = manifestFormat(up.format, &nm)
 	if newClass != "" {
 		nm.Class = newClass
 		t.classHint.Store(newClass)
@@ -2235,13 +2240,13 @@ func (t *Tenant) Class() string {
 
 // DebugStatus returns actor internals for /status.
 func (t *Tenant) DebugStatus() map[string]any {
-	return map[string]any{
+	return withDataPath(map[string]any{
 		"tenant": t.ID, "gen": t.mf.Gen, "epoch": t.mf.Epoch,
 		"wal_submitted_bytes": t.submittedOff, "durable_watermark": t.durableOff,
 		"pending_acks": len(t.pending), "inflight_segments": len(t.segs),
 		"segments_since_checkpoint": t.segsSinceC, "alive": t.Alive(),
-		"format": t.mf.Format, "delta_chain": len(t.mf.Deltas),
+		"format": manifestCodec(t.mf), "delta_chain": len(t.mf.Deltas),
 		"active_reads": t.readers.count(),
 		"usage":        t.usageStatus(),
-	}
+	}, t.dataPath)
 }

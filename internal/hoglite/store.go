@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -31,12 +32,16 @@ type Manifest struct {
 	BaseKey      string `json:"base_key"`
 	Class        string `json:"class"`
 	UpdatedMs    int64  `json:"updated_ms"`
-	// Format is the encoding of EVERY object of the current generation
-	// (base and segments; see codec.go). The checkpoint that publishes a
-	// generation sets it, and it does not change within the generation.
-	// A build refuses a tenant whose Format is above maxManifestFormat
-	// instead of misreading it. Absent (0) means raw objects only, as
-	// written by builds before compression.
+	// Format is the codec of EVERY object of the current generation (base
+	// and segments; see codec.go) in its low byte, and manifest flags in
+	// the bits above it (manifestFlagDataPath). The checkpoint that
+	// publishes a generation sets the codec, which does not change within
+	// the generation; the flags follow the manifest's content
+	// (manifestFormat). A build refuses a tenant whose Format it cannot
+	// read instead of misreading it (checkManifestFormat); builds before
+	// the flags compare the whole value against their highest codec, so a
+	// flag refuses them too. Absent (0) means raw objects only, as written
+	// by builds before compression.
 	Format int `json:"format,omitempty"`
 	// BaseSize is the stored size of the base object (format 2 only). The
 	// checkpoint uses it for the rebase rule, and recovery checks it.
@@ -45,6 +50,16 @@ type Manifest struct {
 	// only, see delta.go). State at the start of the generation = base,
 	// then every delta in order.
 	Deltas []DeltaRef `json:"deltas,omitempty"`
+	// DataPath is the S3 prefix (an s3://<bucket>[/<prefix>] URI) that the
+	// tenant's catalog owns. It is the operator-held copy of the catalog's
+	// data_path: the create (PUT /v1/tenants/{tid}, operator authority)
+	// sets it, only hoglite writes the manifest, and it never changes
+	// afterwards; a create that names a different value is refused. Every
+	// tenant-scoped response carries it in the X-Hoglite-Data-Path header,
+	// so a client that must act on S3 can check paths against a value no
+	// SQL on the tenant can rewrite. Absent on tenants created before the
+	// field existed: such a tenant sends no header.
+	DataPath string `json:"data_path,omitempty"`
 }
 
 // DeltaRef names one page delta of the chain and its stored size.
@@ -53,16 +68,50 @@ type DeltaRef struct {
 	Size int64  `json:"size"`
 }
 
-// Manifest formats. Bump maxManifestFormat with any change that an older
-// reader would misread (new object types, new codecs).
+// Manifest formats. Format = codec | flags. The codec (low byte) is the
+// object encoding of the generation; bump maxManifestCodec with any change
+// that an older reader would misread (new object types, new codecs). A
+// flag (bits above the codec) marks manifest content that an older build
+// would drop: it decodes the manifest without the field and its next CAS
+// (checkpoint, takeover, release, reclass, clearDeadOwner) writes the
+// manifest back without it. Every build so far compares the WHOLE Format
+// against its highest codec, so any flag bit refuses it before its first
+// CAS, and this build refuses any flag it does not know in turn. The two
+// cannot be one enum: the codec is re-chosen at every checkpoint from the
+// Compress and delta options (raw, zstd or chain, in any order over a
+// tenant's life), while a flag is a property of the manifest content that
+// must survive every one of those choices.
 const (
 	manifestFormatRaw  = 0 // raw base image and raw WAL segments
 	manifestFormatZstd = 1 // base and every segment are one zstd frame each (see codec.go)
 	// base + page-delta chain + segments, every object one zstd frame, and
 	// base and deltas under ckpt/ (see delta.go)
 	manifestFormatChain = 2
-	maxManifestFormat   = manifestFormatChain
+	maxManifestCodec    = manifestFormatChain
+	manifestCodecMask   = 0xff
+
+	// manifestFlagDataPath: the manifest carries DataPath. Set exactly
+	// when DataPath != "" (manifestFormat), so an older build, which would
+	// erase the field on its next CAS, refuses the tenant instead.
+	manifestFlagDataPath = 1 << 8
+	knownManifestFlags   = manifestFlagDataPath
 )
+
+// manifestCodec is the object encoding of m's current generation.
+func manifestCodec(m *Manifest) int { return m.Format & manifestCodecMask }
+
+// manifestFormat is the Format a writer stores for a manifest whose
+// generation uses codec: the codec plus the flags its content requires.
+// Every CAS of this build either copies a manifest it read through the
+// gate or computes its Format here, so a manifest with a DataPath always
+// carries the flag.
+func manifestFormat(codec int, m *Manifest) int {
+	format := codec & manifestCodecMask
+	if m.DataPath != "" {
+		format |= manifestFlagDataPath
+	}
+	return format
+}
 
 // manifestObjects returns the base and delta keys a manifest names. These
 // objects are live as long as the manifest is current.
@@ -92,11 +141,28 @@ func manifestNames(m *Manifest, key string) bool {
 // a claim would publish a base built from a misread history.
 var ErrUnsupportedFormat = errors.New("tenant uses a newer storage format")
 
-// checkManifestFormat refuses manifests from a newer format.
+// checkManifestFormat refuses a manifest this build cannot read: a codec
+// above maxManifestCodec, a flag it does not know, or a data_path flag that
+// disagrees with the field (no writer of this build produces that; a
+// manifest with a DataPath and no flag is the one an older build would
+// silently erase, so it is refused rather than served).
 func checkManifestFormat(tid string, m *Manifest) error {
-	return checkManifestFormatMax(tid, m, maxManifestFormat)
+	if codec := manifestCodec(m); codec > maxManifestCodec {
+		return fmt.Errorf("%w: %s has format %d (codec %d), this build reads codecs up to %d", ErrUnsupportedFormat, tid, m.Format, codec, maxManifestCodec)
+	}
+	if flags := m.Format &^ manifestCodecMask; flags&^knownManifestFlags != 0 {
+		return fmt.Errorf("%w: %s has format %d with flags %#x, this build knows %#x", ErrUnsupportedFormat, tid, m.Format, flags, knownManifestFlags)
+	}
+	if (m.Format&manifestFlagDataPath != 0) != (m.DataPath != "") {
+		return fmt.Errorf("%w: %s has format %d and data_path %q: the data_path flag and the field disagree", ErrUnsupportedFormat, tid, m.Format, m.DataPath)
+	}
+	return nil
 }
 
+// checkManifestFormatMax is the gate of the builds before manifest flags
+// (tests emulate them): the whole Format against the build's highest
+// codec. A flag bit makes Format exceed any codec, so those builds refuse
+// a flagged manifest; the message they print names the raw value.
 func checkManifestFormatMax(tid string, m *Manifest, max int) error {
 	if m.Format > max {
 		return fmt.Errorf("%w: %s has format %d, this build reads up to %d", ErrUnsupportedFormat, tid, m.Format, max)
@@ -134,6 +200,16 @@ func (s *Store) WithDataPlane(cli *s3.Client, bucket string) *Store {
 func (s *Store) WithLeasePlane(cli *s3.Client) *Store {
 	s.leaseCli = cli
 	return s
+}
+
+// StorageRoots implements Backend: the control-plane root, and the
+// data-plane root when it is a separate bucket.
+func (s *Store) StorageRoots() []string {
+	roots := []string{"s3://" + s.bucket + "/" + s.prefix}
+	if s.dataBucket != s.bucket {
+		roots = append(roots, "s3://"+s.dataBucket+"/"+s.prefix)
+	}
+	return roots
 }
 
 func (s *Store) key(parts ...string) string {
@@ -224,6 +300,10 @@ type Backend interface {
 	// format marker: guards against mixing layout versions on one prefix
 	WriteFormatMarker(ctx context.Context, version string) error
 	ReadFormatMarker(ctx context.Context) (string, bool, error)
+	// StorageRoots names every s3://<bucket>/<prefix> this backend writes
+	// under: the control plane and, when separate, the data plane. A
+	// tenant data_path may not overlap one (datapath.go).
+	StorageRoots() []string
 }
 
 func isNotFound(err error) bool {
@@ -523,33 +603,125 @@ func (s *Store) DeleteObjects(ctx context.Context, keys ...string) error {
 	return nil
 }
 
-// ListTenantIDs lists tenant ids under the prefix (test/harness helper).
-// ListTenantIDs lists tenant ids under the prefix (test/harness helper).
-// Tenants live under 256 shard directories, so this walks them all.
+// tenantShards is the number of shard directories tenants spread across
+// (TenantShard); listShardWidth is how many of them ListTenantIDs lists at
+// once.
+const (
+	tenantShards   = 256
+	listShardWidth = 16
+)
+
+// ListTenantIDs lists every tenant id under the prefix, in shard order and
+// in S3's order within a shard. Tenants live under tenantShards shard
+// directories, so this walks them all: one LIST per shard (more when a
+// shard pages), listShardWidth shards in flight at once. One after
+// another, the 256 round trips were a 3-8 s floor against S3 even on an
+// empty backend, which the overlap scan of a create (datapath.go) paid
+// inside hoglake's 8 s create budget, and a retry paid again; the sweeper
+// pays the listing every two minutes.
 func (s *Store) ListTenantIDs(ctx context.Context) ([]string, error) {
-	var ids []string
-	for shard := 0; shard < 256; shard++ {
+	return listShards(ctx, tenantShards, listShardWidth, func(ctx context.Context, shard int, tok *string) ([]string, *string, error) {
 		prefix := fmt.Sprintf("%s/%02x/t/", s.prefix, shard)
-		var tok *string
-		for {
-			resp, err := s.cli.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
-				Bucket: aws.String(s.bucket), Prefix: aws.String(prefix),
-				Delimiter: aws.String("/"), ContinuationToken: tok,
-			})
-			if err != nil {
-				return nil, err
-			}
-			for _, p := range resp.CommonPrefixes {
-				id := strings.TrimSuffix(strings.TrimPrefix(aws.ToString(p.Prefix), prefix), "/")
-				ids = append(ids, id)
-			}
-			if !aws.ToBool(resp.IsTruncated) {
-				break
-			}
-			tok = resp.NextContinuationToken
+		resp, err := s.cli.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+			Bucket: aws.String(s.bucket), Prefix: aws.String(prefix),
+			Delimiter: aws.String("/"), ContinuationToken: tok,
+		})
+		if err != nil {
+			return nil, nil, err
 		}
+		ids := make([]string, 0, len(resp.CommonPrefixes))
+		for _, p := range resp.CommonPrefixes {
+			ids = append(ids, strings.TrimSuffix(strings.TrimPrefix(aws.ToString(p.Prefix), prefix), "/"))
+		}
+		if aws.ToBool(resp.IsTruncated) {
+			return ids, resp.NextContinuationToken, nil
+		}
+		return ids, nil, nil
+	})
+}
+
+// shardPage lists one page of one shard's tenant directories: the ids on
+// the page, and the token of the next page (nil on the last). tok is nil
+// for the first page and otherwise a token this shard returned.
+type shardPage func(ctx context.Context, shard int, tok *string) (ids []string, next *string, err error)
+
+// listShards is the listing of shards 0..n-1 in shard order, each shard's
+// pages in their order, with width shards in flight at once. A shard pages
+// serially: its continuation token means nothing to any other shard. The
+// first failure stops the walk and is the answer, and so is a parent
+// context that ends first: a partial listing must never read as the whole
+// backend (the overlap scan would take it for "no overlap", the sweeper
+// for "no tenant here").
+func listShards(ctx context.Context, n, width int, page shardPage) ([]string, error) {
+	parent := ctx
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	perShard := make([][]string, n)
+	shards := make(chan int)
+	var (
+		wg    sync.WaitGroup
+		mu    sync.Mutex
+		first error
+	)
+	for range min(width, n) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for shard := range shards {
+				ids, err := listShard(ctx, shard, page)
+				if err != nil {
+					mu.Lock()
+					if first == nil {
+						first = err
+					}
+					mu.Unlock()
+					cancel() // the feeder stops, the shards in flight fail fast
+					return
+				}
+				perShard[shard] = ids
+			}
+		}()
+	}
+	for shard := range n {
+		select {
+		case shards <- shard:
+			continue
+		case <-ctx.Done():
+		}
+		break
+	}
+	close(shards)
+	wg.Wait()
+	if first == nil {
+		// no page failed, but the caller's context ended before every
+		// shard was fed: the shards never sent are not listed
+		first = parent.Err()
+	}
+	if first != nil {
+		return nil, first
+	}
+	var ids []string
+	for _, got := range perShard {
+		ids = append(ids, got...)
 	}
 	return ids, nil
+}
+
+// listShard pages through one shard.
+func listShard(ctx context.Context, shard int, page shardPage) ([]string, error) {
+	var ids []string
+	var tok *string
+	for {
+		got, next, err := page(ctx, shard, tok)
+		if err != nil {
+			return nil, err
+		}
+		ids = append(ids, got...)
+		if next == nil {
+			return ids, nil
+		}
+		tok = next
+	}
 }
 
 // ListPrefix returns all keys under a full key prefix (test/ops + sweeper).

@@ -300,14 +300,31 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) (int, any)
 	if !validTID(tid) {
 		return 400, apiError{Error: "bad tenant id"}
 	}
-	raw, _ := io.ReadAll(http.MaxBytesReader(nil, r.Body, 64<<20))
-	var body struct {
-		Class string `json:"class"`
+	raw, err := io.ReadAll(http.MaxBytesReader(nil, r.Body, 64<<20))
+	if err != nil {
+		// A body that did not arrive whole (client reset, cut chunked
+		// body) used to read as empty and create the tenant without the
+		// data_path it carried; such a tenant can never gain one.
+		var tooBig *http.MaxBytesError
+		if errors.As(err, &tooBig) {
+			return 413, apiError{Error: err.Error()}
+		}
+		return 400, apiError{Error: "create body: " + err.Error()}
 	}
-	if len(bytes.TrimSpace(raw)) > 0 {
-		dec := json.NewDecoder(bytes.NewReader(raw))
-		dec.UseNumber()
-		dec.Decode(&body)
+	// body.DataPath is stored in the manifest of a tenant this create makes
+	// (datapath.go). On an existing tenant it must match the stored value;
+	// absent, it makes no claim.
+	body, code, perr := parseCreateBody(raw)
+	if code != 0 {
+		return code, perr
+	}
+	if body.DataPath != "" {
+		if err := validDataPath(body.DataPath); err != nil {
+			return 400, apiError{Error: err.Error(), Code: CodeInvalidDataPath}
+		}
+		if err := reservedDataPath(body.DataPath, s.mgr.store.StorageRoots()); err != nil {
+			return 400, apiError{Error: err.Error(), Code: CodeInvalidDataPath}
+		}
 	}
 	if body.Class != "" && body.Class != s.mgr.class {
 		return s.proxyOr421(w, r, tid, "/v1/tenants/"+tid, nil)
@@ -318,20 +335,37 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) (int, any)
 	// the owner heartbeating, sleep until its deadline (15.5 s in
 	// production). That outlasts hoglake's 8 s budget, so on a pool of
 	// several replicas every create that landed on a non-owner failed.
-	if code, out, done := s.createAtLiveOwner(r, tid, raw); done {
+	if code, out, done := s.createAtLiveOwner(w, r, tid, raw, body.DataPath); done {
 		return code, out
+	}
+	if body.DataPath != "" {
+		if code, out, refused := s.refuseDataPathOverlap(r.Context(), tid, body.DataPath); refused {
+			return code, out
+		}
 	}
 	// A peer can create the tenant after the initial manifest read.
 	// Singleflight followers also need to confirm that owner before waiting.
-	_, err := s.mgr.acquire(r.Context(), tid, true, func(mf *Manifest) bool {
+	t, err := s.mgr.acquire(r.Context(), tid, true, body.DataPath, func(mf *Manifest) bool {
+		if dataPathConflict(mf.DataPath, body.DataPath) {
+			// the peer that created it meanwhile stored another data_path.
+			// Asking the owner would get a 409, which reads as a denial
+			// and leaves acquire waiting the owner's lease out (then 503,
+			// or the client's deadline). Stop here: the ErrBusy branch
+			// below answers 409 from the manifest.
+			return true
+		}
 		return r.Header.Get("x-hw-noproxy") != "" || s.confirmOwner(r, tid, mf, raw) == ownerConfirmed
 	})
 	if err != nil {
 		// create on an existing tenant is a no-op success (idempotent):
 		// if the manifest exists, the tenant exists, regardless of who
-		// currently owns it
+		// currently owns it, unless the body names another data_path
 		if errors.Is(err, ErrWrongClass) {
 			if mf, _, gerr := s.mgr.store.GetManifest(r.Context(), tid); gerr == nil && mf != nil {
+				if dataPathConflict(mf.DataPath, body.DataPath) {
+					return dataPathMismatch(tid, mf.DataPath, body.DataPath)
+				}
+				setDataPath(w, mf.DataPath)
 				return 200, existingBody(tid, mf)
 			}
 		}
@@ -346,8 +380,15 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) (int, any)
 					// a peer's confirmation request: we do not hold it
 					return 421, apiError{Error: "not owner", Owner: ownerAddr(mf), Class: mf.Class}
 				}
+				if dataPathConflict(mf.DataPath, body.DataPath) {
+					// decided from the manifest, before asking the owner:
+					// the owner would answer 409 too, which confirmOwner
+					// could only read as a denial (503, retry)
+					return dataPathMismatch(tid, mf.DataPath, body.DataPath)
+				}
 				switch s.confirmOwner(r, tid, mf, raw) {
 				case ownerConfirmed, ownerUnroutable:
+					setDataPath(w, mf.DataPath)
 					return 200, existingBody(tid, mf)
 				default:
 					return 503, apiError{Error: "tenant owner " + ownerAddr(mf) + " did not confirm the tenant; retry"}
@@ -356,12 +397,45 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) (int, any)
 		}
 		return errCode(err), acquireError(err)
 	}
-	return 200, map[string]any{"tenant": tid, "owner": s.mgr.ID()}
+	// t is the tenant we created, or one that was already open here, or
+	// one we took over because the create lost its race to an owner that
+	// has since died. In the last two cases its data_path is the stored
+	// one, not the body's.
+	if dataPathConflict(t.dataPath, body.DataPath) {
+		return dataPathMismatch(tid, t.dataPath, body.DataPath)
+	}
+	setDataPath(w, t.dataPath)
+	return 200, withDataPath(map[string]any{"tenant": tid, "owner": s.mgr.ID()}, t.dataPath)
+}
+
+// refuseDataPathOverlap answers a create that is about to make tid with
+// dataPath when another tenant of this backend owns an overlapping
+// data_path (409 data_path_overlap, datapath.go). A tenant that already
+// exists is not scanned: the mismatch rules decide its answer, and the
+// scan costs a manifest read per tenant. A scan that cannot finish refuses
+// too (503): an unchecked create could take another catalog's prefix.
+func (s *Server) refuseDataPathOverlap(ctx context.Context, tid, dataPath string) (int, any, bool) {
+	mf, _, err := s.mgr.store.GetManifest(ctx, tid)
+	if err != nil {
+		return errCode(err), apiError{Error: err.Error()}, true
+	}
+	if mf != nil {
+		return 0, nil, false
+	}
+	otherTid, otherPath, err := otherDataPathOverlap(ctx, s.mgr.store, tid, dataPath)
+	if err != nil {
+		return 503, apiError{Error: "data_path overlap check did not finish: " + err.Error() + "; retry"}, true
+	}
+	if otherTid != "" {
+		code, out := dataPathOverlap(tid, dataPath, otherTid, otherPath)
+		return code, out, true
+	}
+	return 0, nil, false
 }
 
 // existingBody is the answer to a create of a tenant that already exists.
 func existingBody(tid string, mf *Manifest) map[string]any {
-	return map[string]any{"tenant": tid, "owner": ownerAddr(mf), "existing": true}
+	return withDataPath(map[string]any{"tenant": tid, "owner": ownerAddr(mf), "existing": true}, mf.DataPath)
 }
 
 // ownerAddr is the routable address of mf's owner, never the fencing id.
@@ -389,7 +463,10 @@ func ownerAddr(mf *Manifest) string {
 // a dead pod as the owner. The answer is built here rather than streamed
 // from the owner so that every "existing" has the same shape, with the
 // owner's routable address.
-func (s *Server) createAtLiveOwner(r *http.Request, tid string, raw []byte) (int, any, bool) {
+//
+// A body that names a data_path other than the manifest's is refused here,
+// from the manifest, before the owner is asked (datapath.go).
+func (s *Server) createAtLiveOwner(w http.ResponseWriter, r *http.Request, tid string, raw []byte, dataPath string) (int, any, bool) {
 	if t := s.mgr.LocalTenant(tid); t != nil {
 		if r.Header.Get("x-hw-noproxy") != "" && t.leaseExpiring() {
 			// A peer asks whether we hold it, and its write gate is
@@ -421,8 +498,13 @@ func (s *Server) createAtLiveOwner(r *http.Request, tid string, raw []byte) (int
 		// stall the peer. Say so at once.
 		return 421, apiError{Error: "not owner", Owner: ownerAddr(mf), Class: mf.Class}, true
 	}
+	if dataPathConflict(mf.DataPath, dataPath) {
+		code, out := dataPathMismatch(tid, mf.DataPath, dataPath)
+		return code, out, true
+	}
 	if s.confirmOwner(r, tid, mf, raw) == ownerConfirmed {
 		s.mgr.metrics.Proxied.Add(1)
+		setDataPath(w, mf.DataPath)
 		return 200, existingBody(tid, mf), true
 	}
 	return 0, nil, false
@@ -480,6 +562,9 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) (int, any)
 		// A failed ownership read must not fall through to deletion: a
 		// blind purge can race a live remote owner.
 		return 500, apiError{Error: err.Error()}
+	}
+	if mf != nil {
+		setDataPath(w, mf.DataPath)
 	}
 	if mf != nil && mf.Owner != "" && mf.Owner != s.mgr.ID() && s.ownerLive(r.Context(), mf.Owner) {
 		// Live remote owner: route to it exactly like /tx and /release.
@@ -662,7 +747,7 @@ func (s *Server) proxyTo(w http.ResponseWriter, r *http.Request, url string, bod
 	}
 	defer resp.Body.Close()
 	for k := range resp.Header {
-		if strings.HasPrefix(strings.ToLower(k), "x-hw-") {
+		if strings.HasPrefix(strings.ToLower(k), "x-hw-") || strings.EqualFold(k, DataPathHeader) {
 			w.Header().Set(k, resp.Header.Get(k))
 		}
 	}
@@ -708,6 +793,7 @@ func (s *Server) handleTx(w http.ResponseWriter, r *http.Request) (int, any) {
 		return 0, nil // response already written
 	}
 	w.Header().Set("x-hw-owner", s.mgr.ID())
+	setDataPath(w, t.dataPath)
 	if req.Interior {
 		// interior read (reads.go): read-only only; the token names the
 		// incarnation that served it and is empty when the tenant parked
@@ -756,6 +842,7 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) (int, any) 
 		return 400, apiError{Error: err.Error()}
 	}
 	w.Header().Set("x-hw-owner", s.mgr.ID())
+	setDataPath(w, t.dataPath)
 	res, err := t.SubmitQueryCtx(r.Context(), st)
 	if err != nil {
 		return queryErrorResponse(err, t.Alive(), s.mgr.ID())
@@ -773,6 +860,9 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) (int, any)
 	if err != nil {
 		return 500, apiError{Error: err.Error()}
 	}
+	if mf != nil {
+		setDataPath(w, mf.DataPath)
+	}
 	out["manifest"] = mf
 	return 200, out
 }
@@ -783,7 +873,9 @@ func (s *Server) handleRelease(w http.ResponseWriter, r *http.Request) (int, any
 		return 400, apiError{Error: "bad tenant id"}
 	}
 	newClass := r.URL.Query().Get("class")
-	if s.mgr.LocalTenant(tid) == nil {
+	if t := s.mgr.LocalTenant(tid); t != nil {
+		setDataPath(w, t.dataPath)
+	} else {
 		// Not owned here: route to the live owner exactly like /tx — a
 		// release can only happen where the tenant is owned. Without this,
 		// a lifecycle caller behind a Service can only release when the
@@ -793,6 +885,9 @@ func (s *Server) handleRelease(w http.ResponseWriter, r *http.Request) (int, any
 			// A failed ownership read must not be answered "released":
 			// the caller would proceed to delete under a live owner.
 			return 500, apiError{Error: err.Error()}
+		}
+		if mf != nil {
+			setDataPath(w, mf.DataPath)
 		}
 		if mf != nil &&
 			mf.Owner != "" && mf.Owner != s.mgr.ID() && s.ownerLive(r.Context(), mf.Owner) {

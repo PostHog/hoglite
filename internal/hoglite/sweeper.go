@@ -299,7 +299,7 @@ func manifestEqual(a, b *Manifest) bool {
 	}
 	return a.Epoch == b.Epoch && a.Gen == b.Gen && a.Instance == b.Instance &&
 		a.Owner == b.Owner && a.OwnerUntilMs == b.OwnerUntilMs && a.BaseKey == b.BaseKey &&
-		a.Format == b.Format
+		a.Format == b.Format && a.DataPath == b.DataPath
 }
 
 // keyGen parses the generation from a base or wal key, anchored to the

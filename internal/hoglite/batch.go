@@ -61,10 +61,15 @@ type batchRequest struct {
 	Queries []BatchQuery `json:"queries"`
 }
 
-// BatchAnswer is one item's answer: the status and body /query would send.
+// BatchAnswer is one item's answer: the status and body /query would send,
+// and the tenant's data_path when /query would have sent the
+// X-Hoglite-Data-Path header (datapath.go). The batch response carries that
+// header too when every item names the same tenant and the items that
+// carry a data_path agree on it, which is every batch under enforcement.
 type BatchAnswer struct {
-	Status int             `json:"status"`
-	Body   json.RawMessage `json:"body"`
+	Status   int             `json:"status"`
+	Body     json.RawMessage `json:"body"`
+	DataPath string          `json:"data_path,omitempty"`
 }
 
 type batchResponse struct {
@@ -150,7 +155,28 @@ func (s *Server) handleQueryBatch(w http.ResponseWriter, r *http.Request) (int, 
 		i := single[k]
 		out[i] = s.queryOne(r, peerOnly, req.Queries[i])
 	})
+	setDataPath(w, batchDataPath(req.Queries, out))
 	return 200, batchResponse{Results: out}
+}
+
+// batchDataPath is the data_path the batch response header carries: the
+// one value the answers agree on when every item names the same tenant,
+// else "" (no header).
+func batchDataPath(queries []BatchQuery, out []BatchAnswer) string {
+	path := ""
+	for i, a := range out {
+		if queries[i].Tenant != queries[0].Tenant {
+			return ""
+		}
+		if a.DataPath == "" {
+			continue
+		}
+		if path != "" && a.DataPath != path {
+			return ""
+		}
+		path = a.DataPath
+	}
+	return path
 }
 
 // batchPeer names the peer that owns tid and can take it in a sub-batch, or
@@ -252,7 +278,7 @@ func (s *Server) queryOne(r *http.Request, peerOnly bool, q BatchQuery) BatchAns
 		// a proxy or transport answer that is not JSON: keep its text
 		return errorAnswer(status, string(out))
 	}
-	return BatchAnswer{Status: status, Body: append(json.RawMessage(nil), out...)}
+	return BatchAnswer{Status: status, Body: append(json.RawMessage(nil), out...), DataPath: rec.header.Get(DataPathHeader)}
 }
 
 func errorAnswer(status int, msg string) BatchAnswer {

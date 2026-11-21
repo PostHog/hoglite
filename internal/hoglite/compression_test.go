@@ -496,7 +496,7 @@ func TestNewerManifestFormatRefused(t *testing.T) {
 	}
 	ctx := context.Background()
 	mf, etag, _ := fs.GetManifest(ctx, "t1")
-	mf.Format = maxManifestFormat + 1
+	mf.Format = maxManifestCodec + 1
 	if _, err := fs.PutManifestCAS(ctx, "t1", mf, etag); err != nil {
 		t.Fatal(err)
 	}
