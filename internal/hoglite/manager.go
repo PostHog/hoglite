@@ -201,9 +201,13 @@ type Manager struct {
 	// legacyReadForTest makes this manager read like a build from before
 	// compression: every object raw, no format gate, no delta chain.
 	// s1ReadForTest makes it read like the build with compression but
-	// without deltas: the format gate stops at format 1. Tests only.
+	// without deltas: the format gate stops at format 1. s2ReadForTest
+	// makes it read like the build with deltas but before manifest flags
+	// (data_path): the gate compares the whole Format against codec 2, so
+	// a flagged manifest is refused and never rewritten. Tests only.
 	legacyReadForTest bool
 	s1ReadForTest     bool
+	s2ReadForTest     bool
 	qlim              *queryLimiter // bounds admitted queries across all tenants
 
 	maxOpen int // soft cap on simultaneously open tenants
@@ -484,12 +488,14 @@ func (m *Manager) ownerLeaseLive(ctx context.Context, owner string) (bool, int64
 // Acquire returns the open tenant, acquiring or re-acquiring ownership as
 // needed. create=true creates the tenant when missing.
 func (m *Manager) Acquire(ctx context.Context, tid string, create bool) (*Tenant, error) {
-	return m.acquire(ctx, tid, create, nil)
+	return m.acquire(ctx, tid, create, "", nil)
 }
 
 // acquire lets an HTTP create confirm a live owner before waiting for its lease.
-// A nil callback preserves the normal takeover behavior.
-func (m *Manager) acquire(ctx context.Context, tid string, create bool, confirmLiveOwner func(*Manifest) bool) (*Tenant, error) {
+// A nil callback preserves the normal takeover behavior. dataPath is stored
+// in the manifest of a tenant this call creates (Manifest.DataPath); it is
+// not compared against an existing tenant here, the server does that.
+func (m *Manager) acquire(ctx context.Context, tid string, create bool, dataPath string, confirmLiveOwner func(*Manifest) bool) (*Tenant, error) {
 	if m.draining.Load() {
 		return nil, ErrClosed
 	}
@@ -560,7 +566,7 @@ func (m *Manager) acquire(ctx context.Context, tid string, create bool, confirmL
 			return nil, err
 		}
 		// leader finished; loop normally (tenant now exists or create failed)
-		return m.acquire(ctx, tid, create, confirmLiveOwner)
+		return m.acquire(ctx, tid, create, dataPath, confirmLiveOwner)
 	}
 	defer func() {
 		m.mu.Lock()
@@ -589,7 +595,7 @@ func (m *Manager) acquire(ctx context.Context, tid string, create bool, confirmL
 			if !create {
 				return nil, ErrNoTenant
 			}
-			t, err := m.createTenant(ctx, tid, "")
+			t, err := m.createTenant(ctx, tid, "", dataPath)
 			if errors.Is(err, errCreateLost) {
 				// a peer created it between our read and our CAS (every
 				// replica of a cold pool creates the same tenants at once).
@@ -674,7 +680,7 @@ func (m *Manager) acquire(ctx context.Context, tid string, create bool, confirmL
 }
 
 // createTenant makes a brand-new tenant.
-func (m *Manager) createTenant(ctx context.Context, tid, class string) (*Tenant, error) {
+func (m *Manager) createTenant(ctx context.Context, tid, class, dataPath string) (*Tenant, error) {
 	dir := filepath.Join(m.baseDir, "t", tid)
 	os.RemoveAll(dir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -689,7 +695,7 @@ func (m *Manager) createTenant(ctx context.Context, tid, class string) (*Tenant,
 		Epoch: 1, Gen: 1, Instance: iid, Owner: m.id, OwnerAddr: m.routeID,
 		OwnerUntilMs: time.Now().Add(m.opts.Lease).UnixMilli(),
 		BaseKey:      baseKey(m.prefix, tid, iid, 1, 1), Class: class,
-		UpdatedMs: time.Now().UnixMilli(),
+		UpdatedMs: time.Now().UnixMilli(), DataPath: dataPath,
 	}
 	t, err := openTenant(tid, dir, mf, "", m.store, m.prefix, m.id, m.routeID, m.opts, m.metrics, m)
 	if err == nil {
@@ -831,6 +837,8 @@ func (m *Manager) formatGate(tid string, mf *Manifest) error {
 		return nil // the build before compression has no gate
 	case m.s1ReadForTest:
 		return checkManifestFormatMax(tid, mf, manifestFormatZstd)
+	case m.s2ReadForTest:
+		return checkManifestFormatMax(tid, mf, manifestFormatChain)
 	}
 	return checkManifestFormat(tid, mf)
 }
@@ -838,7 +846,7 @@ func (m *Manager) formatGate(tid string, mf *Manifest) error {
 // materializeLocked downloads the base image, applies the delta chain and
 // replays the contiguous segment run into dir.
 func (m *Manager) materializeLocked(ctx context.Context, tid string, mf *Manifest, dir string) error {
-	format := mf.Format
+	format := manifestCodec(mf)
 	chain := format == manifestFormatChain
 	if m.legacyReadForTest {
 		format = manifestFormatRaw // emulate a build from before compression

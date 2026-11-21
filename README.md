@@ -141,9 +141,37 @@ Create a tenant:
 
 ```sh
 curl --fail-with-body -X PUT \
-  -H 'Content-Type: application/json' -d '{}' \
+  -H 'Content-Type: application/json' -d '{"data_path":"s3://your-data-bucket/catalogs/demo"}' \
   http://127.0.0.1:9101/v1/tenants/demo
 ```
+
+`data_path` is the S3 prefix the tenant's catalog owns, as an `s3://<bucket>[/<prefix>]` URI.
+Hoglite stores it in the tenant manifest, which only hoglite writes, and sends it back in the `X-Hoglite-Data-Path` header of every tenant-scoped response (`/tx`, `/query`, `/query-batch`, `/status`, `/release`, and the create and delete themselves), from the owner's memory, through a proxying replica too.
+Clients that act on S3 for a tenant check paths against that header, never against a value stored in the tenant's own SQL.
+The value never changes: a create of an existing tenant with a different `data_path`, or with one when the tenant has none, is refused with 409 and `code` `data_path_mismatch`; delete the tenant and create it again to move it.
+A create that omits `data_path` makes no claim and stays idempotent; so does an empty body or `{}`.
+The body is empty or exactly one JSON object with nothing after it: a body that is not an object (`null` included), anything after the object (`{...} garbage`, two objects), a `class` that is not a string, or a key other than `class` and `data_path` (a misspelled `dataPath` or `data-path`, or a known key in another case such as `DATA_PATH`), is refused with 400. Keys match exactly and a repeated key takes its last value, as in hoglake's JSON reading (Jackson defaults), so the two sides read one body the same way.
+A body that does not arrive whole (a reset or cut connection) is refused with 400 rather than read as empty; one over 64 MiB with 413.
+A `data_path` that is present but not a non-empty string (`""`, `null`, a number) is refused with 400 and `code` `invalid_data_path`: before, such a body silently created a tenant without a `data_path`, which can never gain one.
+A malformed value (not `s3://`, empty bucket, whitespace or control characters, a `.` or `..` segment, over 512 bytes) is refused with 400 and `code` `invalid_data_path`.
+A value inside hoglite's own storage (`s3://<-bucket>/<-prefix>`, and `s3://<-data-bucket>/<-prefix>` when the data plane is separate), or above it, is refused with 400 and `code` `invalid_data_path`.
+A value that overlaps the `data_path` of any other tenant on this backend (equal, above or below it, trailing slashes aside, the rule hoglake applies between its catalogs) is refused with 409 and `code` `data_path_overlap`; the message names the other tenant and its `data_path`.
+That check reads every other tenant's manifest (hoglite keeps no index of `data_path`s): one listing (the 256 tenant shards, 16 at a time, well under a second on S3) plus one GET per tenant, 16 at a time, paid by a create that names a `data_path` for a tenant that does not exist yet, not by an idempotent recreate. Two concurrent creates of different tenants with overlapping paths can both pass it; serialize catalog creates in front of hoglite.
+A tenant created without a `data_path` sends no header.
+Only operator authority creates tenants, so only an operator sets a `data_path`.
+Each `/query-batch` item repeats its tenant's value in a `data_path` field; the batch response carries the header when every item names the same tenant.
+
+A tenant with a `data_path` is marked in its manifest's `format` (a flag above the generation's codec), and every hoglited build before this one refuses such a tenant (`tenant uses a newer storage format`, HTTP 500 on its routes) rather than serving it: those builds decode the manifest without the field and their next manifest write would erase it.
+Roll every pod to a build with `data_path` before creating tenants with one, as for `-compress` and `-delta-checkpoints`.
+A rollback to an older build leaves such tenants unserved until the roll forward, never rewritten; tenants without a `data_path` are unaffected either way.
+Builds from before compression have no format gate at all and must not run in a pool whose tenants have a `data_path`.
+
+The format flag protects a tenant that has a `data_path`; it cannot protect a create.
+A hoglited from before `data_path` does not know the field: a create of a NEW tenant that lands on such a pod ignores `data_path`, creates the tenant without one, and answers 200 with no `X-Hoglite-Data-Path` header, and that tenant can never gain one (delete it and create it again).
+In a mixed pool the outcome of a create therefore depends on which pod the Service picks, and a client that sends `data_path` cannot tell a rejected claim from a pod that never read it except by the header's absence on the create's answer.
+So the rollout order is fixed: roll every hoglited to a build with `data_path` first, wait for the roll to finish, and only then deploy a hoglake that sends `data_path`.
+A hoglake that sends `data_path` to a pool that is still rolling, or that is rolled back, should treat a create answer without the header as a failed create: do not proceed to bootstrap, leave the tenant for an operator, and retry once the pool is level.
+Never delete the tenant on that signal alone: a hoglited from before `data_path` answers a create of an EXISTING tenant it owns the same way (200, no `existing`, no header), so a delete on that answer would destroy a live catalog.
 
 Submit a transaction:
 
