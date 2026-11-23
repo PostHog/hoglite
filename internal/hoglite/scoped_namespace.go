@@ -59,43 +59,22 @@ func (s *Server) scopedNamespaceRoutes(next http.Handler) http.Handler {
 }
 
 func parseScopedNamespaceTarget(r *http.Request) (scopedNamespaceTarget, bool) {
-	var target scopedNamespaceTarget
-	raw := r.RequestURI
-	if raw == "" {
-		raw = r.URL.RequestURI()
+	target, ok := parseScopedMetadataTarget(r)
+	if !ok || target.kind != scopedMetadataKindNamespace {
+		return scopedNamespaceTarget{}, false
 	}
-	if r.Method != http.MethodGet || len(raw) > scopedNamespaceTargetLimit ||
-		r.URL.RawQuery != "" || r.URL.ForceQuery || r.URL.Fragment != "" ||
-		r.ContentLength != 0 || len(r.TransferEncoding) != 0 ||
-		(r.Body != nil && r.Body != http.NoBody) {
-		return target, false
+	return target.namespaceTarget(), true
+}
+
+func decodeScopedSegment(raw string) (string, bool) {
+	v, err := url.PathUnescape(raw)
+	if err != nil || v == "" || v == "." || v == ".." ||
+		!utf8.ValidString(v) || strings.ContainsAny(v, "/\\%") ||
+		strings.IndexFunc(v, unicode.IsControl) >= 0 ||
+		scopedNamespaceSegment(v) != raw {
+		return "", false
 	}
-	path := r.URL.EscapedPath()
-	// Only origin-form targets belong to this operation.
-	if raw != path {
-		return target, false
-	}
-	parts := strings.Split(path, "/")
-	if len(parts) != 10 || parts[0] != "" || parts[1] != "v1" ||
-		parts[2] != "t" || parts[4] != "metadata" || parts[5] != "v1" ||
-		parts[6] != "catalogs" || parts[8] != "namespaces" {
-		return target, false
-	}
-	decoded := make([]string, 3)
-	for i, p := range []string{parts[3], parts[7], parts[9]} {
-		v, err := url.PathUnescape(p)
-		if err != nil || v == "" || v == "." || v == ".." ||
-			!utf8.ValidString(v) || strings.ContainsAny(v, "/\\%") ||
-			strings.IndexFunc(v, unicode.IsControl) >= 0 ||
-			scopedNamespaceSegment(v) != p {
-			return target, false
-		}
-		decoded[i] = v
-	}
-	if !validTID(decoded[0]) {
-		return target, false
-	}
-	return scopedNamespaceTarget{tenant: decoded[0], catalog: decoded[1], namespace: decoded[2], path: path}, true
+	return v, true
 }
 
 func scopedNamespaceSegment(value string) string {
@@ -114,18 +93,22 @@ func scopedNamespaceSegment(value string) string {
 	return out.String()
 }
 
-func scopedNamespaceReply(w http.ResponseWriter, status int, body any) {
+func scopedMetadataReply(w http.ResponseWriter, status int, body any, limit int) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "application/json")
 	if status == http.StatusUnauthorized {
 		w.Header().Set("WWW-Authenticate", "Bearer")
 	}
 	b, err := json.Marshal(body)
-	if err != nil || len(b) > scopedNamespaceResponseLimit {
+	if err != nil || len(b) > limit {
 		status, b = http.StatusServiceUnavailable, []byte(`{"code":"unavailable"}`)
 	}
 	w.WriteHeader(status)
 	_, _ = w.Write(b)
+}
+
+func scopedNamespaceReply(w http.ResponseWriter, status int, body any) {
+	scopedMetadataReply(w, status, body, scopedNamespaceResponseLimit)
 }
 
 func scopedNamespaceRefusal(w http.ResponseWriter, status int) {
@@ -135,6 +118,8 @@ func scopedNamespaceRefusal(w http.ResponseWriter, status int) {
 		code = "invalid_request"
 	case http.StatusUnauthorized:
 		code = "unauthorized"
+	case http.StatusForbidden:
+		code = "forbidden"
 	case http.StatusNotFound:
 		code = "not_found"
 	}
@@ -145,9 +130,13 @@ func (s *Server) serveScopedNamespace(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), scopedNamespaceCeiling)
 	defer cancel()
 	r = r.WithContext(ctx)
-	target, ok := parseScopedNamespaceTarget(r)
+	target, ok := parseScopedMetadataTarget(r)
 	if !ok {
 		scopedNamespaceRefusal(w, http.StatusBadRequest)
+		return
+	}
+	if target.kind != scopedMetadataKindNamespace && !s.auth.readSessionEnabled() {
+		scopedNamespaceRefusal(w, http.StatusNotFound)
 		return
 	}
 	values := r.Header.Values("Authorization")
@@ -186,10 +175,20 @@ func (s *Server) serveScopedNamespace(w http.ResponseWriter, r *http.Request) {
 		getManifest := func(readCtx context.Context) (*Manifest, error) {
 			return s.readSessionManifest(readCtx, target.tenant, rsa.creds)
 		}
-		s.readScopedNamespace(w, r, target, rsa.authority, t, getManifest)
+		switch target.kind {
+		case scopedMetadataKindNamespace:
+			s.readScopedNamespace(w, r, target.namespaceTarget(), rsa.authority, t, getManifest)
+		case scopedMetadataKindTable:
+			s.readScopedTable(w, r, target, rsa, t, getManifest)
+		case scopedMetadataKindScan:
+			s.readScopedScan(w, r, target, rsa, t, getManifest)
+		default:
+			scopedNamespaceRefusal(w, http.StatusBadRequest)
+		}
 		return
 	}
-	a, err := s.auth.verifyScopedNamespace(ctx, fields[1], target.tenant, target.catalog)
+	nsTarget := target.namespaceTarget()
+	a, err := s.auth.verifyScopedNamespace(ctx, fields[1], nsTarget.tenant, nsTarget.catalog)
 	if err != nil {
 		status := http.StatusUnauthorized
 		if ctx.Err() != nil {
@@ -204,15 +203,15 @@ func (s *Server) serveScopedNamespace(w http.ResponseWriter, r *http.Request) {
 		scopedNamespaceRefusal(w, http.StatusServiceUnavailable)
 		return
 	}
-	if t := s.mgr.LocalTenant(target.tenant); t != nil {
+	if t := s.mgr.LocalTenant(nsTarget.tenant); t != nil {
 		getManifest := func(readCtx context.Context) (*Manifest, error) {
-			mf, _, err := s.mgr.store.GetManifest(readCtx, target.tenant)
+			mf, _, err := s.mgr.store.GetManifest(readCtx, nsTarget.tenant)
 			return mf, err
 		}
-		s.readScopedNamespace(w, r, target, a, t, getManifest)
+		s.readScopedNamespace(w, r, nsTarget, a, t, getManifest)
 		return
 	}
-	s.forwardScopedNamespace(w, r, target, a, values[0])
+	s.forwardScopedNamespace(w, r, nsTarget, a, values[0])
 }
 
 // Use the immutable claim identity, not a cached owner or manifest generation.

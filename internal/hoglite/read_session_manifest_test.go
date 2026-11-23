@@ -56,9 +56,21 @@ func newLocalS3Fixture(t *testing.T) *localS3Fixture {
 		objects: map[string][]byte{},
 		callers: map[string]s3CallerPolicy{},
 	}
-	f.srv = httptest.NewServer(http.HandlerFunc(f.serveHTTP))
+	f.srv = httptest.NewTLSServer(http.HandlerFunc(f.serveHTTP))
 	t.Cleanup(f.srv.Close)
 	return f
+}
+
+func (f *localS3Fixture) s3Config() ReadSessionS3Config {
+	cli := f.srv.Client()
+	cli.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	return ReadSessionS3Config{
+		BaseEndpoint: f.srv.URL,
+		UsePathStyle: true,
+		HTTPClient:   cli,
+	}
 }
 
 func (f *localS3Fixture) putObject(bucket, key string, data []byte) {
@@ -348,10 +360,7 @@ func newReadSessionOwnerHarness(t *testing.T) (*readSessionAuthFixture, *localS3
 
 	srv := NewServer(mgr, map[string]string{"peer-1": "http://127.0.0.1:1"}).
 		WithAuth(f.auth).
-		WithReadSessionS3(ReadSessionS3Config{
-			BaseEndpoint: s3fx.srv.URL,
-			UsePathStyle: true,
-		})
+		WithReadSessionS3(s3fx.s3Config())
 	return f, s3fx, spy, mgr, tenant, srv.Handler()
 }
 
@@ -609,10 +618,7 @@ func TestReadSessionColdTenantUnavailableNoPeerDiscoveryOrAcquire(t *testing.T) 
 
 	srv := NewServer(mgr, map[string]string{"peer-1": peerSrv.URL}).
 		WithAuth(f.auth).
-		WithReadSessionS3(ReadSessionS3Config{
-			BaseEndpoint: s3fx.srv.URL,
-			UsePathStyle: true,
-		})
+		WithReadSessionS3(s3fx.s3Config())
 
 	coldToken := f.token(t, func(c map[string]any) {
 		c["rtg"].(map[string]any)["t"] = coldTenant
@@ -709,6 +715,29 @@ func TestReadSessionPostReadOwnershipLossAndMidRequestExpiry(t *testing.T) {
 		}
 		if spy.manifests.Load() != 0 {
 			t.Fatalf("daemon store was touched: manifests=%d", spy.manifests.Load())
+		}
+	})
+
+	t.Run("plain HTTP S3 endpoint is refused without sending caller credentials", func(t *testing.T) {
+		f, _, spy, mgr, _, _ := newReadSessionOwnerHarness(t)
+		spy.denyManifest.Store(true)
+		var hits atomic.Int64
+		plainSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			hits.Add(1)
+			w.WriteHeader(http.StatusOK)
+		}))
+		t.Cleanup(plainSrv.Close)
+
+		srv := NewServer(mgr, nil).
+			WithAuth(f.auth).
+			WithReadSessionS3(ReadSessionS3Config{
+				BaseEndpoint: plainSrv.URL,
+				UsePathStyle: true,
+			})
+		w := scopedNamespaceCall(t, srv.Handler(), readSessionTestPath, "Bearer "+f.token(t, nil))
+		scopedNamespaceWantCode(t, w, http.StatusServiceUnavailable, "unavailable")
+		if hits.Load() != 0 {
+			t.Fatalf("plain HTTP S3 endpoint received %d requests, want 0", hits.Load())
 		}
 	})
 }
