@@ -275,6 +275,34 @@ func TestReadSessionConfigValidation(t *testing.T) {
 		})
 	}
 
+	// RS256-only JWKS fails startup when read sessions are enabled, but still starts when disabled.
+	rsaOnlyJWK := map[string]any{
+		"kty": "RSA",
+		"alg": "RS256",
+		"use": "sig",
+		"kid": f.rsaKid,
+		"n":   base64.RawURLEncoding.EncodeToString(f.rsaKey.N.Bytes()),
+		"e":   base64.RawURLEncoding.EncodeToString([]byte{1, 0, 1}),
+	}
+	rsaOnlyBytes, err := json.Marshal(map[string]any{"keys": []any{rsaOnlyJWK}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rsaOnlyFile := filepath.Join(t.TempDir(), "rsa-only-jwks.json")
+	if err := os.WriteFile(rsaOnlyFile, rsaOnlyBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rsaEnabled := base()
+	rsaEnabled.JWKSFile = rsaOnlyFile
+	if _, err := NewJWTAuth(context.Background(), rsaEnabled); err == nil {
+		t.Fatal("RS256-only JWKS started with read sessions enabled")
+	}
+	rsaDisabled := rsaEnabled
+	rsaDisabled.ReadSession = nil
+	if _, err := NewJWTAuth(context.Background(), rsaDisabled); err != nil {
+		t.Fatalf("RS256-only JWKS failed when read sessions were disabled: %v", err)
+	}
+
 	// Trimmed multi-segment prefix is valid.
 	nested := base()
 	nested.ReadSession.Prefix = "/env/root/"
@@ -283,14 +311,22 @@ func TestReadSessionConfigValidation(t *testing.T) {
 		t.Fatalf("valid nested prefix failed: err=%v", err)
 	}
 
-	// S3 endpoint validation checks.
+	// S3 endpoint validation checks (HTTPS required).
 	if err := ValidateReadSessionS3Config(ReadSessionS3Config{}); err != nil {
 		t.Fatalf("empty endpoint failed: %v", err)
 	}
-	if err := ValidateReadSessionS3Config(ReadSessionS3Config{BaseEndpoint: "http://127.0.0.1:9000", UsePathStyle: true}); err != nil {
-		t.Fatalf("valid endpoint failed: %v", err)
+	if err := ValidateReadSessionS3Config(ReadSessionS3Config{BaseEndpoint: "https://127.0.0.1:9000", UsePathStyle: true}); err != nil {
+		t.Fatalf("valid https endpoint failed: %v", err)
 	}
-	for _, bad := range []string{"ftp://127.0.0.1", "http://127.0.0.1:9000?x=1", "/relative", "http://user:pass@127.0.0.1"} {
+	for _, bad := range []string{
+		"http://127.0.0.1:9000",
+		"http://s3.example.test",
+		"ftp://127.0.0.1",
+		"https://127.0.0.1:9000?x=1",
+		"https://127.0.0.1:9000#frag",
+		"/relative",
+		"https://user:pass@127.0.0.1",
+	} {
 		if err := ValidateReadSessionS3Config(ReadSessionS3Config{BaseEndpoint: bad}); err == nil {
 			t.Fatalf("invalid endpoint %q passed", bad)
 		}
@@ -512,6 +548,30 @@ func TestReadSessionClaimsAndGrantRejection(t *testing.T) {
 				"actions":    []string{"s3:GetObject"},
 			}
 			c["grants"] = []map[string]any{g[0], g[1], extra, g[2], g[3]}
+		}, readSessionErrInvalidToken},
+		"duplicate catalog grant": {func(c map[string]any) {
+			g := c["grants"].([]map[string]any)
+			extra := map[string]any{
+				"catalog": readSessionTestCatalog,
+				"target":  readSessionTestCatalog,
+				"bucket":  "example-customer",
+				"prefix":  "tables/team_id=99/",
+				"region":  readSessionTestRegion,
+				"actions": []string{"s3:GetObject"},
+			}
+			c["grants"] = []map[string]any{g[0], extra, g[1], g[2], g[3]}
+		}, readSessionErrInvalidToken},
+		"duplicate remote grant": {func(c map[string]any) {
+			g := c["grants"].([]map[string]any)
+			extra := map[string]any{
+				"catalog": readSessionTestCatalog,
+				"target":  "remote:imports",
+				"bucket":  "example-remote",
+				"prefix":  "zimports/team_id=42/",
+				"region":  readSessionTestRegion,
+				"actions": []string{"s3:GetObject"},
+			}
+			c["grants"] = []map[string]any{g[0], g[1], g[2], g[3], extra}
 		}, readSessionErrInvalidToken},
 		"grant region mismatch": {func(c map[string]any) {
 			c["grants"].([]map[string]any)[1]["region"] = "eu-west-1"

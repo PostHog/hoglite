@@ -139,7 +139,21 @@ func NewJWTAuth(ctx context.Context, cfg AuthConfig) (*JWTAuth, error) {
 	if err := a.refresh(ctx); err != nil {
 		return nil, fmt.Errorf("load public JWKS: %w", err)
 	}
+	if a.readSession != nil && !a.hasKeyAlg("ES256") {
+		return nil, errors.New("read sessions require at least one ES256 key in JWKS")
+	}
 	return a, nil
+}
+
+func (a *JWTAuth) hasKeyAlg(alg string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for _, k := range a.keys {
+		if k.alg == alg {
+			return true
+		}
+	}
+	return false
 }
 
 func absoluteHTTPURL(raw string) bool {

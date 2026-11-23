@@ -34,8 +34,8 @@ func ValidateReadSessionS3Config(cfg ReadSessionS3Config) error {
 		return nil
 	}
 	u, err := url.Parse(cfg.BaseEndpoint)
-	if err != nil || !absoluteHTTPURL(cfg.BaseEndpoint) || u.RawQuery != "" {
-		return errors.New("read session S3 endpoint must be an absolute http(s) URL without a query")
+	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return errors.New("read session S3 endpoint must be an absolute https URL without a query")
 	}
 	return nil
 }
@@ -66,6 +66,9 @@ func (s *Server) readSessionManifest(ctx context.Context, tid string, creds read
 		return nil, errReadSessionManifestUnavailable
 	}
 	if s.auth == nil || s.auth.readSession == nil || s.mgr.prefix != s.auth.readSession.prefix {
+		return nil, errReadSessionManifestUnavailable
+	}
+	if ValidateReadSessionS3Config(s.readSessionS3) != nil {
 		return nil, errReadSessionManifestUnavailable
 	}
 	// Refuse expired storage credentials before constructing a client or calling S3.

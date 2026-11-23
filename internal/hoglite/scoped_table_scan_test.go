@@ -21,6 +21,10 @@ const (
 )
 
 func newScopedTableScanHarness(t *testing.T) (*readSessionAuthFixture, *localS3Fixture, *readSessionDaemonSpy, *Manager, *Tenant, *Server) {
+	return newScopedTableScanHarnessWithOpts(t, nil)
+}
+
+func newScopedTableScanHarnessWithOpts(t *testing.T, mutateOpts func(*TenantOpts)) (*readSessionAuthFixture, *localS3Fixture, *readSessionDaemonSpy, *Manager, *Tenant, *Server) {
 	t.Helper()
 	f := newReadSessionAuthFixture(t)
 	s3fx := newLocalS3Fixture(t)
@@ -30,6 +34,9 @@ func newScopedTableScanHarness(t *testing.T) (*readSessionAuthFixture, *localS3F
 	opts := testOpts()
 	opts.Lease = 30 * time.Second
 	opts.HeartbeatEvery = 5 * time.Second
+	if mutateOpts != nil {
+		mutateOpts(&opts)
+	}
 
 	mgr := NewManager(spy, readSessionTestPrefix, "owner-1", "standard", t.TempDir(), opts, 1000, &Metrics{}, ControllerOpts{})
 	t.Cleanup(mgr.ShutdownAll)
@@ -108,7 +115,8 @@ func newScopedTableScanHarness(t *testing.T) (*readSessionAuthFixture, *localS3F
 			row_id_start INTEGER NOT NULL,
 			stats_state TEXT NOT NULL,
 			file_format TEXT NOT NULL DEFAULT 'parquet',
-			path TEXT NOT NULL
+			path TEXT NOT NULL,
+			explicit_row_ids INTEGER NOT NULL DEFAULT 0
 		)`},
 		Statement{SQL: `CREATE TABLE dvs(
 			data_file_id INTEGER NOT NULL,
@@ -141,10 +149,10 @@ func newScopedTableScanHarness(t *testing.T) (*readSessionAuthFixture, *localS3F
 		Statement{SQL: `INSERT INTO tables VALUES(103, 18, 'other', 'metrics', ?, 1, NULL)`, Args: []any{scopedTestUUIDOther}},
 		Statement{SQL: `INSERT INTO table_versions VALUES(103, 18, 'other', 'metrics', 1, NULL)`},
 		Statement{SQL: `INSERT INTO columns VALUES(103, 1, NULL, 0, 'secret_col', 'string', NULL, 1, NULL, 1, NULL)`},
-		// Data files and deletion vectors for table 101.
-		Statement{SQL: `INSERT INTO files VALUES(10, 101, 1, NULL, 3, 1024, 256, 0, 'none', 'parquet', 's3://example-customer/tables/team_id=42/part-0.parquet')`},
-		Statement{SQL: `INSERT INTO files VALUES(11, 101, 2, 4, 5, 2048, NULL, 3, 'provided', 'parquet', 's3://example-customer/tables/team_id=42/part-1.parquet')`},
-		Statement{SQL: `INSERT INTO files VALUES(12, 101, 4, NULL, 7, 4096, 512, 10, 'none', 'parquet', 's3://example-customer/tables/team_id=42/part-2.parquet')`},
+		// Data files and deletion vectors for table 101 (file 12 is compacted with explicit_row_ids=1).
+		Statement{SQL: `INSERT INTO files VALUES(10, 101, 1, NULL, 3, 1024, 256, 0, 'none', 'parquet', 's3://example-customer/tables/team_id=42/part-0.parquet', 0)`},
+		Statement{SQL: `INSERT INTO files VALUES(11, 101, 2, 4, 5, 2048, NULL, 3, 'provided', 'parquet', 's3://example-customer/tables/team_id=42/part-1.parquet', 0)`},
+		Statement{SQL: `INSERT INTO files VALUES(12, 101, 4, NULL, 7, 4096, 512, 10, 'none', 'parquet', 's3://example-customer/tables/team_id=42/part-2.parquet', 1)`},
 		// Two DV epochs on file 10: epoch 1 at snap 2, epoch 2 at snap 4.
 		Statement{SQL: `INSERT INTO dvs VALUES(10, 101, 501, 's3://example-customer/tables/team_id=42/dv-1.puffin', 1, 128, 2, 4, 1)`},
 		Statement{SQL: `INSERT INTO dvs VALUES(10, 101, 502, 's3://example-customer/tables/team_id=42/dv-2.puffin', 2, 256, 4, NULL, 2)`},
@@ -166,10 +174,7 @@ func newScopedTableScanHarness(t *testing.T) (*readSessionAuthFixture, *localS3F
 
 	srv := NewServer(mgr, map[string]string{"peer-1": "http://127.0.0.1:1"}).
 		WithAuth(f.auth).
-		WithReadSessionS3(ReadSessionS3Config{
-			BaseEndpoint: s3fx.srv.URL,
-			UsePathStyle: true,
-		})
+		WithReadSessionS3(s3fx.s3Config())
 	return f, s3fx, spy, mgr, tenant, srv
 }
 
@@ -450,26 +455,32 @@ func TestScopedScanHappyPathAndSnapshotPinning(t *testing.T) {
 	}
 	f0 := dto3.Files[0]
 	if f0.DataFile.DataFileID != 10 || f0.DataFile.FooterSize == nil || *f0.DataFile.FooterSize != 256 ||
+		f0.DataFile.ExplicitRowIDs ||
 		f0.DeleteFile == nil || f0.DeleteFile.DeleteFileID != 501 || f0.DeleteFile.DeleteCount != 1 {
 		t.Fatalf("unexpected scan@3 file 0: %+v", f0)
 	}
 	f1 := dto3.Files[1]
-	if f1.DataFile.DataFileID != 11 || f1.DataFile.FooterSize != nil || f1.DeleteFile != nil {
+	if f1.DataFile.DataFileID != 11 || f1.DataFile.FooterSize != nil || f1.DataFile.ExplicitRowIDs || f1.DeleteFile != nil {
 		t.Fatalf("unexpected scan@3 file 1: %+v", f1)
 	}
 
-	// Snapshot 5 (head): file 10 (with DV epoch 2) and file 12 (file 11 ended at snap 4).
+	// Snapshot 5 (head): file 10 (explicit_row_ids=false, DV epoch 2) and compacted file 12 (explicit_row_ids=true).
 	w = scopedNamespaceCall(t, h, scopedScanTestPath+"?snapshot=5&table_uuid="+scopedTestUUID1, token)
 	if w.Code != http.StatusOK {
 		t.Fatalf("scan@5 status=%d body=%s", w.Code, w.Body.String())
+	}
+	raw5 := w.Body.String()
+	if !strings.Contains(raw5, `"explicit_row_ids":false`) || !strings.Contains(raw5, `"explicit_row_ids":true`) {
+		t.Fatalf("scan@5 must always emit explicit_row_ids bools, got body=%s", raw5)
 	}
 	var dto5 scopedScanDTO
 	if err := json.Unmarshal(w.Body.Bytes(), &dto5); err != nil {
 		t.Fatal(err)
 	}
 	if len(dto5.Files) != 2 || dto5.Files[0].DataFile.DataFileID != 10 ||
+		dto5.Files[0].DataFile.ExplicitRowIDs ||
 		dto5.Files[0].DeleteFile == nil || dto5.Files[0].DeleteFile.DeleteFileID != 502 ||
-		dto5.Files[1].DataFile.DataFileID != 12 || dto5.Files[1].DeleteFile != nil {
+		dto5.Files[1].DataFile.DataFileID != 12 || !dto5.Files[1].DataFile.ExplicitRowIDs || dto5.Files[1].DeleteFile != nil {
 		t.Fatalf("unexpected scan@5 files: %+v", dto5.Files)
 	}
 
@@ -544,7 +555,16 @@ func TestScopedScanStorageGrantEnforcementAndRedaction(t *testing.T) {
 		}
 	}
 
-	// Data file outside primary-catalog grant (wrong prefix, wrong bucket, traversal, non-s3, remote target, manifest).
+	// Valid S3 object names with characters like parentheses under an authorized prefix are accepted.
+	scopedNamespaceWrite(t, tenant, "valid-s3-object-chars",
+		Statement{SQL: `UPDATE files SET path = 's3://example-customer/tables/team_id=42/part(1).parquet' WHERE id = 12`},
+	)
+	w := scopedNamespaceCall(t, h, scopedScanTestPath+"?snapshot=5&table_uuid="+scopedTestUUID1, token)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "part(1).parquet") {
+		t.Fatalf("valid S3 object key with parentheses failed: status=%d body=%s", w.Code, w.Body.String())
+	}
+
+	// Data file outside primary-catalog grant (wrong prefix, wrong bucket, traversal, empty segment, control char, non-s3, remote target, manifest).
 	badDataPaths := []struct {
 		name string
 		path string
@@ -552,6 +572,9 @@ func TestScopedScanStorageGrantEnforcementAndRedaction(t *testing.T) {
 		{"wrong_team_prefix", "s3://example-customer/tables/team_id=43/part-0.parquet"},
 		{"wrong_bucket", "s3://other-bucket/tables/team_id=42/part-0.parquet"},
 		{"traversal", "s3://example-customer/tables/team_id=42/../team_id=43/part-0.parquet"},
+		{"dot_segment", "s3://example-customer/tables/team_id=42/./part-0.parquet"},
+		{"empty_segment", "s3://example-customer/tables/team_id=42//part-0.parquet"},
+		{"control_char", "s3://example-customer/tables/team_id=42/part\x00.parquet"},
 		{"non_s3_scheme", "https://example-customer/tables/team_id=42/part-0.parquet"},
 		{"remote_target_grant_only", "s3://example-remote/events/team_id=42/part-0.parquet"},
 		{"manifest_grant_only", "s3://" + readSessionTestBucket + "/" + manifestKey(readSessionTestPrefix, readSessionTestTenant)},
@@ -586,7 +609,7 @@ func TestScopedTableAndScanDistinctCallersAndManifestChecks(t *testing.T) {
 
 	// Seed a file under team 43's table (id=103, ns=18 'other').
 	scopedNamespaceWrite(t, tenant, "seed-other-file",
-		Statement{SQL: `INSERT INTO files VALUES(20, 103, 1, NULL, 2, 512, 64, 0, 'none', 'parquet', 's3://example-customer/tables/team_id=43/part-0.parquet')`},
+		Statement{SQL: `INSERT INTO files VALUES(20, 103, 1, NULL, 2, 512, 64, 0, 'none', 'parquet', 's3://example-customer/tables/team_id=43/part-0.parquet', 0)`},
 	)
 
 	aliceTok := scopedTableScanToken(t, f, s3fx, "42",
@@ -728,7 +751,7 @@ func TestScopedTableAndScanBoundsAndColdSchema(t *testing.T) {
 		}
 		for i := 1; i <= 1001; i++ {
 			stmts = append(stmts, Statement{
-				SQL:  `INSERT INTO files VALUES(?, 201, 1, NULL, 1, 64, 16, ?, 'none', 'parquet', ?)`,
+				SQL:  `INSERT INTO files VALUES(?, 201, 1, NULL, 1, 64, 16, ?, 'none', 'parquet', ?, 0)`,
 				Args: []any{1000 + i, i, fmt.Sprintf("s3://example-customer/tables/team_id=42/f-%04d.parquet", i)},
 			})
 		}
@@ -765,7 +788,7 @@ func TestScopedTableAndScanBoundsAndColdSchema(t *testing.T) {
 		}
 		for i := 1; i <= 950; i++ {
 			stmts = append(stmts, Statement{
-				SQL:  `INSERT INTO files VALUES(?, 202, 1, NULL, 1, 64, 16, ?, 'none', 'parquet', ?)`,
+				SQL:  `INSERT INTO files VALUES(?, 202, 1, NULL, 1, 64, 16, ?, 'none', 'parquet', ?, 0)`,
 				Args: []any{3000 + i, i, fmt.Sprintf("s3://example-customer/tables/team_id=42/%s-%04d.parquet", pad, i)},
 			})
 		}
@@ -791,13 +814,109 @@ func TestScopedTableAndScanBoundsAndColdSchema(t *testing.T) {
 		}
 		mfBytes, _ := json.Marshal(mf)
 		s3fx.putObject(readSessionTestBucket, manifestKey(readSessionTestPrefix, readSessionTestTenant), mfBytes)
-		srv := NewServer(mgr, nil).WithAuth(f.auth).WithReadSessionS3(ReadSessionS3Config{
-			BaseEndpoint: s3fx.srv.URL,
-			UsePathStyle: true,
-		})
+		srv := NewServer(mgr, nil).WithAuth(f.auth).WithReadSessionS3(s3fx.s3Config())
 		token := scopedTableScanToken(t, f, s3fx, "42",
 			"ASIAEXAMPLEALICE0001", "secret-alice-empty", "session-alice-empty", nil)
 		scopedNamespaceWantCode(t, scopedNamespaceCall(t, srv.Handler(), scopedTableTestPath, token), http.StatusNotFound, "not_found")
 		scopedNamespaceWantCode(t, scopedNamespaceCall(t, srv.Handler(), scopedScanTestPath+"?snapshot=1&table_uuid="+scopedTestUUID1, token), http.StatusNotFound, "not_found")
+	})
+
+	t.Run("denied_table_over_sqlite_read_budget_returns_404", func(t *testing.T) {
+		f, s3fx, spy, _, tenant, srv := newScopedTableScanHarnessWithOpts(t, func(o *TenantOpts) {
+			o.MaxResultRows = 5
+		})
+		spy.denyManifest.Store(true)
+		h := srv.Handler()
+
+		// Populate denied table 103 (namespace other, team_id=43) with 12 columns and 12 files, exceeding MaxResultRows=5.
+		var stmts []Statement
+		for i := 2; i <= 12; i++ {
+			stmts = append(stmts, Statement{
+				SQL:  `INSERT INTO columns VALUES(103, ?, NULL, ?, ?, 'string', NULL, 1, NULL, 1, NULL)`,
+				Args: []any{i, i - 1, fmt.Sprintf("col_%d", i)},
+			})
+		}
+		for i := 1; i <= 12; i++ {
+			stmts = append(stmts, Statement{
+				SQL:  `INSERT INTO files VALUES(?, 103, 1, NULL, 1, 64, 16, ?, 'none', 'parquet', ?, 0)`,
+				Args: []any{4000 + i, i, fmt.Sprintf("s3://example-customer/tables/team_id=43/f-%02d.parquet", i)},
+			})
+		}
+		scopedNamespaceWrite(t, tenant, "seed-over-budget-denied-table", stmts...)
+
+		aliceTok := scopedTableScanToken(t, f, s3fx, "42",
+			"ASIAEXAMPLEALICE0001", "secret-alice-budget", "session-alice-budget", nil)
+		bobTok := scopedTableScanToken(t, f, s3fx, "43",
+			"ASIAEXAMPLEBOB000002", "secret-bob-budget", "session-bob-budget", nil)
+
+		otherTablePath := strings.Replace(scopedTableTestPath, "/namespaces/reports/", "/namespaces/other/", 1)
+		otherScanPath := otherTablePath + "/scan?snapshot=5&table_uuid=" + scopedTestUUIDOther
+
+		// Confirm the table genuinely exceeds the SQLite result budget for its authorized caller.
+		scopedNamespaceWantCode(t, scopedNamespaceCall(t, h, otherTablePath, bobTok), http.StatusServiceUnavailable, "unavailable")
+		scopedNamespaceWantCode(t, scopedNamespaceCall(t, h, otherScanPath, bobTok), http.StatusServiceUnavailable, "unavailable")
+
+		// Unauthorized caller receives 404 (not 503) because SQL filters namespace containment first.
+		scopedNamespaceWantCode(t, scopedNamespaceCall(t, h, otherTablePath, aliceTok), http.StatusNotFound, "not_found")
+		scopedNamespaceWantCode(t, scopedNamespaceCall(t, h, otherScanPath, aliceTok), http.StatusNotFound, "not_found")
+	})
+
+	t.Run("scan_sorts_bounded_files_by_row_id_start_and_id", func(t *testing.T) {
+		f, s3fx, spy, _, tenant, srv := newScopedTableScanHarness(t)
+		spy.denyManifest.Store(true)
+		h := srv.Handler()
+		token := scopedTableScanToken(t, f, s3fx, "42",
+			"ASIAEXAMPLEALICE0001", "secret-alice-sort", "session-alice-sort", nil)
+
+		const sortUUID = "77777777-7777-4777-8777-777777777777"
+		scopedNamespaceWrite(t, tenant, "seed-unsorted-files",
+			Statement{SQL: `INSERT INTO tables VALUES(203, 17, 'reports', 'unsorted_files', ?, 1, NULL)`, Args: []any{sortUUID}},
+			Statement{SQL: `INSERT INTO table_versions VALUES(203, 17, 'reports', 'unsorted_files', 1, NULL)`},
+			Statement{SQL: `INSERT INTO files VALUES(50, 203, 1, NULL, 1, 64, 16, 100, 'none', 'parquet', 's3://example-customer/tables/team_id=42/f50.parquet', 0)`},
+			Statement{SQL: `INSERT INTO files VALUES(30, 203, 1, NULL, 1, 64, 16, 20, 'none', 'parquet', 's3://example-customer/tables/team_id=42/f30.parquet', 1)`},
+			Statement{SQL: `INSERT INTO files VALUES(20, 203, 1, NULL, 1, 64, 16, 20, 'none', 'parquet', 's3://example-customer/tables/team_id=42/f20.parquet', 0)`},
+			Statement{SQL: `INSERT INTO files VALUES(40, 203, 1, NULL, 1, 64, 16, 5, 'none', 'parquet', 's3://example-customer/tables/team_id=42/f40.parquet', 1)`},
+		)
+
+		// Verify SQLite materializes bounded files before joining dvs and does not use a temp B-tree sort.
+		planArgs := []any{
+			readSessionTestCatalog, int64(5), int64(5),
+			"reports", "team_id", int64(42), int64(5), int64(5),
+			"unsorted_files", sortUUID,
+			int64(5), int64(5), int64(5), int64(5),
+			int64(5), int64(5), int64(5), int64(5), int64(5), int64(5),
+		}
+		planRes, _, err := tenant.SubmitTxCtx(context.Background(), TxRequest{
+			Stmts: []Statement{{SQL: "EXPLAIN QUERY PLAN " + scopedScanFilesSQL, Args: planArgs}},
+		})
+		if err != nil || len(planRes) != 1 {
+			t.Fatalf("explain query plan failed: err=%v", err)
+		}
+		var planText strings.Builder
+		for _, r := range planRes[0].Rows {
+			fmt.Fprintln(&planText, r...)
+		}
+		if !strings.Contains(planText.String(), "MATERIALIZE bounded") || strings.Contains(planText.String(), "USE TEMP B-TREE FOR ORDER BY") {
+			t.Fatalf("unexpected query plan:\n%s", planText.String())
+		}
+
+		path := readSessionTestPath + "/tables/unsorted_files/scan?snapshot=5&table_uuid=" + sortUUID
+		w := scopedNamespaceCall(t, h, path, token)
+		if w.Code != http.StatusOK {
+			t.Fatalf("unsorted scan status=%d body=%s", w.Code, w.Body.String())
+		}
+		var dto scopedScanDTO
+		if err := json.Unmarshal(w.Body.Bytes(), &dto); err != nil {
+			t.Fatal(err)
+		}
+		wantIDs := []int64{40, 20, 30, 50}
+		if len(dto.Files) != len(wantIDs) {
+			t.Fatalf("got %d files, want %d", len(dto.Files), len(wantIDs))
+		}
+		for i, wantID := range wantIDs {
+			if dto.Files[i].DataFile.DataFileID != wantID {
+				t.Fatalf("file[%d] id=%d, want %d (order=%+v)", i, dto.Files[i].DataFile.DataFileID, wantID, dto.Files)
+			}
+		}
 	})
 }

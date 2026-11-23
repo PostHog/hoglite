@@ -9,7 +9,9 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode"
 	"unicode/utf16"
+	"unicode/utf8"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
@@ -88,6 +90,8 @@ type readSessionClaims struct {
 	backend        string
 	tenant         string
 	predicates     map[string]map[string]string
+	predicateField string
+	predicateValue int64
 	manifestBucket string
 	manifestRegion string
 	manifestKey    string
@@ -96,9 +100,18 @@ type readSessionClaims struct {
 }
 
 type readSessionAuthority struct {
-	authority *scopedNamespaceAuthority
-	creds     readSessionCredentials
-	grants    []readSessionGrant
+	authority      *scopedNamespaceAuthority
+	predicateField string
+	predicateValue int64
+	creds          readSessionCredentials
+	grants         []readSessionGrant
+}
+
+func (a *readSessionAuthority) containmentPredicate() (string, int64, bool) {
+	if a == nil || a.predicateField == "" || a.predicateValue <= 0 || !a.authority.permits(a.predicateField, a.predicateValue) {
+		return "", 0, false
+	}
+	return a.predicateField, a.predicateValue, true
 }
 
 const (
@@ -177,9 +190,20 @@ func validReadSessionPathSegments(path string) bool {
 }
 
 func validReadSessionObjectKey(key string) bool {
-	return key != "" && len(key) <= readSessionMaxKeyLength &&
-		!strings.HasSuffix(key, "/") &&
-		validReadSessionPathSegments(key)
+	if key == "" || len(key) > readSessionMaxKeyLength || strings.HasSuffix(key, "/") || !utf8.ValidString(key) {
+		return false
+	}
+	for _, r := range key {
+		if unicode.IsControl(r) {
+			return false
+		}
+	}
+	for _, seg := range strings.Split(key, "/") {
+		if seg == "" || seg == "." || seg == ".." {
+			return false
+		}
+	}
+	return true
 }
 
 func parseReadSessionS3Location(location string) (string, string, bool) {
@@ -240,9 +264,11 @@ func (a *JWTAuth) verifyReadSession(ctx context.Context, raw, tenant, catalog st
 		return nil, errUnsupportedAuthority
 	}
 	return &readSessionAuthority{
-		authority: &scopedNamespaceAuthority{predicates: claims.predicates},
-		creds:     claims.creds,
-		grants:    claims.grants,
+		authority:      &scopedNamespaceAuthority{predicates: claims.predicates},
+		predicateField: claims.predicateField,
+		predicateValue: claims.predicateValue,
+		creds:          claims.creds,
+		grants:         claims.grants,
 	}, nil
 }
 
@@ -392,7 +418,7 @@ func (p *readSessionProfile) validate(payload map[string]json.RawMessage, now in
 	if !requireSingleReadMap(payload["cat"], primary) || !requireSingleReadMap(payload["remote_schemas"], "team") {
 		return invalid()
 	}
-	teamKey, ok := validateReadSessionPredicate(payload["prd"])
+	teamKey, teamValue, ok := validateReadSessionPredicate(payload["prd"])
 	if !ok {
 		return invalid()
 	}
@@ -437,6 +463,8 @@ func (p *readSessionProfile) validate(payload map[string]json.RawMessage, now in
 		backend:        backend,
 		tenant:         tenant,
 		predicates:     map[string]map[string]string{"team_id": {teamKey: "read"}},
+		predicateField: "team_id",
+		predicateValue: teamValue,
 		manifestBucket: manifestBucket,
 		manifestRegion: manifestRegion,
 		manifestKey:    manifestObjKey,
@@ -494,33 +522,34 @@ func requireSingleReadMap(raw json.RawMessage, expectedKey string) bool {
 	return json.Unmarshal(s, &word) == nil && word == "read"
 }
 
-func validateReadSessionPredicate(raw json.RawMessage) (string, bool) {
+func validateReadSessionPredicate(raw json.RawMessage) (string, int64, bool) {
 	prd, ok := parseJSONObject(raw)
 	if !ok || len(prd) != 1 {
-		return "", false
+		return "", 0, false
 	}
 	teams, ok := parseJSONObject(prd["team_id"])
 	if !ok || len(teams) != 1 {
-		return "", false
+		return "", 0, false
 	}
 	for k, v := range teams {
 		if !readSessionPositiveIntRe.MatchString(k) {
-			return "", false
+			return "", 0, false
 		}
-		if n, err := strconv.ParseInt(k, 10, 64); err != nil || n <= 0 {
-			return "", false
+		n, err := strconv.ParseInt(k, 10, 64)
+		if err != nil || n <= 0 {
+			return "", 0, false
 		}
 		t := bytes.TrimSpace(v)
 		if len(t) == 0 || t[0] != '"' {
-			return "", false
+			return "", 0, false
 		}
 		var perm string
 		if json.Unmarshal(t, &perm) != nil || perm != "read" {
-			return "", false
+			return "", 0, false
 		}
-		return k, true
+		return k, n, true
 	}
-	return "", false
+	return "", 0, false
 }
 
 func parseReadSessionAWS(raw json.RawMessage) (readSessionCredentials, bool) {
@@ -596,7 +625,7 @@ func (p *readSessionProfile) validateGrants(raw json.RawMessage, catalog, backen
 		return "", "", "", nil, false
 	}
 	var items []json.RawMessage
-	if json.Unmarshal(trimmed, &items) != nil || len(items) < len(targets) {
+	if json.Unmarshal(trimmed, &items) != nil || len(items) != len(targets) {
 		return "", "", "", nil, false
 	}
 	manifestSuffix := "/" + TenantShard(tenant) + "/t/" + tenant + "/manifest"
@@ -629,12 +658,12 @@ func (p *readSessionProfile) validateGrants(raw json.RawMessage, catalog, backen
 		if !validReadSessionBucket(bucket) || len(key) > readSessionMaxKeyLength ||
 			hasPrefix != strings.HasSuffix(key, "/") ||
 			!validReadSessionPathSegments(strings.TrimSuffix(key, "/")) ||
-			!targets[target] || grantCat != catalog || grantReg != region ||
+			!targets[target] || seen[target] || grantCat != catalog || grantReg != region ||
 			!isGetObjectOnly(grant["actions"]) {
 			return "", "", "", nil, false
 		}
 		if target == backend {
-			if hasPrefix || !strings.HasSuffix(key, manifestSuffix) || seen[target] {
+			if hasPrefix || !strings.HasSuffix(key, manifestSuffix) {
 				return "", "", "", nil, false
 			}
 			manifestBucket, manifestRegion, manifestObjKey = bucket, grantReg, key

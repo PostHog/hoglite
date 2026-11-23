@@ -2,9 +2,11 @@ package hoglite
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -82,15 +84,16 @@ type scopedScanFileDTO struct {
 }
 
 type scopedDataFileDTO struct {
-	DataFileID    int64  `json:"data_file_id"`
-	Path          string `json:"path"`
-	FileFormat    string `json:"file_format"`
-	RecordCount   int64  `json:"record_count"`
-	FileSizeBytes int64  `json:"file_size_bytes"`
-	FooterSize    *int64 `json:"footer_size"`
-	RowIDStart    int64  `json:"row_id_start"`
-	StatsState    string `json:"stats_state"`
-	BeginSnapshot int64  `json:"begin_snapshot"`
+	DataFileID     int64  `json:"data_file_id"`
+	Path           string `json:"path"`
+	FileFormat     string `json:"file_format"`
+	RecordCount    int64  `json:"record_count"`
+	FileSizeBytes  int64  `json:"file_size_bytes"`
+	FooterSize     *int64 `json:"footer_size"`
+	RowIDStart     int64  `json:"row_id_start"`
+	StatsState     string `json:"stats_state"`
+	BeginSnapshot  int64  `json:"begin_snapshot"`
+	ExplicitRowIDs bool   `json:"explicit_row_ids"`
 }
 
 type scopedDeleteFileDTO struct {
@@ -272,6 +275,9 @@ WHERE m.id = 1 AND m.name = ? COLLATE BINARY AND m.dropping = 0
   AND m.next_snapshot - 1 >= 0
   AND m.next_snapshot - 1 >= m.earliest_snapshot_id
   AND n.name = ? COLLATE BINARY AND n.dropped_snapshot IS NULL
+  AND n.contained_field = ? COLLATE BINARY
+  AND typeof(n.contained_value) = 'integer'
+  AND n.contained_value = ?
   AND v.name = ? COLLATE BINARY
   AND v.begin_snapshot <= m.next_snapshot - 1
   AND (v.end_snapshot IS NULL OR v.end_snapshot > m.next_snapshot - 1)
@@ -290,6 +296,9 @@ WHERE m.id = 1 AND m.name = ? COLLATE BINARY AND m.dropping = 0
   AND m.next_snapshot - 1 >= 0
   AND m.next_snapshot - 1 >= m.earliest_snapshot_id
   AND n.name = ? COLLATE BINARY AND n.dropped_snapshot IS NULL
+  AND n.contained_field = ? COLLATE BINARY
+  AND typeof(n.contained_value) = 'integer'
+  AND n.contained_value = ?
   AND v.name = ? COLLATE BINARY
   AND v.begin_snapshot <= m.next_snapshot - 1
   AND (v.end_snapshot IS NULL OR v.end_snapshot > m.next_snapshot - 1)
@@ -300,11 +309,16 @@ WHERE m.id = 1 AND m.name = ? COLLATE BINARY AND m.dropping = 0
 ORDER BY c.parent_field_id IS NOT NULL, c.parent_field_id, c.ordinal, c.field_id`
 
 func (s *Server) readScopedTable(w http.ResponseWriter, r *http.Request, target scopedMetadataTarget, rsa *readSessionAuthority, t *Tenant, getManifest func(context.Context) (*Manifest, error)) {
+	predField, predValue, ok := rsa.containmentPredicate()
+	if !ok {
+		scopedNamespaceRefusal(w, http.StatusNotFound)
+		return
+	}
 	if status := s.scopedNamespaceOwned(r.Context(), target.tenant, t, getManifest); status != 0 {
 		scopedNamespaceRefusal(w, status)
 		return
 	}
-	args := []any{target.catalog, target.namespace, target.table}
+	args := []any{target.catalog, target.namespace, predField, predValue, target.table}
 	results, _, err := t.SubmitTxCtx(r.Context(), TxRequest{
 		Stmts: []Statement{
 			{SQL: scopedTableMetaSQL, Args: args},
@@ -512,6 +526,9 @@ JOIN tables AS t ON t.id = v.table_id
 WHERE m.id = 1 AND m.name = ? COLLATE BINARY AND m.dropping = 0
   AND m.earliest_snapshot_id <= ? AND ? <= m.next_snapshot - 1
   AND n.name = ? COLLATE BINARY
+  AND n.contained_field = ? COLLATE BINARY
+  AND typeof(n.contained_value) = 'integer'
+  AND n.contained_value = ?
   AND n.created_snapshot <= ?
   AND (n.dropped_snapshot IS NULL OR n.dropped_snapshot > ?)
   AND v.name = ? COLLATE BINARY
@@ -522,42 +539,55 @@ WHERE m.id = 1 AND m.name = ? COLLATE BINARY AND m.dropping = 0
   AND (t.dropped_snapshot IS NULL OR t.dropped_snapshot > ?)
 LIMIT 2`
 
-const scopedScanFilesSQL = `SELECT f.id, f.path, f.file_format, f.record_count, f.file_size_bytes,
-       f.footer_size, f.row_id_start, f.stats_state, f.begin_snapshot,
+const scopedScanFilesSQL = `WITH bounded AS MATERIALIZED (
+  SELECT f.id, f.table_id, f.path, f.file_format, f.record_count, f.file_size_bytes,
+         f.footer_size, f.row_id_start, f.stats_state, f.begin_snapshot, f.explicit_row_ids
+  FROM meta AS m
+  JOIN namespaces AS n ON 1 = 1
+  JOIN table_versions AS v ON v.namespace_id = n.id
+  JOIN tables AS t ON t.id = v.table_id
+  JOIN files AS f ON f.table_id = t.id
+  WHERE m.id = 1 AND m.name = ? COLLATE BINARY AND m.dropping = 0
+    AND m.earliest_snapshot_id <= ? AND ? <= m.next_snapshot - 1
+    AND n.name = ? COLLATE BINARY
+    AND n.contained_field = ? COLLATE BINARY
+    AND typeof(n.contained_value) = 'integer'
+    AND n.contained_value = ?
+    AND n.created_snapshot <= ?
+    AND (n.dropped_snapshot IS NULL OR n.dropped_snapshot > ?)
+    AND v.name = ? COLLATE BINARY
+    AND t.table_uuid = ? COLLATE BINARY
+    AND v.begin_snapshot <= ?
+    AND (v.end_snapshot IS NULL OR v.end_snapshot > ?)
+    AND t.created_snapshot <= ?
+    AND (t.dropped_snapshot IS NULL OR t.dropped_snapshot > ?)
+    AND f.begin_snapshot <= ?
+    AND (f.end_snapshot IS NULL OR f.end_snapshot > ?)
+  LIMIT 1001
+)
+SELECT b.id, b.path, b.file_format, b.record_count, b.file_size_bytes,
+       b.footer_size, b.row_id_start, b.stats_state, b.begin_snapshot, b.explicit_row_ids,
        d.delete_file_id, d.path, d.delete_count, d.file_size_bytes, d.begin_snapshot
-FROM meta AS m
-JOIN namespaces AS n ON 1 = 1
-JOIN table_versions AS v ON v.namespace_id = n.id
-JOIN tables AS t ON t.id = v.table_id
-JOIN files AS f ON f.table_id = t.id
-LEFT JOIN dvs AS d ON d.data_file_id = f.id
-  AND d.table_id = f.table_id
+FROM bounded AS b
+LEFT JOIN dvs AS d ON (SELECT COUNT(*) FROM bounded) <= 1000
+  AND d.data_file_id = b.id
+  AND d.table_id = b.table_id
   AND d.begin_snapshot <= ?
   AND (d.end_snapshot IS NULL OR d.end_snapshot > ?)
   AND d.epoch = (
     SELECT MAX(d2.epoch) FROM dvs AS d2
-    WHERE d2.data_file_id = f.id
-      AND d2.table_id = f.table_id
+    WHERE d2.data_file_id = b.id
+      AND d2.table_id = b.table_id
       AND d2.begin_snapshot <= ?
       AND (d2.end_snapshot IS NULL OR d2.end_snapshot > ?)
-  )
-WHERE m.id = 1 AND m.name = ? COLLATE BINARY AND m.dropping = 0
-  AND m.earliest_snapshot_id <= ? AND ? <= m.next_snapshot - 1
-  AND n.name = ? COLLATE BINARY
-  AND n.created_snapshot <= ?
-  AND (n.dropped_snapshot IS NULL OR n.dropped_snapshot > ?)
-  AND v.name = ? COLLATE BINARY
-  AND t.table_uuid = ? COLLATE BINARY
-  AND v.begin_snapshot <= ?
-  AND (v.end_snapshot IS NULL OR v.end_snapshot > ?)
-  AND t.created_snapshot <= ?
-  AND (t.dropped_snapshot IS NULL OR t.dropped_snapshot > ?)
-  AND f.begin_snapshot <= ?
-  AND (f.end_snapshot IS NULL OR f.end_snapshot > ?)
-ORDER BY f.row_id_start, f.id
-LIMIT 1001`
+  )`
 
 func (s *Server) readScopedScan(w http.ResponseWriter, r *http.Request, target scopedMetadataTarget, rsa *readSessionAuthority, t *Tenant, getManifest func(context.Context) (*Manifest, error)) {
+	predField, predValue, ok := rsa.containmentPredicate()
+	if !ok {
+		scopedNamespaceRefusal(w, http.StatusNotFound)
+		return
+	}
 	if status := s.scopedNamespaceOwned(r.Context(), target.tenant, t, getManifest); status != 0 {
 		scopedNamespaceRefusal(w, status)
 		return
@@ -565,18 +595,13 @@ func (s *Server) readScopedScan(w http.ResponseWriter, r *http.Request, target s
 	snap := target.snapshot
 	metaArgs := []any{
 		target.catalog, snap, snap,
-		target.namespace, snap, snap,
+		target.namespace, predField, predValue, snap, snap,
 		target.table, target.tableUUID,
 		snap, snap, snap, snap,
 	}
-	fileArgs := []any{
-		snap, snap, snap, snap,
-		target.catalog, snap, snap,
-		target.namespace, snap, snap,
-		target.table, target.tableUUID,
-		snap, snap, snap, snap,
-		snap, snap,
-	}
+	fileArgs := make([]any, 0, len(metaArgs)+6)
+	fileArgs = append(fileArgs, metaArgs...)
+	fileArgs = append(fileArgs, snap, snap, snap, snap, snap, snap)
 	results, _, err := t.SubmitTxCtx(r.Context(), TxRequest{
 		Stmts: []Statement{
 			{SQL: scopedScanMetaSQL, Args: metaArgs},
@@ -632,8 +657,9 @@ func (s *Server) readScopedScan(w http.ResponseWriter, r *http.Request, target s
 		return
 	}
 	files := make([]scopedScanFileDTO, 0, len(fileRows))
+	seenDataID := make(map[int64]bool, len(fileRows))
 	for _, fr := range fileRows {
-		if len(fr) != 14 {
+		if len(fr) != 15 {
 			scopedNamespaceRefusal(w, http.StatusServiceUnavailable)
 			return
 		}
@@ -654,6 +680,7 @@ func (s *Server) readScopedScan(w http.ResponseWriter, r *http.Request, target s
 		rowIDStart, ok6 := fr[6].(int64)
 		statsState, ok7 := fr[7].(string)
 		beginSnap, ok8 := fr[8].(int64)
+		explicitRowIDsRaw, ok9 := fr[9].(int64)
 		if !ok2 {
 			scopedNamespaceRefusal(w, http.StatusServiceUnavailable)
 			return
@@ -662,19 +689,20 @@ func (s *Server) readScopedScan(w http.ResponseWriter, r *http.Request, target s
 			scopedNamespaceRefusal(w, http.StatusForbidden)
 			return
 		}
-		if !ok1 || !ok3 || !ok4 || !ok5 || !ok6 || !ok7 || !ok8 ||
-			dataID <= 0 || fileFormat == "" || recordCount < 0 || fileSize < 0 ||
+		if !ok1 || !ok3 || !ok4 || !ok5 || !ok6 || !ok7 || !ok8 || !ok9 ||
+			dataID <= 0 || seenDataID[dataID] || fileFormat == "" || recordCount < 0 || fileSize < 0 ||
 			rowIDStart < 0 || statsState == "" || beginSnap < 0 {
 			scopedNamespaceRefusal(w, http.StatusServiceUnavailable)
 			return
 		}
+		seenDataID[dataID] = true
 		var dv *scopedDeleteFileDTO
-		if fr[9] != nil {
-			dvID, dok1 := fr[9].(int64)
-			dvPath, dok2 := fr[10].(string)
-			dvCount, dok3 := fr[11].(int64)
-			dvSize, dok4 := fr[12].(int64)
-			dvBegin, dok5 := fr[13].(int64)
+		if fr[10] != nil {
+			dvID, dok1 := fr[10].(int64)
+			dvPath, dok2 := fr[11].(string)
+			dvCount, dok3 := fr[12].(int64)
+			dvSize, dok4 := fr[13].(int64)
+			dvBegin, dok5 := fr[14].(int64)
 			if !dok2 {
 				scopedNamespaceRefusal(w, http.StatusServiceUnavailable)
 				return
@@ -698,19 +726,26 @@ func (s *Server) readScopedScan(w http.ResponseWriter, r *http.Request, target s
 		}
 		files = append(files, scopedScanFileDTO{
 			DataFile: scopedDataFileDTO{
-				DataFileID:    dataID,
-				Path:          dataPath,
-				FileFormat:    fileFormat,
-				RecordCount:   recordCount,
-				FileSizeBytes: fileSize,
-				FooterSize:    footerSize,
-				RowIDStart:    rowIDStart,
-				StatsState:    statsState,
-				BeginSnapshot: beginSnap,
+				DataFileID:     dataID,
+				Path:           dataPath,
+				FileFormat:     fileFormat,
+				RecordCount:    recordCount,
+				FileSizeBytes:  fileSize,
+				FooterSize:     footerSize,
+				RowIDStart:     rowIDStart,
+				StatsState:     statsState,
+				BeginSnapshot:  beginSnap,
+				ExplicitRowIDs: explicitRowIDsRaw != 0,
 			},
 			DeleteFile: dv,
 		})
 	}
+	slices.SortFunc(files, func(a, b scopedScanFileDTO) int {
+		if c := cmp.Compare(a.DataFile.RowIDStart, b.DataFile.RowIDStart); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.DataFile.DataFileID, b.DataFile.DataFileID)
+	})
 	scopedMetadataReply(w, http.StatusOK, scopedScanDTO{
 		NamespaceID:    nsID,
 		Namespace:      nsName,
