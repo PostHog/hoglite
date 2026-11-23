@@ -76,6 +76,11 @@ func main() {
 		authUpstream    = flag.String("auth-upstream-audience", envOr("HL_AUTH_UPSTREAM_AUDIENCE", ""), "upstream metadata audience (default hoglake)")
 		scopedNamespace = flag.Bool("scoped-namespace", envBool("HL_SCOPED_NAMESPACE", false), "enable scoped namespace reads on the API listener")
 		scopedFields    = flag.String("scoped-namespace-predicate-fields", envOr("HL_SCOPED_NAMESPACE_PREDICATE_FIELDS", ""), "exact comma-separated predicate fields for scoped namespace reads")
+		rsProfile       = flag.String("scoped-namespace-read-session-profile", envOr("HL_SCOPED_NAMESPACE_READ_SESSION_PROFILE", ""), "enable dedicated read-session JWT verification on the scoped namespace route (empty = off)")
+		rsTargets       = flag.String("scoped-namespace-read-session-remote-targets", envOr("HL_SCOPED_NAMESPACE_READ_SESSION_REMOTE_TARGETS", ""), "two comma-separated remote storage targets for the dedicated read-session profile")
+		rsRegion        = flag.String("scoped-namespace-read-session-region", envOr("HL_SCOPED_NAMESPACE_READ_SESSION_REGION", ""), "exact AWS region for caller-credential manifest reads")
+		rsEndpoint      = flag.String("scoped-namespace-read-session-s3-endpoint", envOr("HL_SCOPED_NAMESPACE_READ_SESSION_S3_ENDPOINT", ""), "optional S3 endpoint URL for caller-credential manifest reads")
+		rsPathStyle     = flag.Bool("scoped-namespace-read-session-s3-path-style", envBool("HL_SCOPED_NAMESPACE_READ_SESSION_S3_PATH_STYLE", false), "use path-style S3 requests for caller-credential manifest reads")
 	)
 	flag.Parse()
 	metricsAddr, err := metricsAddress(*addr, *metricsPort)
@@ -86,10 +91,31 @@ func main() {
 	if *scopedFields != "" {
 		predicateFields = strings.Split(*scopedFields, ",")
 	}
+	var readSession *hoglite.ReadSessionConfig
+	readSessionS3 := hoglite.ReadSessionS3Config{
+		BaseEndpoint: *rsEndpoint,
+		UsePathStyle: *rsPathStyle,
+	}
+	if *rsProfile != "" || *rsTargets != "" || *rsRegion != "" || *rsEndpoint != "" || *rsPathStyle {
+		var targets []string
+		if *rsTargets != "" {
+			targets = strings.Split(*rsTargets, ",")
+		}
+		readSession = &hoglite.ReadSessionConfig{
+			Profile:       *rsProfile,
+			RemoteTargets: targets,
+			Bucket:        *bucket,
+			Prefix:        *prefix,
+			Region:        *rsRegion,
+		}
+		if err := hoglite.ValidateReadSessionS3Config(readSessionS3); err != nil {
+			log.Fatal(err)
+		}
+	}
 	auth, err := hoglite.NewJWTAuth(context.Background(), hoglite.AuthConfig{
 		Mode: *authMode, Issuer: *authIssuer, BackendID: *authBackend, JWKSFile: *authFile, JWKSURL: *authURL,
 		UpstreamAudience: *authUpstream, ScopedNamespaceEnabled: *scopedNamespace,
-		ScopedNamespacePredicateFields: predicateFields,
+		ScopedNamespacePredicateFields: predicateFields, ReadSession: readSession,
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -257,6 +283,9 @@ func main() {
 		}
 	}
 	srv := hoglite.NewServer(mgr, peers).WithAuth(auth)
+	if readSession != nil {
+		srv = srv.WithReadSessionS3(readSessionS3)
+	}
 
 	httpSrv := &http.Server{Addr: *addr, Handler: srv.Handler()}
 	var metricsSrv *http.Server

@@ -1,0 +1,1442 @@
+{
+  "description": "Dedicated read verifier vectors. The key and AWS credential values are for tests only.",
+  "issuer": "https://hoglake.contract.test",
+  "verify_at": 2000000001,
+  "jwks": {
+    "keys": [
+      {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "DJAdQjyDHKheJ8c8JjuhMnIbudeoTE8DgLKmdW_WATM",
+        "y": "HIhwI03sh4UEwXQUT6SxS2amUWkWBtgXPlW9N-OBVp4",
+        "use": "sig",
+        "alg": "ES256",
+        "kid": "cc10b5ab649c34a4"
+      }
+    ]
+  },
+  "config": {
+    "profile": "example.aws-session",
+    "backend_id": "11111111-1111-4111-8111-111111111111",
+    "predicate_field": "team_id",
+    "remote_targets": [
+      "remote:events",
+      "remote:imports"
+    ]
+  },
+  "vectors": [
+    {
+      "name": "complete read session",
+      "verify_at": 2000000001,
+      "claims": {
+        "iss": "https://hoglake.contract.test",
+        "aud": [
+          "trino-session",
+          "hoglake-session",
+          "hoglite-session"
+        ],
+        "sub": "example.alice",
+        "usr": "example.alice",
+        "jti": "token-a",
+        "profile": "example.aws-session",
+        "version": 1,
+        "purpose": "user-session",
+        "ten": "scoped",
+        "org": "example-org",
+        "primary_catalog": "example-catalog",
+        "sid": "session-a",
+        "generation": 1,
+        "session_deadline": 2000000120,
+        "iat": 2000000000,
+        "nbf": 2000000000,
+        "exp": 2000000060,
+        "cat": {
+          "example-catalog": [
+            "read"
+          ]
+        },
+        "prd": {
+          "team_id": {
+            "42": "read"
+          }
+        },
+        "rtg": {
+          "b": "hoglite",
+          "be": "11111111-1111-4111-8111-111111111111",
+          "t": "fixture_3"
+        },
+        "remote_schemas": {
+          "team": [
+            "read"
+          ]
+        },
+        "aws": {
+          "access_key_id": "fictional-key",
+          "secret_access_key": "fictional-secret",
+          "session_token": "fictional-session",
+          "region": "us-east-1",
+          "expires_at": 2000000060
+        },
+        "grants": [
+          {
+            "catalog": "example-catalog",
+            "target": "example-catalog",
+            "bucket": "example-customer",
+            "object_key": "tables/data.parquet",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "11111111-1111-4111-8111-111111111111",
+            "bucket": "example-owner",
+            "object_key": "root/2c/t/fixture_3/manifest",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "remote:events",
+            "bucket": "example-remote",
+            "prefix": "events/team_id=42/",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "remote:imports",
+            "bucket": "example-remote",
+            "prefix": "imports/team_id=42/",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          }
+        ]
+      },
+      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImNjMTBiNWFiNjQ5YzM0YTQiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2hvZ2xha2UuY29udHJhY3QudGVzdCIsImF1ZCI6WyJ0cmluby1zZXNzaW9uIiwiaG9nbGFrZS1zZXNzaW9uIiwiaG9nbGl0ZS1zZXNzaW9uIl0sInN1YiI6ImV4YW1wbGUuYWxpY2UiLCJ1c3IiOiJleGFtcGxlLmFsaWNlIiwianRpIjoidG9rZW4tYSIsInByb2ZpbGUiOiJleGFtcGxlLmF3cy1zZXNzaW9uIiwidmVyc2lvbiI6MSwicHVycG9zZSI6InVzZXItc2Vzc2lvbiIsInRlbiI6InNjb3BlZCIsIm9yZyI6ImV4YW1wbGUtb3JnIiwicHJpbWFyeV9jYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwic2lkIjoic2Vzc2lvbi1hIiwiZ2VuZXJhdGlvbiI6MSwic2Vzc2lvbl9kZWFkbGluZSI6MjAwMDAwMDEyMCwiaWF0IjoyMDAwMDAwMDAwLCJuYmYiOjIwMDAwMDAwMDAsImV4cCI6MjAwMDAwMDA2MCwiY2F0Ijp7ImV4YW1wbGUtY2F0YWxvZyI6WyJyZWFkIl19LCJwcmQiOnsidGVhbV9pZCI6eyI0MiI6InJlYWQifX0sInJ0ZyI6eyJiIjoiaG9nbGl0ZSIsImJlIjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwidCI6ImZpeHR1cmVfMyJ9LCJyZW1vdGVfc2NoZW1hcyI6eyJ0ZWFtIjpbInJlYWQiXX0sImF3cyI6eyJhY2Nlc3Nfa2V5X2lkIjoiZmljdGlvbmFsLWtleSIsInNlY3JldF9hY2Nlc3Nfa2V5IjoiZmljdGlvbmFsLXNlY3JldCIsInNlc3Npb25fdG9rZW4iOiJmaWN0aW9uYWwtc2Vzc2lvbiIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImV4cGlyZXNfYXQiOjIwMDAwMDAwNjB9LCJncmFudHMiOlt7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJleGFtcGxlLWNhdGFsb2ciLCJidWNrZXQiOiJleGFtcGxlLWN1c3RvbWVyIiwib2JqZWN0X2tleSI6InRhYmxlcy9kYXRhLnBhcnF1ZXQiLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiIxMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEiLCJidWNrZXQiOiJleGFtcGxlLW93bmVyIiwib2JqZWN0X2tleSI6InJvb3QvMmMvdC9maXh0dXJlXzMvbWFuaWZlc3QiLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJyZW1vdGU6ZXZlbnRzIiwiYnVja2V0IjoiZXhhbXBsZS1yZW1vdGUiLCJwcmVmaXgiOiJldmVudHMvdGVhbV9pZD00Mi8iLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJyZW1vdGU6aW1wb3J0cyIsImJ1Y2tldCI6ImV4YW1wbGUtcmVtb3RlIiwicHJlZml4IjoiaW1wb3J0cy90ZWFtX2lkPTQyLyIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImFjdGlvbnMiOlsiczM6R2V0T2JqZWN0Il19XX0.VybrNIsk0dXnwX0hvGzMYvpZhPGDiYel9UQcUBzPuzb5tqTpmqYLU5wocszn9hFyy1XR6l1qmB-yaUVhyfHfSw",
+      "expect": {
+        "read": "accept",
+        "ordinary": "invalid_audience"
+      }
+    },
+    {
+      "name": "mixed audiences",
+      "verify_at": 2000000001,
+      "claims": {
+        "iss": "https://hoglake.contract.test",
+        "aud": [
+          "trino-session",
+          "hoglake-session",
+          "hoglite-session",
+          "hoglake"
+        ],
+        "sub": "example.alice",
+        "usr": "example.alice",
+        "jti": "token-a",
+        "profile": "example.aws-session",
+        "version": 1,
+        "purpose": "user-session",
+        "ten": "scoped",
+        "org": "example-org",
+        "primary_catalog": "example-catalog",
+        "sid": "session-a",
+        "generation": 1,
+        "session_deadline": 2000000120,
+        "iat": 2000000000,
+        "nbf": 2000000000,
+        "exp": 2000000060,
+        "cat": {
+          "example-catalog": [
+            "read"
+          ]
+        },
+        "prd": {
+          "team_id": {
+            "42": "read"
+          }
+        },
+        "rtg": {
+          "b": "hoglite",
+          "be": "11111111-1111-4111-8111-111111111111",
+          "t": "fixture_3"
+        },
+        "remote_schemas": {
+          "team": [
+            "read"
+          ]
+        },
+        "aws": {
+          "access_key_id": "fictional-key",
+          "secret_access_key": "fictional-secret",
+          "session_token": "fictional-session",
+          "region": "us-east-1",
+          "expires_at": 2000000060
+        },
+        "grants": [
+          {
+            "catalog": "example-catalog",
+            "target": "example-catalog",
+            "bucket": "example-customer",
+            "object_key": "tables/data.parquet",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "11111111-1111-4111-8111-111111111111",
+            "bucket": "example-owner",
+            "object_key": "root/2c/t/fixture_3/manifest",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "remote:events",
+            "bucket": "example-remote",
+            "prefix": "events/team_id=42/",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "remote:imports",
+            "bucket": "example-remote",
+            "prefix": "imports/team_id=42/",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          }
+        ]
+      },
+      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImNjMTBiNWFiNjQ5YzM0YTQiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2hvZ2xha2UuY29udHJhY3QudGVzdCIsImF1ZCI6WyJ0cmluby1zZXNzaW9uIiwiaG9nbGFrZS1zZXNzaW9uIiwiaG9nbGl0ZS1zZXNzaW9uIiwiaG9nbGFrZSJdLCJzdWIiOiJleGFtcGxlLmFsaWNlIiwidXNyIjoiZXhhbXBsZS5hbGljZSIsImp0aSI6InRva2VuLWEiLCJwcm9maWxlIjoiZXhhbXBsZS5hd3Mtc2Vzc2lvbiIsInZlcnNpb24iOjEsInB1cnBvc2UiOiJ1c2VyLXNlc3Npb24iLCJ0ZW4iOiJzY29wZWQiLCJvcmciOiJleGFtcGxlLW9yZyIsInByaW1hcnlfY2F0YWxvZyI6ImV4YW1wbGUtY2F0YWxvZyIsInNpZCI6InNlc3Npb24tYSIsImdlbmVyYXRpb24iOjEsInNlc3Npb25fZGVhZGxpbmUiOjIwMDAwMDAxMjAsImlhdCI6MjAwMDAwMDAwMCwibmJmIjoyMDAwMDAwMDAwLCJleHAiOjIwMDAwMDAwNjAsImNhdCI6eyJleGFtcGxlLWNhdGFsb2ciOlsicmVhZCJdfSwicHJkIjp7InRlYW1faWQiOnsiNDIiOiJyZWFkIn19LCJydGciOnsiYiI6ImhvZ2xpdGUiLCJiZSI6IjExMTExMTExLTExMTEtNDExMS04MTExLTExMTExMTExMTExMSIsInQiOiJmaXh0dXJlXzMifSwicmVtb3RlX3NjaGVtYXMiOnsidGVhbSI6WyJyZWFkIl19LCJhd3MiOnsiYWNjZXNzX2tleV9pZCI6ImZpY3Rpb25hbC1rZXkiLCJzZWNyZXRfYWNjZXNzX2tleSI6ImZpY3Rpb25hbC1zZWNyZXQiLCJzZXNzaW9uX3Rva2VuIjoiZmljdGlvbmFsLXNlc3Npb24iLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJleHBpcmVzX2F0IjoyMDAwMDAwMDYwfSwiZ3JhbnRzIjpbeyJjYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwidGFyZ2V0IjoiZXhhbXBsZS1jYXRhbG9nIiwiYnVja2V0IjoiZXhhbXBsZS1jdXN0b21lciIsIm9iamVjdF9rZXkiOiJ0YWJsZXMvZGF0YS5wYXJxdWV0IiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXX0seyJjYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwidGFyZ2V0IjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwiYnVja2V0IjoiZXhhbXBsZS1vd25lciIsIm9iamVjdF9rZXkiOiJyb290LzJjL3QvZml4dHVyZV8zL21hbmlmZXN0IiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXX0seyJjYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwidGFyZ2V0IjoicmVtb3RlOmV2ZW50cyIsImJ1Y2tldCI6ImV4YW1wbGUtcmVtb3RlIiwicHJlZml4IjoiZXZlbnRzL3RlYW1faWQ9NDIvIiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXX0seyJjYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwidGFyZ2V0IjoicmVtb3RlOmltcG9ydHMiLCJidWNrZXQiOiJleGFtcGxlLXJlbW90ZSIsInByZWZpeCI6ImltcG9ydHMvdGVhbV9pZD00Mi8iLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfV19.Sjc6sLCNvEkEHDIS2Z-lhEHmuFnBPcUR6YJwcnxGusOoovZcrjwqRk40k1-euMs-dGJWaZlIwmTyL_jgF4T9RA",
+      "expect": {
+        "read": "invalid_audience",
+        "ordinary": "invalid_audience"
+      }
+    },
+    {
+      "name": "duplicate audience",
+      "verify_at": 2000000001,
+      "claims": {
+        "iss": "https://hoglake.contract.test",
+        "aud": [
+          "trino-session",
+          "trino-session",
+          "hoglite-session"
+        ],
+        "sub": "example.alice",
+        "usr": "example.alice",
+        "jti": "token-a",
+        "profile": "example.aws-session",
+        "version": 1,
+        "purpose": "user-session",
+        "ten": "scoped",
+        "org": "example-org",
+        "primary_catalog": "example-catalog",
+        "sid": "session-a",
+        "generation": 1,
+        "session_deadline": 2000000120,
+        "iat": 2000000000,
+        "nbf": 2000000000,
+        "exp": 2000000060,
+        "cat": {
+          "example-catalog": [
+            "read"
+          ]
+        },
+        "prd": {
+          "team_id": {
+            "42": "read"
+          }
+        },
+        "rtg": {
+          "b": "hoglite",
+          "be": "11111111-1111-4111-8111-111111111111",
+          "t": "fixture_3"
+        },
+        "remote_schemas": {
+          "team": [
+            "read"
+          ]
+        },
+        "aws": {
+          "access_key_id": "fictional-key",
+          "secret_access_key": "fictional-secret",
+          "session_token": "fictional-session",
+          "region": "us-east-1",
+          "expires_at": 2000000060
+        },
+        "grants": [
+          {
+            "catalog": "example-catalog",
+            "target": "example-catalog",
+            "bucket": "example-customer",
+            "object_key": "tables/data.parquet",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "11111111-1111-4111-8111-111111111111",
+            "bucket": "example-owner",
+            "object_key": "root/2c/t/fixture_3/manifest",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "remote:events",
+            "bucket": "example-remote",
+            "prefix": "events/team_id=42/",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "remote:imports",
+            "bucket": "example-remote",
+            "prefix": "imports/team_id=42/",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          }
+        ]
+      },
+      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImNjMTBiNWFiNjQ5YzM0YTQiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2hvZ2xha2UuY29udHJhY3QudGVzdCIsImF1ZCI6WyJ0cmluby1zZXNzaW9uIiwidHJpbm8tc2Vzc2lvbiIsImhvZ2xpdGUtc2Vzc2lvbiJdLCJzdWIiOiJleGFtcGxlLmFsaWNlIiwidXNyIjoiZXhhbXBsZS5hbGljZSIsImp0aSI6InRva2VuLWEiLCJwcm9maWxlIjoiZXhhbXBsZS5hd3Mtc2Vzc2lvbiIsInZlcnNpb24iOjEsInB1cnBvc2UiOiJ1c2VyLXNlc3Npb24iLCJ0ZW4iOiJzY29wZWQiLCJvcmciOiJleGFtcGxlLW9yZyIsInByaW1hcnlfY2F0YWxvZyI6ImV4YW1wbGUtY2F0YWxvZyIsInNpZCI6InNlc3Npb24tYSIsImdlbmVyYXRpb24iOjEsInNlc3Npb25fZGVhZGxpbmUiOjIwMDAwMDAxMjAsImlhdCI6MjAwMDAwMDAwMCwibmJmIjoyMDAwMDAwMDAwLCJleHAiOjIwMDAwMDAwNjAsImNhdCI6eyJleGFtcGxlLWNhdGFsb2ciOlsicmVhZCJdfSwicHJkIjp7InRlYW1faWQiOnsiNDIiOiJyZWFkIn19LCJydGciOnsiYiI6ImhvZ2xpdGUiLCJiZSI6IjExMTExMTExLTExMTEtNDExMS04MTExLTExMTExMTExMTExMSIsInQiOiJmaXh0dXJlXzMifSwicmVtb3RlX3NjaGVtYXMiOnsidGVhbSI6WyJyZWFkIl19LCJhd3MiOnsiYWNjZXNzX2tleV9pZCI6ImZpY3Rpb25hbC1rZXkiLCJzZWNyZXRfYWNjZXNzX2tleSI6ImZpY3Rpb25hbC1zZWNyZXQiLCJzZXNzaW9uX3Rva2VuIjoiZmljdGlvbmFsLXNlc3Npb24iLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJleHBpcmVzX2F0IjoyMDAwMDAwMDYwfSwiZ3JhbnRzIjpbeyJjYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwidGFyZ2V0IjoiZXhhbXBsZS1jYXRhbG9nIiwiYnVja2V0IjoiZXhhbXBsZS1jdXN0b21lciIsIm9iamVjdF9rZXkiOiJ0YWJsZXMvZGF0YS5wYXJxdWV0IiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXX0seyJjYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwidGFyZ2V0IjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwiYnVja2V0IjoiZXhhbXBsZS1vd25lciIsIm9iamVjdF9rZXkiOiJyb290LzJjL3QvZml4dHVyZV8zL21hbmlmZXN0IiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXX0seyJjYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwidGFyZ2V0IjoicmVtb3RlOmV2ZW50cyIsImJ1Y2tldCI6ImV4YW1wbGUtcmVtb3RlIiwicHJlZml4IjoiZXZlbnRzL3RlYW1faWQ9NDIvIiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXX0seyJjYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwidGFyZ2V0IjoicmVtb3RlOmltcG9ydHMiLCJidWNrZXQiOiJleGFtcGxlLXJlbW90ZSIsInByZWZpeCI6ImltcG9ydHMvdGVhbV9pZD00Mi8iLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfV19.8y4k1_W_o_ERPvMqVpN7nsvKRe0TN5Jra320j60_5XzP6KJlI91FuUekJigihR8-0ISUBdjmve3RrKv0E4HbIg",
+      "expect": {
+        "read": "invalid_audience",
+        "ordinary": "invalid_audience"
+      }
+    },
+    {
+      "name": "AWS expiry without skew",
+      "verify_at": 2000000060,
+      "claims": {
+        "iss": "https://hoglake.contract.test",
+        "aud": [
+          "trino-session",
+          "hoglake-session",
+          "hoglite-session"
+        ],
+        "sub": "example.alice",
+        "usr": "example.alice",
+        "jti": "token-a",
+        "profile": "example.aws-session",
+        "version": 1,
+        "purpose": "user-session",
+        "ten": "scoped",
+        "org": "example-org",
+        "primary_catalog": "example-catalog",
+        "sid": "session-a",
+        "generation": 1,
+        "session_deadline": 2000000120,
+        "iat": 2000000000,
+        "nbf": 2000000000,
+        "exp": 2000000060,
+        "cat": {
+          "example-catalog": [
+            "read"
+          ]
+        },
+        "prd": {
+          "team_id": {
+            "42": "read"
+          }
+        },
+        "rtg": {
+          "b": "hoglite",
+          "be": "11111111-1111-4111-8111-111111111111",
+          "t": "fixture_3"
+        },
+        "remote_schemas": {
+          "team": [
+            "read"
+          ]
+        },
+        "aws": {
+          "access_key_id": "fictional-key",
+          "secret_access_key": "fictional-secret",
+          "session_token": "fictional-session",
+          "region": "us-east-1",
+          "expires_at": 2000000060
+        },
+        "grants": [
+          {
+            "catalog": "example-catalog",
+            "target": "example-catalog",
+            "bucket": "example-customer",
+            "object_key": "tables/data.parquet",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "11111111-1111-4111-8111-111111111111",
+            "bucket": "example-owner",
+            "object_key": "root/2c/t/fixture_3/manifest",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "remote:events",
+            "bucket": "example-remote",
+            "prefix": "events/team_id=42/",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "remote:imports",
+            "bucket": "example-remote",
+            "prefix": "imports/team_id=42/",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          }
+        ]
+      },
+      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImNjMTBiNWFiNjQ5YzM0YTQiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2hvZ2xha2UuY29udHJhY3QudGVzdCIsImF1ZCI6WyJ0cmluby1zZXNzaW9uIiwiaG9nbGFrZS1zZXNzaW9uIiwiaG9nbGl0ZS1zZXNzaW9uIl0sInN1YiI6ImV4YW1wbGUuYWxpY2UiLCJ1c3IiOiJleGFtcGxlLmFsaWNlIiwianRpIjoidG9rZW4tYSIsInByb2ZpbGUiOiJleGFtcGxlLmF3cy1zZXNzaW9uIiwidmVyc2lvbiI6MSwicHVycG9zZSI6InVzZXItc2Vzc2lvbiIsInRlbiI6InNjb3BlZCIsIm9yZyI6ImV4YW1wbGUtb3JnIiwicHJpbWFyeV9jYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwic2lkIjoic2Vzc2lvbi1hIiwiZ2VuZXJhdGlvbiI6MSwic2Vzc2lvbl9kZWFkbGluZSI6MjAwMDAwMDEyMCwiaWF0IjoyMDAwMDAwMDAwLCJuYmYiOjIwMDAwMDAwMDAsImV4cCI6MjAwMDAwMDA2MCwiY2F0Ijp7ImV4YW1wbGUtY2F0YWxvZyI6WyJyZWFkIl19LCJwcmQiOnsidGVhbV9pZCI6eyI0MiI6InJlYWQifX0sInJ0ZyI6eyJiIjoiaG9nbGl0ZSIsImJlIjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwidCI6ImZpeHR1cmVfMyJ9LCJyZW1vdGVfc2NoZW1hcyI6eyJ0ZWFtIjpbInJlYWQiXX0sImF3cyI6eyJhY2Nlc3Nfa2V5X2lkIjoiZmljdGlvbmFsLWtleSIsInNlY3JldF9hY2Nlc3Nfa2V5IjoiZmljdGlvbmFsLXNlY3JldCIsInNlc3Npb25fdG9rZW4iOiJmaWN0aW9uYWwtc2Vzc2lvbiIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImV4cGlyZXNfYXQiOjIwMDAwMDAwNjB9LCJncmFudHMiOlt7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJleGFtcGxlLWNhdGFsb2ciLCJidWNrZXQiOiJleGFtcGxlLWN1c3RvbWVyIiwib2JqZWN0X2tleSI6InRhYmxlcy9kYXRhLnBhcnF1ZXQiLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiIxMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEiLCJidWNrZXQiOiJleGFtcGxlLW93bmVyIiwib2JqZWN0X2tleSI6InJvb3QvMmMvdC9maXh0dXJlXzMvbWFuaWZlc3QiLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJyZW1vdGU6ZXZlbnRzIiwiYnVja2V0IjoiZXhhbXBsZS1yZW1vdGUiLCJwcmVmaXgiOiJldmVudHMvdGVhbV9pZD00Mi8iLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJyZW1vdGU6aW1wb3J0cyIsImJ1Y2tldCI6ImV4YW1wbGUtcmVtb3RlIiwicHJlZml4IjoiaW1wb3J0cy90ZWFtX2lkPTQyLyIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImFjdGlvbnMiOlsiczM6R2V0T2JqZWN0Il19XX0.Aq7WHBQf8i7zhBTKJY_lJi-dOEpZ6eayddCSqDB1vPLDZfhuAv_BNdp2D6dWry5UN6lMa3aPq1bx4n5Vc4S-BA",
+      "expect": {
+        "read": "token_expired",
+        "ordinary": "invalid_audience"
+      }
+    },
+    {
+      "name": "missing profile",
+      "verify_at": 2000000001,
+      "claims": {
+        "iss": "https://hoglake.contract.test",
+        "aud": [
+          "trino-session",
+          "hoglake-session",
+          "hoglite-session"
+        ],
+        "sub": "example.alice",
+        "usr": "example.alice",
+        "jti": "token-a",
+        "version": 1,
+        "purpose": "user-session",
+        "ten": "scoped",
+        "org": "example-org",
+        "primary_catalog": "example-catalog",
+        "sid": "session-a",
+        "generation": 1,
+        "session_deadline": 2000000120,
+        "iat": 2000000000,
+        "nbf": 2000000000,
+        "exp": 2000000060,
+        "cat": {
+          "example-catalog": [
+            "read"
+          ]
+        },
+        "prd": {
+          "team_id": {
+            "42": "read"
+          }
+        },
+        "rtg": {
+          "b": "hoglite",
+          "be": "11111111-1111-4111-8111-111111111111",
+          "t": "fixture_3"
+        },
+        "remote_schemas": {
+          "team": [
+            "read"
+          ]
+        },
+        "aws": {
+          "access_key_id": "fictional-key",
+          "secret_access_key": "fictional-secret",
+          "session_token": "fictional-session",
+          "region": "us-east-1",
+          "expires_at": 2000000060
+        },
+        "grants": [
+          {
+            "catalog": "example-catalog",
+            "target": "example-catalog",
+            "bucket": "example-customer",
+            "object_key": "tables/data.parquet",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "11111111-1111-4111-8111-111111111111",
+            "bucket": "example-owner",
+            "object_key": "root/2c/t/fixture_3/manifest",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "remote:events",
+            "bucket": "example-remote",
+            "prefix": "events/team_id=42/",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "remote:imports",
+            "bucket": "example-remote",
+            "prefix": "imports/team_id=42/",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          }
+        ]
+      },
+      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImNjMTBiNWFiNjQ5YzM0YTQiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2hvZ2xha2UuY29udHJhY3QudGVzdCIsImF1ZCI6WyJ0cmluby1zZXNzaW9uIiwiaG9nbGFrZS1zZXNzaW9uIiwiaG9nbGl0ZS1zZXNzaW9uIl0sInN1YiI6ImV4YW1wbGUuYWxpY2UiLCJ1c3IiOiJleGFtcGxlLmFsaWNlIiwianRpIjoidG9rZW4tYSIsInZlcnNpb24iOjEsInB1cnBvc2UiOiJ1c2VyLXNlc3Npb24iLCJ0ZW4iOiJzY29wZWQiLCJvcmciOiJleGFtcGxlLW9yZyIsInByaW1hcnlfY2F0YWxvZyI6ImV4YW1wbGUtY2F0YWxvZyIsInNpZCI6InNlc3Npb24tYSIsImdlbmVyYXRpb24iOjEsInNlc3Npb25fZGVhZGxpbmUiOjIwMDAwMDAxMjAsImlhdCI6MjAwMDAwMDAwMCwibmJmIjoyMDAwMDAwMDAwLCJleHAiOjIwMDAwMDAwNjAsImNhdCI6eyJleGFtcGxlLWNhdGFsb2ciOlsicmVhZCJdfSwicHJkIjp7InRlYW1faWQiOnsiNDIiOiJyZWFkIn19LCJydGciOnsiYiI6ImhvZ2xpdGUiLCJiZSI6IjExMTExMTExLTExMTEtNDExMS04MTExLTExMTExMTExMTExMSIsInQiOiJmaXh0dXJlXzMifSwicmVtb3RlX3NjaGVtYXMiOnsidGVhbSI6WyJyZWFkIl19LCJhd3MiOnsiYWNjZXNzX2tleV9pZCI6ImZpY3Rpb25hbC1rZXkiLCJzZWNyZXRfYWNjZXNzX2tleSI6ImZpY3Rpb25hbC1zZWNyZXQiLCJzZXNzaW9uX3Rva2VuIjoiZmljdGlvbmFsLXNlc3Npb24iLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJleHBpcmVzX2F0IjoyMDAwMDAwMDYwfSwiZ3JhbnRzIjpbeyJjYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwidGFyZ2V0IjoiZXhhbXBsZS1jYXRhbG9nIiwiYnVja2V0IjoiZXhhbXBsZS1jdXN0b21lciIsIm9iamVjdF9rZXkiOiJ0YWJsZXMvZGF0YS5wYXJxdWV0IiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXX0seyJjYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwidGFyZ2V0IjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwiYnVja2V0IjoiZXhhbXBsZS1vd25lciIsIm9iamVjdF9rZXkiOiJyb290LzJjL3QvZml4dHVyZV8zL21hbmlmZXN0IiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXX0seyJjYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwidGFyZ2V0IjoicmVtb3RlOmV2ZW50cyIsImJ1Y2tldCI6ImV4YW1wbGUtcmVtb3RlIiwicHJlZml4IjoiZXZlbnRzL3RlYW1faWQ9NDIvIiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXX0seyJjYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwidGFyZ2V0IjoicmVtb3RlOmltcG9ydHMiLCJidWNrZXQiOiJleGFtcGxlLXJlbW90ZSIsInByZWZpeCI6ImltcG9ydHMvdGVhbV9pZD00Mi8iLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfV19.x4whIRPMcqzoEy8xrbZ3QHt9brfPCc9kxBIbwcIB2VJKDEtbzyax0F9fRGrrvkwHJ9lRfvLIh7b60rHhuGaOCQ",
+      "expect": {
+        "read": "invalid_token",
+        "ordinary": "invalid_audience"
+      }
+    },
+    {
+      "name": "experimental profile marker",
+      "verify_at": 2000000001,
+      "claims": {
+        "iss": "https://hoglake.contract.test",
+        "aud": [
+          "trino-session",
+          "hoglake-session",
+          "hoglite-session"
+        ],
+        "sub": "example.alice",
+        "usr": "example.alice",
+        "jti": "token-a",
+        "profile": "storage-session",
+        "version": 1,
+        "purpose": "user-session",
+        "ten": "scoped",
+        "org": "example-org",
+        "primary_catalog": "example-catalog",
+        "sid": "session-a",
+        "generation": 1,
+        "session_deadline": 2000000120,
+        "iat": 2000000000,
+        "nbf": 2000000000,
+        "exp": 2000000060,
+        "cat": {
+          "example-catalog": [
+            "read"
+          ]
+        },
+        "prd": {
+          "team_id": {
+            "42": "read"
+          }
+        },
+        "rtg": {
+          "b": "hoglite",
+          "be": "11111111-1111-4111-8111-111111111111",
+          "t": "fixture_3"
+        },
+        "remote_schemas": {
+          "team": [
+            "read"
+          ]
+        },
+        "aws": {
+          "access_key_id": "fictional-key",
+          "secret_access_key": "fictional-secret",
+          "session_token": "fictional-session",
+          "region": "us-east-1",
+          "expires_at": 2000000060
+        },
+        "grants": [
+          {
+            "catalog": "example-catalog",
+            "target": "example-catalog",
+            "bucket": "example-customer",
+            "object_key": "tables/data.parquet",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "11111111-1111-4111-8111-111111111111",
+            "bucket": "example-owner",
+            "object_key": "root/2c/t/fixture_3/manifest",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "remote:events",
+            "bucket": "example-remote",
+            "prefix": "events/team_id=42/",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "remote:imports",
+            "bucket": "example-remote",
+            "prefix": "imports/team_id=42/",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          }
+        ]
+      },
+      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImNjMTBiNWFiNjQ5YzM0YTQiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2hvZ2xha2UuY29udHJhY3QudGVzdCIsImF1ZCI6WyJ0cmluby1zZXNzaW9uIiwiaG9nbGFrZS1zZXNzaW9uIiwiaG9nbGl0ZS1zZXNzaW9uIl0sInN1YiI6ImV4YW1wbGUuYWxpY2UiLCJ1c3IiOiJleGFtcGxlLmFsaWNlIiwianRpIjoidG9rZW4tYSIsInByb2ZpbGUiOiJzdG9yYWdlLXNlc3Npb24iLCJ2ZXJzaW9uIjoxLCJwdXJwb3NlIjoidXNlci1zZXNzaW9uIiwidGVuIjoic2NvcGVkIiwib3JnIjoiZXhhbXBsZS1vcmciLCJwcmltYXJ5X2NhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJzaWQiOiJzZXNzaW9uLWEiLCJnZW5lcmF0aW9uIjoxLCJzZXNzaW9uX2RlYWRsaW5lIjoyMDAwMDAwMTIwLCJpYXQiOjIwMDAwMDAwMDAsIm5iZiI6MjAwMDAwMDAwMCwiZXhwIjoyMDAwMDAwMDYwLCJjYXQiOnsiZXhhbXBsZS1jYXRhbG9nIjpbInJlYWQiXX0sInByZCI6eyJ0ZWFtX2lkIjp7IjQyIjoicmVhZCJ9fSwicnRnIjp7ImIiOiJob2dsaXRlIiwiYmUiOiIxMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEiLCJ0IjoiZml4dHVyZV8zIn0sInJlbW90ZV9zY2hlbWFzIjp7InRlYW0iOlsicmVhZCJdfSwiYXdzIjp7ImFjY2Vzc19rZXlfaWQiOiJmaWN0aW9uYWwta2V5Iiwic2VjcmV0X2FjY2Vzc19rZXkiOiJmaWN0aW9uYWwtc2VjcmV0Iiwic2Vzc2lvbl90b2tlbiI6ImZpY3Rpb25hbC1zZXNzaW9uIiwicmVnaW9uIjoidXMtZWFzdC0xIiwiZXhwaXJlc19hdCI6MjAwMDAwMDA2MH0sImdyYW50cyI6W3siY2F0YWxvZyI6ImV4YW1wbGUtY2F0YWxvZyIsInRhcmdldCI6ImV4YW1wbGUtY2F0YWxvZyIsImJ1Y2tldCI6ImV4YW1wbGUtY3VzdG9tZXIiLCJvYmplY3Rfa2V5IjoidGFibGVzL2RhdGEucGFycXVldCIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImFjdGlvbnMiOlsiczM6R2V0T2JqZWN0Il19LHsiY2F0YWxvZyI6ImV4YW1wbGUtY2F0YWxvZyIsInRhcmdldCI6IjExMTExMTExLTExMTEtNDExMS04MTExLTExMTExMTExMTExMSIsImJ1Y2tldCI6ImV4YW1wbGUtb3duZXIiLCJvYmplY3Rfa2V5Ijoicm9vdC8yYy90L2ZpeHR1cmVfMy9tYW5pZmVzdCIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImFjdGlvbnMiOlsiczM6R2V0T2JqZWN0Il19LHsiY2F0YWxvZyI6ImV4YW1wbGUtY2F0YWxvZyIsInRhcmdldCI6InJlbW90ZTpldmVudHMiLCJidWNrZXQiOiJleGFtcGxlLXJlbW90ZSIsInByZWZpeCI6ImV2ZW50cy90ZWFtX2lkPTQyLyIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImFjdGlvbnMiOlsiczM6R2V0T2JqZWN0Il19LHsiY2F0YWxvZyI6ImV4YW1wbGUtY2F0YWxvZyIsInRhcmdldCI6InJlbW90ZTppbXBvcnRzIiwiYnVja2V0IjoiZXhhbXBsZS1yZW1vdGUiLCJwcmVmaXgiOiJpbXBvcnRzL3RlYW1faWQ9NDIvIiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXX1dfQ.iMdSXHRw1WY7nzYN30NdYdHGS_w4ZCO8B3x_vcSfAN7r7Q1PNaB5YyATdASsnlRUrVtfkDT6KhrvzeQdjQuqWg",
+      "expect": {
+        "read": "invalid_token",
+        "ordinary": "invalid_audience"
+      }
+    },
+    {
+      "name": "missing session token",
+      "verify_at": 2000000001,
+      "claims": {
+        "iss": "https://hoglake.contract.test",
+        "aud": [
+          "trino-session",
+          "hoglake-session",
+          "hoglite-session"
+        ],
+        "sub": "example.alice",
+        "usr": "example.alice",
+        "jti": "token-a",
+        "profile": "example.aws-session",
+        "version": 1,
+        "purpose": "user-session",
+        "ten": "scoped",
+        "org": "example-org",
+        "primary_catalog": "example-catalog",
+        "sid": "session-a",
+        "generation": 1,
+        "session_deadline": 2000000120,
+        "iat": 2000000000,
+        "nbf": 2000000000,
+        "exp": 2000000060,
+        "cat": {
+          "example-catalog": [
+            "read"
+          ]
+        },
+        "prd": {
+          "team_id": {
+            "42": "read"
+          }
+        },
+        "rtg": {
+          "b": "hoglite",
+          "be": "11111111-1111-4111-8111-111111111111",
+          "t": "fixture_3"
+        },
+        "remote_schemas": {
+          "team": [
+            "read"
+          ]
+        },
+        "aws": {
+          "access_key_id": "fictional-key",
+          "secret_access_key": "fictional-secret",
+          "region": "us-east-1",
+          "expires_at": 2000000060
+        },
+        "grants": [
+          {
+            "catalog": "example-catalog",
+            "target": "example-catalog",
+            "bucket": "example-customer",
+            "object_key": "tables/data.parquet",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "11111111-1111-4111-8111-111111111111",
+            "bucket": "example-owner",
+            "object_key": "root/2c/t/fixture_3/manifest",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "remote:events",
+            "bucket": "example-remote",
+            "prefix": "events/team_id=42/",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "remote:imports",
+            "bucket": "example-remote",
+            "prefix": "imports/team_id=42/",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          }
+        ]
+      },
+      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImNjMTBiNWFiNjQ5YzM0YTQiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2hvZ2xha2UuY29udHJhY3QudGVzdCIsImF1ZCI6WyJ0cmluby1zZXNzaW9uIiwiaG9nbGFrZS1zZXNzaW9uIiwiaG9nbGl0ZS1zZXNzaW9uIl0sInN1YiI6ImV4YW1wbGUuYWxpY2UiLCJ1c3IiOiJleGFtcGxlLmFsaWNlIiwianRpIjoidG9rZW4tYSIsInByb2ZpbGUiOiJleGFtcGxlLmF3cy1zZXNzaW9uIiwidmVyc2lvbiI6MSwicHVycG9zZSI6InVzZXItc2Vzc2lvbiIsInRlbiI6InNjb3BlZCIsIm9yZyI6ImV4YW1wbGUtb3JnIiwicHJpbWFyeV9jYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwic2lkIjoic2Vzc2lvbi1hIiwiZ2VuZXJhdGlvbiI6MSwic2Vzc2lvbl9kZWFkbGluZSI6MjAwMDAwMDEyMCwiaWF0IjoyMDAwMDAwMDAwLCJuYmYiOjIwMDAwMDAwMDAsImV4cCI6MjAwMDAwMDA2MCwiY2F0Ijp7ImV4YW1wbGUtY2F0YWxvZyI6WyJyZWFkIl19LCJwcmQiOnsidGVhbV9pZCI6eyI0MiI6InJlYWQifX0sInJ0ZyI6eyJiIjoiaG9nbGl0ZSIsImJlIjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwidCI6ImZpeHR1cmVfMyJ9LCJyZW1vdGVfc2NoZW1hcyI6eyJ0ZWFtIjpbInJlYWQiXX0sImF3cyI6eyJhY2Nlc3Nfa2V5X2lkIjoiZmljdGlvbmFsLWtleSIsInNlY3JldF9hY2Nlc3Nfa2V5IjoiZmljdGlvbmFsLXNlY3JldCIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImV4cGlyZXNfYXQiOjIwMDAwMDAwNjB9LCJncmFudHMiOlt7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJleGFtcGxlLWNhdGFsb2ciLCJidWNrZXQiOiJleGFtcGxlLWN1c3RvbWVyIiwib2JqZWN0X2tleSI6InRhYmxlcy9kYXRhLnBhcnF1ZXQiLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiIxMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEiLCJidWNrZXQiOiJleGFtcGxlLW93bmVyIiwib2JqZWN0X2tleSI6InJvb3QvMmMvdC9maXh0dXJlXzMvbWFuaWZlc3QiLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJyZW1vdGU6ZXZlbnRzIiwiYnVja2V0IjoiZXhhbXBsZS1yZW1vdGUiLCJwcmVmaXgiOiJldmVudHMvdGVhbV9pZD00Mi8iLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJyZW1vdGU6aW1wb3J0cyIsImJ1Y2tldCI6ImV4YW1wbGUtcmVtb3RlIiwicHJlZml4IjoiaW1wb3J0cy90ZWFtX2lkPTQyLyIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImFjdGlvbnMiOlsiczM6R2V0T2JqZWN0Il19XX0.ASciF8zEz5_4DpPnEeICIURtkaQwbiqXrhnFsCLsLiKiHEYL1LS1PAgWuzs3CWX9gNznYqalud_bYa-A86XmXQ",
+      "expect": {
+        "read": "invalid_token",
+        "ordinary": "invalid_audience"
+      }
+    },
+    {
+      "name": "noncanonical incarnation",
+      "verify_at": 2000000001,
+      "claims": {
+        "iss": "https://hoglake.contract.test",
+        "aud": [
+          "trino-session",
+          "hoglake-session",
+          "hoglite-session"
+        ],
+        "sub": "example.alice",
+        "usr": "example.alice",
+        "jti": "token-a",
+        "profile": "example.aws-session",
+        "version": 1,
+        "purpose": "user-session",
+        "ten": "scoped",
+        "org": "example-org",
+        "primary_catalog": "example-catalog",
+        "sid": "session-a",
+        "generation": 1,
+        "session_deadline": 2000000120,
+        "iat": 2000000000,
+        "nbf": 2000000000,
+        "exp": 2000000060,
+        "cat": {
+          "example-catalog": [
+            "read"
+          ]
+        },
+        "prd": {
+          "team_id": {
+            "42": "read"
+          }
+        },
+        "rtg": {
+          "b": "hoglite",
+          "be": "11111111-1111-4111-8111-111111111111",
+          "t": "fixture_03"
+        },
+        "remote_schemas": {
+          "team": [
+            "read"
+          ]
+        },
+        "aws": {
+          "access_key_id": "fictional-key",
+          "secret_access_key": "fictional-secret",
+          "session_token": "fictional-session",
+          "region": "us-east-1",
+          "expires_at": 2000000060
+        },
+        "grants": [
+          {
+            "catalog": "example-catalog",
+            "target": "example-catalog",
+            "bucket": "example-customer",
+            "object_key": "tables/data.parquet",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "11111111-1111-4111-8111-111111111111",
+            "bucket": "example-owner",
+            "object_key": "root/2c/t/fixture_3/manifest",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "remote:events",
+            "bucket": "example-remote",
+            "prefix": "events/team_id=42/",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "remote:imports",
+            "bucket": "example-remote",
+            "prefix": "imports/team_id=42/",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          }
+        ]
+      },
+      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImNjMTBiNWFiNjQ5YzM0YTQiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2hvZ2xha2UuY29udHJhY3QudGVzdCIsImF1ZCI6WyJ0cmluby1zZXNzaW9uIiwiaG9nbGFrZS1zZXNzaW9uIiwiaG9nbGl0ZS1zZXNzaW9uIl0sInN1YiI6ImV4YW1wbGUuYWxpY2UiLCJ1c3IiOiJleGFtcGxlLmFsaWNlIiwianRpIjoidG9rZW4tYSIsInByb2ZpbGUiOiJleGFtcGxlLmF3cy1zZXNzaW9uIiwidmVyc2lvbiI6MSwicHVycG9zZSI6InVzZXItc2Vzc2lvbiIsInRlbiI6InNjb3BlZCIsIm9yZyI6ImV4YW1wbGUtb3JnIiwicHJpbWFyeV9jYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwic2lkIjoic2Vzc2lvbi1hIiwiZ2VuZXJhdGlvbiI6MSwic2Vzc2lvbl9kZWFkbGluZSI6MjAwMDAwMDEyMCwiaWF0IjoyMDAwMDAwMDAwLCJuYmYiOjIwMDAwMDAwMDAsImV4cCI6MjAwMDAwMDA2MCwiY2F0Ijp7ImV4YW1wbGUtY2F0YWxvZyI6WyJyZWFkIl19LCJwcmQiOnsidGVhbV9pZCI6eyI0MiI6InJlYWQifX0sInJ0ZyI6eyJiIjoiaG9nbGl0ZSIsImJlIjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwidCI6ImZpeHR1cmVfMDMifSwicmVtb3RlX3NjaGVtYXMiOnsidGVhbSI6WyJyZWFkIl19LCJhd3MiOnsiYWNjZXNzX2tleV9pZCI6ImZpY3Rpb25hbC1rZXkiLCJzZWNyZXRfYWNjZXNzX2tleSI6ImZpY3Rpb25hbC1zZWNyZXQiLCJzZXNzaW9uX3Rva2VuIjoiZmljdGlvbmFsLXNlc3Npb24iLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJleHBpcmVzX2F0IjoyMDAwMDAwMDYwfSwiZ3JhbnRzIjpbeyJjYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwidGFyZ2V0IjoiZXhhbXBsZS1jYXRhbG9nIiwiYnVja2V0IjoiZXhhbXBsZS1jdXN0b21lciIsIm9iamVjdF9rZXkiOiJ0YWJsZXMvZGF0YS5wYXJxdWV0IiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXX0seyJjYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwidGFyZ2V0IjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwiYnVja2V0IjoiZXhhbXBsZS1vd25lciIsIm9iamVjdF9rZXkiOiJyb290LzJjL3QvZml4dHVyZV8zL21hbmlmZXN0IiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXX0seyJjYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwidGFyZ2V0IjoicmVtb3RlOmV2ZW50cyIsImJ1Y2tldCI6ImV4YW1wbGUtcmVtb3RlIiwicHJlZml4IjoiZXZlbnRzL3RlYW1faWQ9NDIvIiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXX0seyJjYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwidGFyZ2V0IjoicmVtb3RlOmltcG9ydHMiLCJidWNrZXQiOiJleGFtcGxlLXJlbW90ZSIsInByZWZpeCI6ImltcG9ydHMvdGVhbV9pZD00Mi8iLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfV19.maT9zJ479J_BVz4ZRZxoEmzbPzls0iZiBXO9CiQ5b6fLUgfM8sB00gEJRF2sI8IkvocmU8ngqgq3xMTGccy3_A",
+      "expect": {
+        "read": "invalid_token",
+        "ordinary": "invalid_audience"
+      }
+    },
+    {
+      "name": "wrong manifest suffix",
+      "verify_at": 2000000001,
+      "claims": {
+        "iss": "https://hoglake.contract.test",
+        "aud": [
+          "trino-session",
+          "hoglake-session",
+          "hoglite-session"
+        ],
+        "sub": "example.alice",
+        "usr": "example.alice",
+        "jti": "token-a",
+        "profile": "example.aws-session",
+        "version": 1,
+        "purpose": "user-session",
+        "ten": "scoped",
+        "org": "example-org",
+        "primary_catalog": "example-catalog",
+        "sid": "session-a",
+        "generation": 1,
+        "session_deadline": 2000000120,
+        "iat": 2000000000,
+        "nbf": 2000000000,
+        "exp": 2000000060,
+        "cat": {
+          "example-catalog": [
+            "read"
+          ]
+        },
+        "prd": {
+          "team_id": {
+            "42": "read"
+          }
+        },
+        "rtg": {
+          "b": "hoglite",
+          "be": "11111111-1111-4111-8111-111111111111",
+          "t": "fixture_3"
+        },
+        "remote_schemas": {
+          "team": [
+            "read"
+          ]
+        },
+        "aws": {
+          "access_key_id": "fictional-key",
+          "secret_access_key": "fictional-secret",
+          "session_token": "fictional-session",
+          "region": "us-east-1",
+          "expires_at": 2000000060
+        },
+        "grants": [
+          {
+            "catalog": "example-catalog",
+            "target": "example-catalog",
+            "bucket": "example-customer",
+            "object_key": "tables/data.parquet",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "11111111-1111-4111-8111-111111111111",
+            "bucket": "example-owner",
+            "object_key": "root/2c/t/fixture_3/manifest.json",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "remote:events",
+            "bucket": "example-remote",
+            "prefix": "events/team_id=42/",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "remote:imports",
+            "bucket": "example-remote",
+            "prefix": "imports/team_id=42/",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          }
+        ]
+      },
+      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImNjMTBiNWFiNjQ5YzM0YTQiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2hvZ2xha2UuY29udHJhY3QudGVzdCIsImF1ZCI6WyJ0cmluby1zZXNzaW9uIiwiaG9nbGFrZS1zZXNzaW9uIiwiaG9nbGl0ZS1zZXNzaW9uIl0sInN1YiI6ImV4YW1wbGUuYWxpY2UiLCJ1c3IiOiJleGFtcGxlLmFsaWNlIiwianRpIjoidG9rZW4tYSIsInByb2ZpbGUiOiJleGFtcGxlLmF3cy1zZXNzaW9uIiwidmVyc2lvbiI6MSwicHVycG9zZSI6InVzZXItc2Vzc2lvbiIsInRlbiI6InNjb3BlZCIsIm9yZyI6ImV4YW1wbGUtb3JnIiwicHJpbWFyeV9jYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwic2lkIjoic2Vzc2lvbi1hIiwiZ2VuZXJhdGlvbiI6MSwic2Vzc2lvbl9kZWFkbGluZSI6MjAwMDAwMDEyMCwiaWF0IjoyMDAwMDAwMDAwLCJuYmYiOjIwMDAwMDAwMDAsImV4cCI6MjAwMDAwMDA2MCwiY2F0Ijp7ImV4YW1wbGUtY2F0YWxvZyI6WyJyZWFkIl19LCJwcmQiOnsidGVhbV9pZCI6eyI0MiI6InJlYWQifX0sInJ0ZyI6eyJiIjoiaG9nbGl0ZSIsImJlIjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwidCI6ImZpeHR1cmVfMyJ9LCJyZW1vdGVfc2NoZW1hcyI6eyJ0ZWFtIjpbInJlYWQiXX0sImF3cyI6eyJhY2Nlc3Nfa2V5X2lkIjoiZmljdGlvbmFsLWtleSIsInNlY3JldF9hY2Nlc3Nfa2V5IjoiZmljdGlvbmFsLXNlY3JldCIsInNlc3Npb25fdG9rZW4iOiJmaWN0aW9uYWwtc2Vzc2lvbiIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImV4cGlyZXNfYXQiOjIwMDAwMDAwNjB9LCJncmFudHMiOlt7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJleGFtcGxlLWNhdGFsb2ciLCJidWNrZXQiOiJleGFtcGxlLWN1c3RvbWVyIiwib2JqZWN0X2tleSI6InRhYmxlcy9kYXRhLnBhcnF1ZXQiLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiIxMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEiLCJidWNrZXQiOiJleGFtcGxlLW93bmVyIiwib2JqZWN0X2tleSI6InJvb3QvMmMvdC9maXh0dXJlXzMvbWFuaWZlc3QuanNvbiIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImFjdGlvbnMiOlsiczM6R2V0T2JqZWN0Il19LHsiY2F0YWxvZyI6ImV4YW1wbGUtY2F0YWxvZyIsInRhcmdldCI6InJlbW90ZTpldmVudHMiLCJidWNrZXQiOiJleGFtcGxlLXJlbW90ZSIsInByZWZpeCI6ImV2ZW50cy90ZWFtX2lkPTQyLyIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImFjdGlvbnMiOlsiczM6R2V0T2JqZWN0Il19LHsiY2F0YWxvZyI6ImV4YW1wbGUtY2F0YWxvZyIsInRhcmdldCI6InJlbW90ZTppbXBvcnRzIiwiYnVja2V0IjoiZXhhbXBsZS1yZW1vdGUiLCJwcmVmaXgiOiJpbXBvcnRzL3RlYW1faWQ9NDIvIiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXX1dfQ.9rK4xqwirMOPjz8fN2qyOTN06b6AcEj5MSD6CbjHgznAN0fRGmOExg-wWlTLOlKVfVkWASFMJo-85-lTekPErQ",
+      "expect": {
+        "read": "invalid_token",
+        "ordinary": "invalid_audience"
+      }
+    },
+    {
+      "name": "manifest prefix",
+      "verify_at": 2000000001,
+      "claims": {
+        "iss": "https://hoglake.contract.test",
+        "aud": [
+          "trino-session",
+          "hoglake-session",
+          "hoglite-session"
+        ],
+        "sub": "example.alice",
+        "usr": "example.alice",
+        "jti": "token-a",
+        "profile": "example.aws-session",
+        "version": 1,
+        "purpose": "user-session",
+        "ten": "scoped",
+        "org": "example-org",
+        "primary_catalog": "example-catalog",
+        "sid": "session-a",
+        "generation": 1,
+        "session_deadline": 2000000120,
+        "iat": 2000000000,
+        "nbf": 2000000000,
+        "exp": 2000000060,
+        "cat": {
+          "example-catalog": [
+            "read"
+          ]
+        },
+        "prd": {
+          "team_id": {
+            "42": "read"
+          }
+        },
+        "rtg": {
+          "b": "hoglite",
+          "be": "11111111-1111-4111-8111-111111111111",
+          "t": "fixture_3"
+        },
+        "remote_schemas": {
+          "team": [
+            "read"
+          ]
+        },
+        "aws": {
+          "access_key_id": "fictional-key",
+          "secret_access_key": "fictional-secret",
+          "session_token": "fictional-session",
+          "region": "us-east-1",
+          "expires_at": 2000000060
+        },
+        "grants": [
+          {
+            "catalog": "example-catalog",
+            "target": "example-catalog",
+            "bucket": "example-customer",
+            "object_key": "tables/data.parquet",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "11111111-1111-4111-8111-111111111111",
+            "bucket": "example-owner",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ],
+            "prefix": "root/2c/t/fixture_3/"
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "remote:events",
+            "bucket": "example-remote",
+            "prefix": "events/team_id=42/",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "remote:imports",
+            "bucket": "example-remote",
+            "prefix": "imports/team_id=42/",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          }
+        ]
+      },
+      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImNjMTBiNWFiNjQ5YzM0YTQiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2hvZ2xha2UuY29udHJhY3QudGVzdCIsImF1ZCI6WyJ0cmluby1zZXNzaW9uIiwiaG9nbGFrZS1zZXNzaW9uIiwiaG9nbGl0ZS1zZXNzaW9uIl0sInN1YiI6ImV4YW1wbGUuYWxpY2UiLCJ1c3IiOiJleGFtcGxlLmFsaWNlIiwianRpIjoidG9rZW4tYSIsInByb2ZpbGUiOiJleGFtcGxlLmF3cy1zZXNzaW9uIiwidmVyc2lvbiI6MSwicHVycG9zZSI6InVzZXItc2Vzc2lvbiIsInRlbiI6InNjb3BlZCIsIm9yZyI6ImV4YW1wbGUtb3JnIiwicHJpbWFyeV9jYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwic2lkIjoic2Vzc2lvbi1hIiwiZ2VuZXJhdGlvbiI6MSwic2Vzc2lvbl9kZWFkbGluZSI6MjAwMDAwMDEyMCwiaWF0IjoyMDAwMDAwMDAwLCJuYmYiOjIwMDAwMDAwMDAsImV4cCI6MjAwMDAwMDA2MCwiY2F0Ijp7ImV4YW1wbGUtY2F0YWxvZyI6WyJyZWFkIl19LCJwcmQiOnsidGVhbV9pZCI6eyI0MiI6InJlYWQifX0sInJ0ZyI6eyJiIjoiaG9nbGl0ZSIsImJlIjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwidCI6ImZpeHR1cmVfMyJ9LCJyZW1vdGVfc2NoZW1hcyI6eyJ0ZWFtIjpbInJlYWQiXX0sImF3cyI6eyJhY2Nlc3Nfa2V5X2lkIjoiZmljdGlvbmFsLWtleSIsInNlY3JldF9hY2Nlc3Nfa2V5IjoiZmljdGlvbmFsLXNlY3JldCIsInNlc3Npb25fdG9rZW4iOiJmaWN0aW9uYWwtc2Vzc2lvbiIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImV4cGlyZXNfYXQiOjIwMDAwMDAwNjB9LCJncmFudHMiOlt7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJleGFtcGxlLWNhdGFsb2ciLCJidWNrZXQiOiJleGFtcGxlLWN1c3RvbWVyIiwib2JqZWN0X2tleSI6InRhYmxlcy9kYXRhLnBhcnF1ZXQiLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiIxMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEiLCJidWNrZXQiOiJleGFtcGxlLW93bmVyIiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXSwicHJlZml4Ijoicm9vdC8yYy90L2ZpeHR1cmVfMy8ifSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJyZW1vdGU6ZXZlbnRzIiwiYnVja2V0IjoiZXhhbXBsZS1yZW1vdGUiLCJwcmVmaXgiOiJldmVudHMvdGVhbV9pZD00Mi8iLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJyZW1vdGU6aW1wb3J0cyIsImJ1Y2tldCI6ImV4YW1wbGUtcmVtb3RlIiwicHJlZml4IjoiaW1wb3J0cy90ZWFtX2lkPTQyLyIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImFjdGlvbnMiOlsiczM6R2V0T2JqZWN0Il19XX0.vjSTIXdnwYPsbYcv699MIec2wxvi7gXKV11z851fEJ_hdJJyxicl9YCcLOQiahJ8nNSVnd7_S-r0lx4QgKBujA",
+      "expect": {
+        "read": "invalid_token",
+        "ordinary": "invalid_audience"
+      }
+    },
+    {
+      "name": "duplicate paths across remote targets",
+      "verify_at": 2000000001,
+      "claims": {
+        "iss": "https://hoglake.contract.test",
+        "aud": [
+          "trino-session",
+          "hoglake-session",
+          "hoglite-session"
+        ],
+        "sub": "example.alice",
+        "usr": "example.alice",
+        "jti": "token-a",
+        "profile": "example.aws-session",
+        "version": 1,
+        "purpose": "user-session",
+        "ten": "scoped",
+        "org": "example-org",
+        "primary_catalog": "example-catalog",
+        "sid": "session-a",
+        "generation": 1,
+        "session_deadline": 2000000120,
+        "iat": 2000000000,
+        "nbf": 2000000000,
+        "exp": 2000000060,
+        "cat": {
+          "example-catalog": [
+            "read"
+          ]
+        },
+        "prd": {
+          "team_id": {
+            "42": "read"
+          }
+        },
+        "rtg": {
+          "b": "hoglite",
+          "be": "11111111-1111-4111-8111-111111111111",
+          "t": "fixture_3"
+        },
+        "remote_schemas": {
+          "team": [
+            "read"
+          ]
+        },
+        "aws": {
+          "access_key_id": "fictional-key",
+          "secret_access_key": "fictional-secret",
+          "session_token": "fictional-session",
+          "region": "us-east-1",
+          "expires_at": 2000000060
+        },
+        "grants": [
+          {
+            "catalog": "example-catalog",
+            "target": "example-catalog",
+            "bucket": "example-customer",
+            "object_key": "tables/data.parquet",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "11111111-1111-4111-8111-111111111111",
+            "bucket": "example-owner",
+            "object_key": "root/2c/t/fixture_3/manifest",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "remote:events",
+            "bucket": "example-remote",
+            "prefix": "events/team_id=42/",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "remote:imports",
+            "bucket": "example-remote",
+            "prefix": "events/team_id=42/",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          }
+        ]
+      },
+      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImNjMTBiNWFiNjQ5YzM0YTQiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2hvZ2xha2UuY29udHJhY3QudGVzdCIsImF1ZCI6WyJ0cmluby1zZXNzaW9uIiwiaG9nbGFrZS1zZXNzaW9uIiwiaG9nbGl0ZS1zZXNzaW9uIl0sInN1YiI6ImV4YW1wbGUuYWxpY2UiLCJ1c3IiOiJleGFtcGxlLmFsaWNlIiwianRpIjoidG9rZW4tYSIsInByb2ZpbGUiOiJleGFtcGxlLmF3cy1zZXNzaW9uIiwidmVyc2lvbiI6MSwicHVycG9zZSI6InVzZXItc2Vzc2lvbiIsInRlbiI6InNjb3BlZCIsIm9yZyI6ImV4YW1wbGUtb3JnIiwicHJpbWFyeV9jYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwic2lkIjoic2Vzc2lvbi1hIiwiZ2VuZXJhdGlvbiI6MSwic2Vzc2lvbl9kZWFkbGluZSI6MjAwMDAwMDEyMCwiaWF0IjoyMDAwMDAwMDAwLCJuYmYiOjIwMDAwMDAwMDAsImV4cCI6MjAwMDAwMDA2MCwiY2F0Ijp7ImV4YW1wbGUtY2F0YWxvZyI6WyJyZWFkIl19LCJwcmQiOnsidGVhbV9pZCI6eyI0MiI6InJlYWQifX0sInJ0ZyI6eyJiIjoiaG9nbGl0ZSIsImJlIjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwidCI6ImZpeHR1cmVfMyJ9LCJyZW1vdGVfc2NoZW1hcyI6eyJ0ZWFtIjpbInJlYWQiXX0sImF3cyI6eyJhY2Nlc3Nfa2V5X2lkIjoiZmljdGlvbmFsLWtleSIsInNlY3JldF9hY2Nlc3Nfa2V5IjoiZmljdGlvbmFsLXNlY3JldCIsInNlc3Npb25fdG9rZW4iOiJmaWN0aW9uYWwtc2Vzc2lvbiIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImV4cGlyZXNfYXQiOjIwMDAwMDAwNjB9LCJncmFudHMiOlt7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJleGFtcGxlLWNhdGFsb2ciLCJidWNrZXQiOiJleGFtcGxlLWN1c3RvbWVyIiwib2JqZWN0X2tleSI6InRhYmxlcy9kYXRhLnBhcnF1ZXQiLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiIxMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEiLCJidWNrZXQiOiJleGFtcGxlLW93bmVyIiwib2JqZWN0X2tleSI6InJvb3QvMmMvdC9maXh0dXJlXzMvbWFuaWZlc3QiLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJyZW1vdGU6ZXZlbnRzIiwiYnVja2V0IjoiZXhhbXBsZS1yZW1vdGUiLCJwcmVmaXgiOiJldmVudHMvdGVhbV9pZD00Mi8iLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJyZW1vdGU6aW1wb3J0cyIsImJ1Y2tldCI6ImV4YW1wbGUtcmVtb3RlIiwicHJlZml4IjoiZXZlbnRzL3RlYW1faWQ9NDIvIiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXX1dfQ.dDogFoNti1EM9hjuU7IRWDfhOa5sDUKuKxfEsJYjBHqsLSysxFwqNxpGldWztieIRsBc0sYIzoNDUtNPX7lgbQ",
+      "expect": {
+        "read": "invalid_token",
+        "ordinary": "invalid_audience"
+      }
+    },
+    {
+      "name": "overlapping remote prefixes",
+      "verify_at": 2000000001,
+      "claims": {
+        "iss": "https://hoglake.contract.test",
+        "aud": [
+          "trino-session",
+          "hoglake-session",
+          "hoglite-session"
+        ],
+        "sub": "example.alice",
+        "usr": "example.alice",
+        "jti": "token-a",
+        "profile": "example.aws-session",
+        "version": 1,
+        "purpose": "user-session",
+        "ten": "scoped",
+        "org": "example-org",
+        "primary_catalog": "example-catalog",
+        "sid": "session-a",
+        "generation": 1,
+        "session_deadline": 2000000120,
+        "iat": 2000000000,
+        "nbf": 2000000000,
+        "exp": 2000000060,
+        "cat": {
+          "example-catalog": [
+            "read"
+          ]
+        },
+        "prd": {
+          "team_id": {
+            "42": "read"
+          }
+        },
+        "rtg": {
+          "b": "hoglite",
+          "be": "11111111-1111-4111-8111-111111111111",
+          "t": "fixture_3"
+        },
+        "remote_schemas": {
+          "team": [
+            "read"
+          ]
+        },
+        "aws": {
+          "access_key_id": "fictional-key",
+          "secret_access_key": "fictional-secret",
+          "session_token": "fictional-session",
+          "region": "us-east-1",
+          "expires_at": 2000000060
+        },
+        "grants": [
+          {
+            "catalog": "example-catalog",
+            "target": "example-catalog",
+            "bucket": "example-customer",
+            "object_key": "tables/data.parquet",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "11111111-1111-4111-8111-111111111111",
+            "bucket": "example-owner",
+            "object_key": "root/2c/t/fixture_3/manifest",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "remote:events",
+            "bucket": "example-remote",
+            "prefix": "events/team_id=42/",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "remote:imports",
+            "bucket": "example-remote",
+            "prefix": "events/team_id=42/child/",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          }
+        ]
+      },
+      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImNjMTBiNWFiNjQ5YzM0YTQiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2hvZ2xha2UuY29udHJhY3QudGVzdCIsImF1ZCI6WyJ0cmluby1zZXNzaW9uIiwiaG9nbGFrZS1zZXNzaW9uIiwiaG9nbGl0ZS1zZXNzaW9uIl0sInN1YiI6ImV4YW1wbGUuYWxpY2UiLCJ1c3IiOiJleGFtcGxlLmFsaWNlIiwianRpIjoidG9rZW4tYSIsInByb2ZpbGUiOiJleGFtcGxlLmF3cy1zZXNzaW9uIiwidmVyc2lvbiI6MSwicHVycG9zZSI6InVzZXItc2Vzc2lvbiIsInRlbiI6InNjb3BlZCIsIm9yZyI6ImV4YW1wbGUtb3JnIiwicHJpbWFyeV9jYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwic2lkIjoic2Vzc2lvbi1hIiwiZ2VuZXJhdGlvbiI6MSwic2Vzc2lvbl9kZWFkbGluZSI6MjAwMDAwMDEyMCwiaWF0IjoyMDAwMDAwMDAwLCJuYmYiOjIwMDAwMDAwMDAsImV4cCI6MjAwMDAwMDA2MCwiY2F0Ijp7ImV4YW1wbGUtY2F0YWxvZyI6WyJyZWFkIl19LCJwcmQiOnsidGVhbV9pZCI6eyI0MiI6InJlYWQifX0sInJ0ZyI6eyJiIjoiaG9nbGl0ZSIsImJlIjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwidCI6ImZpeHR1cmVfMyJ9LCJyZW1vdGVfc2NoZW1hcyI6eyJ0ZWFtIjpbInJlYWQiXX0sImF3cyI6eyJhY2Nlc3Nfa2V5X2lkIjoiZmljdGlvbmFsLWtleSIsInNlY3JldF9hY2Nlc3Nfa2V5IjoiZmljdGlvbmFsLXNlY3JldCIsInNlc3Npb25fdG9rZW4iOiJmaWN0aW9uYWwtc2Vzc2lvbiIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImV4cGlyZXNfYXQiOjIwMDAwMDAwNjB9LCJncmFudHMiOlt7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJleGFtcGxlLWNhdGFsb2ciLCJidWNrZXQiOiJleGFtcGxlLWN1c3RvbWVyIiwib2JqZWN0X2tleSI6InRhYmxlcy9kYXRhLnBhcnF1ZXQiLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiIxMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEiLCJidWNrZXQiOiJleGFtcGxlLW93bmVyIiwib2JqZWN0X2tleSI6InJvb3QvMmMvdC9maXh0dXJlXzMvbWFuaWZlc3QiLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJyZW1vdGU6ZXZlbnRzIiwiYnVja2V0IjoiZXhhbXBsZS1yZW1vdGUiLCJwcmVmaXgiOiJldmVudHMvdGVhbV9pZD00Mi8iLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJyZW1vdGU6aW1wb3J0cyIsImJ1Y2tldCI6ImV4YW1wbGUtcmVtb3RlIiwicHJlZml4IjoiZXZlbnRzL3RlYW1faWQ9NDIvY2hpbGQvIiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXX1dfQ.mA172jXZBBLtOw9SiF3un9SMwxLEgEfQjW8B0Nk2ZI2pePKUhY810AH0_Np2VL2-nTAXhXqrfuDFA_vkloIFfA",
+      "expect": {
+        "read": "invalid_token",
+        "ordinary": "invalid_audience"
+      }
+    },
+    {
+      "name": "unbound catalog",
+      "verify_at": 2000000001,
+      "claims": {
+        "iss": "https://hoglake.contract.test",
+        "aud": [
+          "trino-session",
+          "hoglake-session",
+          "hoglite-session"
+        ],
+        "sub": "example.alice",
+        "usr": "example.alice",
+        "jti": "token-a",
+        "profile": "example.aws-session",
+        "version": 1,
+        "purpose": "user-session",
+        "ten": "scoped",
+        "org": "example-org",
+        "primary_catalog": "example-catalog",
+        "sid": "session-a",
+        "generation": 1,
+        "session_deadline": 2000000120,
+        "iat": 2000000000,
+        "nbf": 2000000000,
+        "exp": 2000000060,
+        "cat": {
+          "example-catalog": [
+            "read"
+          ]
+        },
+        "prd": {
+          "team_id": {
+            "42": "read"
+          }
+        },
+        "rtg": {
+          "b": "hoglite",
+          "be": "11111111-1111-4111-8111-111111111111",
+          "t": "fixture_3"
+        },
+        "remote_schemas": {
+          "team": [
+            "read"
+          ]
+        },
+        "aws": {
+          "access_key_id": "fictional-key",
+          "secret_access_key": "fictional-secret",
+          "session_token": "fictional-session",
+          "region": "us-east-1",
+          "expires_at": 2000000060
+        },
+        "grants": [
+          {
+            "catalog": "example-catalog",
+            "target": "example-catalog",
+            "bucket": "example-customer",
+            "object_key": "tables/data.parquet",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "11111111-1111-4111-8111-111111111111",
+            "bucket": "example-owner",
+            "object_key": "root/2c/t/fixture_3/manifest",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "remote:events",
+            "bucket": "example-remote",
+            "prefix": "events/team_id=42/",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "other",
+            "target": "remote:imports",
+            "bucket": "example-remote",
+            "prefix": "imports/team_id=42/",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          }
+        ]
+      },
+      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImNjMTBiNWFiNjQ5YzM0YTQiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2hvZ2xha2UuY29udHJhY3QudGVzdCIsImF1ZCI6WyJ0cmluby1zZXNzaW9uIiwiaG9nbGFrZS1zZXNzaW9uIiwiaG9nbGl0ZS1zZXNzaW9uIl0sInN1YiI6ImV4YW1wbGUuYWxpY2UiLCJ1c3IiOiJleGFtcGxlLmFsaWNlIiwianRpIjoidG9rZW4tYSIsInByb2ZpbGUiOiJleGFtcGxlLmF3cy1zZXNzaW9uIiwidmVyc2lvbiI6MSwicHVycG9zZSI6InVzZXItc2Vzc2lvbiIsInRlbiI6InNjb3BlZCIsIm9yZyI6ImV4YW1wbGUtb3JnIiwicHJpbWFyeV9jYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwic2lkIjoic2Vzc2lvbi1hIiwiZ2VuZXJhdGlvbiI6MSwic2Vzc2lvbl9kZWFkbGluZSI6MjAwMDAwMDEyMCwiaWF0IjoyMDAwMDAwMDAwLCJuYmYiOjIwMDAwMDAwMDAsImV4cCI6MjAwMDAwMDA2MCwiY2F0Ijp7ImV4YW1wbGUtY2F0YWxvZyI6WyJyZWFkIl19LCJwcmQiOnsidGVhbV9pZCI6eyI0MiI6InJlYWQifX0sInJ0ZyI6eyJiIjoiaG9nbGl0ZSIsImJlIjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwidCI6ImZpeHR1cmVfMyJ9LCJyZW1vdGVfc2NoZW1hcyI6eyJ0ZWFtIjpbInJlYWQiXX0sImF3cyI6eyJhY2Nlc3Nfa2V5X2lkIjoiZmljdGlvbmFsLWtleSIsInNlY3JldF9hY2Nlc3Nfa2V5IjoiZmljdGlvbmFsLXNlY3JldCIsInNlc3Npb25fdG9rZW4iOiJmaWN0aW9uYWwtc2Vzc2lvbiIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImV4cGlyZXNfYXQiOjIwMDAwMDAwNjB9LCJncmFudHMiOlt7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJleGFtcGxlLWNhdGFsb2ciLCJidWNrZXQiOiJleGFtcGxlLWN1c3RvbWVyIiwib2JqZWN0X2tleSI6InRhYmxlcy9kYXRhLnBhcnF1ZXQiLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiIxMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEiLCJidWNrZXQiOiJleGFtcGxlLW93bmVyIiwib2JqZWN0X2tleSI6InJvb3QvMmMvdC9maXh0dXJlXzMvbWFuaWZlc3QiLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJyZW1vdGU6ZXZlbnRzIiwiYnVja2V0IjoiZXhhbXBsZS1yZW1vdGUiLCJwcmVmaXgiOiJldmVudHMvdGVhbV9pZD00Mi8iLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJvdGhlciIsInRhcmdldCI6InJlbW90ZTppbXBvcnRzIiwiYnVja2V0IjoiZXhhbXBsZS1yZW1vdGUiLCJwcmVmaXgiOiJpbXBvcnRzL3RlYW1faWQ9NDIvIiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXX1dfQ.-VGg8jDvE3jeN4Dhuo8XeLUYAbwVArDtNl-ymzX1HIDRdYNhOj7sj0XgATuTm8Cu7-KJAHN9gk-9GvF1MOqu3g",
+      "expect": {
+        "read": "invalid_token",
+        "ordinary": "invalid_audience"
+      }
+    },
+    {
+      "name": "write action",
+      "verify_at": 2000000001,
+      "claims": {
+        "iss": "https://hoglake.contract.test",
+        "aud": [
+          "trino-session",
+          "hoglake-session",
+          "hoglite-session"
+        ],
+        "sub": "example.alice",
+        "usr": "example.alice",
+        "jti": "token-a",
+        "profile": "example.aws-session",
+        "version": 1,
+        "purpose": "user-session",
+        "ten": "scoped",
+        "org": "example-org",
+        "primary_catalog": "example-catalog",
+        "sid": "session-a",
+        "generation": 1,
+        "session_deadline": 2000000120,
+        "iat": 2000000000,
+        "nbf": 2000000000,
+        "exp": 2000000060,
+        "cat": {
+          "example-catalog": [
+            "read"
+          ]
+        },
+        "prd": {
+          "team_id": {
+            "42": "read"
+          }
+        },
+        "rtg": {
+          "b": "hoglite",
+          "be": "11111111-1111-4111-8111-111111111111",
+          "t": "fixture_3"
+        },
+        "remote_schemas": {
+          "team": [
+            "read"
+          ]
+        },
+        "aws": {
+          "access_key_id": "fictional-key",
+          "secret_access_key": "fictional-secret",
+          "session_token": "fictional-session",
+          "region": "us-east-1",
+          "expires_at": 2000000060
+        },
+        "grants": [
+          {
+            "catalog": "example-catalog",
+            "target": "example-catalog",
+            "bucket": "example-customer",
+            "object_key": "tables/data.parquet",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "11111111-1111-4111-8111-111111111111",
+            "bucket": "example-owner",
+            "object_key": "root/2c/t/fixture_3/manifest",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "remote:events",
+            "bucket": "example-remote",
+            "prefix": "events/team_id=42/",
+            "region": "us-east-1",
+            "actions": [
+              "s3:PutObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "remote:imports",
+            "bucket": "example-remote",
+            "prefix": "imports/team_id=42/",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          }
+        ]
+      },
+      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImNjMTBiNWFiNjQ5YzM0YTQiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2hvZ2xha2UuY29udHJhY3QudGVzdCIsImF1ZCI6WyJ0cmluby1zZXNzaW9uIiwiaG9nbGFrZS1zZXNzaW9uIiwiaG9nbGl0ZS1zZXNzaW9uIl0sInN1YiI6ImV4YW1wbGUuYWxpY2UiLCJ1c3IiOiJleGFtcGxlLmFsaWNlIiwianRpIjoidG9rZW4tYSIsInByb2ZpbGUiOiJleGFtcGxlLmF3cy1zZXNzaW9uIiwidmVyc2lvbiI6MSwicHVycG9zZSI6InVzZXItc2Vzc2lvbiIsInRlbiI6InNjb3BlZCIsIm9yZyI6ImV4YW1wbGUtb3JnIiwicHJpbWFyeV9jYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwic2lkIjoic2Vzc2lvbi1hIiwiZ2VuZXJhdGlvbiI6MSwic2Vzc2lvbl9kZWFkbGluZSI6MjAwMDAwMDEyMCwiaWF0IjoyMDAwMDAwMDAwLCJuYmYiOjIwMDAwMDAwMDAsImV4cCI6MjAwMDAwMDA2MCwiY2F0Ijp7ImV4YW1wbGUtY2F0YWxvZyI6WyJyZWFkIl19LCJwcmQiOnsidGVhbV9pZCI6eyI0MiI6InJlYWQifX0sInJ0ZyI6eyJiIjoiaG9nbGl0ZSIsImJlIjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwidCI6ImZpeHR1cmVfMyJ9LCJyZW1vdGVfc2NoZW1hcyI6eyJ0ZWFtIjpbInJlYWQiXX0sImF3cyI6eyJhY2Nlc3Nfa2V5X2lkIjoiZmljdGlvbmFsLWtleSIsInNlY3JldF9hY2Nlc3Nfa2V5IjoiZmljdGlvbmFsLXNlY3JldCIsInNlc3Npb25fdG9rZW4iOiJmaWN0aW9uYWwtc2Vzc2lvbiIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImV4cGlyZXNfYXQiOjIwMDAwMDAwNjB9LCJncmFudHMiOlt7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJleGFtcGxlLWNhdGFsb2ciLCJidWNrZXQiOiJleGFtcGxlLWN1c3RvbWVyIiwib2JqZWN0X2tleSI6InRhYmxlcy9kYXRhLnBhcnF1ZXQiLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiIxMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEiLCJidWNrZXQiOiJleGFtcGxlLW93bmVyIiwib2JqZWN0X2tleSI6InJvb3QvMmMvdC9maXh0dXJlXzMvbWFuaWZlc3QiLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJyZW1vdGU6ZXZlbnRzIiwiYnVja2V0IjoiZXhhbXBsZS1yZW1vdGUiLCJwcmVmaXgiOiJldmVudHMvdGVhbV9pZD00Mi8iLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOlB1dE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJyZW1vdGU6aW1wb3J0cyIsImJ1Y2tldCI6ImV4YW1wbGUtcmVtb3RlIiwicHJlZml4IjoiaW1wb3J0cy90ZWFtX2lkPTQyLyIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImFjdGlvbnMiOlsiczM6R2V0T2JqZWN0Il19XX0.zm8FPYYAK5qx7g7Ut_rStg4LCoJob027QsxDpSz5WKdS2TiZt7802OSfRSVoEMgwNe8A3bfNS-3NwWt-MLfVnQ",
+      "expect": {
+        "read": "invalid_token",
+        "ordinary": "invalid_audience"
+      }
+    }
+  ]
+}

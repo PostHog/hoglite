@@ -15,10 +15,13 @@ import (
 )
 
 type Server struct {
-	mgr    *Manager
-	auth   *JWTAuth
-	peers  map[string]string // replica id -> base URL
-	client *http.Client
+	mgr           *Manager
+	auth          *JWTAuth
+	peers         map[string]string // replica id -> base URL
+	client        *http.Client
+	readSessionS3 ReadSessionS3Config
+	readS3Once    sync.Once
+	readS3Client  *http.Client
 
 	mu          sync.Mutex
 	ownerCache  map[string]ownerCacheEntry
@@ -71,6 +74,12 @@ func NewServer(mgr *Manager, peers map[string]string) *Server {
 // WithAuth attaches startup-validated offline authentication before serving.
 func (s *Server) WithAuth(auth *JWTAuth) *Server {
 	s.auth = auth
+	return s
+}
+
+// WithReadSessionS3 sets S3 transport options for request-local manifest reads.
+func (s *Server) WithReadSessionS3(cfg ReadSessionS3Config) *Server {
+	s.readSessionS3 = cfg
 	return s
 }
 
