@@ -69,6 +69,18 @@ type readSessionCredentials struct {
 func (readSessionCredentials) String() string   { return "read-session-credentials(redacted)" }
 func (readSessionCredentials) GoString() string { return "read-session-credentials(redacted)" }
 
+type readSessionGrant struct {
+	bucket   string
+	key      string
+	isPrefix bool
+	target   string
+	catalog  string
+	region   string
+}
+
+func (readSessionGrant) String() string   { return "read-session-grant(redacted)" }
+func (readSessionGrant) GoString() string { return "read-session-grant(redacted)" }
+
 type readSessionClaims struct {
 	subject        string
 	org            string
@@ -80,11 +92,13 @@ type readSessionClaims struct {
 	manifestRegion string
 	manifestKey    string
 	creds          readSessionCredentials
+	grants         []readSessionGrant
 }
 
 type readSessionAuthority struct {
 	authority *scopedNamespaceAuthority
 	creds     readSessionCredentials
+	grants    []readSessionGrant
 }
 
 const (
@@ -162,6 +176,49 @@ func validReadSessionPathSegments(path string) bool {
 	return true
 }
 
+func validReadSessionObjectKey(key string) bool {
+	return key != "" && len(key) <= readSessionMaxKeyLength &&
+		!strings.HasSuffix(key, "/") &&
+		validReadSessionPathSegments(key)
+}
+
+func parseReadSessionS3Location(location string) (string, string, bool) {
+	const scheme = "s3://"
+	if !strings.HasPrefix(location, scheme) {
+		return "", "", false
+	}
+	rest := location[len(scheme):]
+	bucket, key, found := strings.Cut(rest, "/")
+	if !found || !validReadSessionBucket(bucket) || !validReadSessionObjectKey(key) {
+		return "", "", false
+	}
+	return bucket, key, true
+}
+
+// allowsPrimaryCatalogLocation reports whether a primary-catalog grant allows the S3 URI.
+func (a *readSessionAuthority) allowsPrimaryCatalogLocation(catalog, location string) bool {
+	if a == nil || catalog == "" || !readSessionRegionRe.MatchString(a.creds.region) {
+		return false
+	}
+	bucket, key, ok := parseReadSessionS3Location(location)
+	if !ok {
+		return false
+	}
+	for _, g := range a.grants {
+		if g.catalog != catalog || g.target != catalog || g.region != a.creds.region || g.bucket != bucket {
+			continue
+		}
+		if g.isPrefix {
+			if strings.HasPrefix(key, g.key) {
+				return true
+			}
+		} else if key == g.key {
+			return true
+		}
+	}
+	return false
+}
+
 func (a *JWTAuth) readSessionEnabled() bool {
 	return a != nil && a.readSession != nil
 }
@@ -185,6 +242,7 @@ func (a *JWTAuth) verifyReadSession(ctx context.Context, raw, tenant, catalog st
 	return &readSessionAuthority{
 		authority: &scopedNamespaceAuthority{predicates: claims.predicates},
 		creds:     claims.creds,
+		grants:    claims.grants,
 	}, nil
 }
 
@@ -366,7 +424,7 @@ func (p *readSessionProfile) validate(payload map[string]json.RawMessage, now in
 	if !ok {
 		return invalid()
 	}
-	manifestBucket, manifestRegion, manifestObjKey, ok := p.validateGrants(payload["grants"], primary, backend, tenant, creds.region)
+	manifestBucket, manifestRegion, manifestObjKey, grants, ok := p.validateGrants(payload["grants"], primary, backend, tenant, creds.region)
 	if !ok {
 		return invalid()
 	}
@@ -383,6 +441,7 @@ func (p *readSessionProfile) validate(payload map[string]json.RawMessage, now in
 		manifestRegion: manifestRegion,
 		manifestKey:    manifestObjKey,
 		creds:          creds,
+		grants:         grants,
 	}, nil
 }
 
@@ -522,7 +581,7 @@ func parseReadSessionRouting(raw json.RawMessage) (string, string, bool) {
 	return backend, tenant, true
 }
 
-func (p *readSessionProfile) validateGrants(raw json.RawMessage, catalog, backend, tenant, region string) (string, string, string, bool) {
+func (p *readSessionProfile) validateGrants(raw json.RawMessage, catalog, backend, tenant, region string) (string, string, string, []readSessionGrant, bool) {
 	targets := map[string]bool{
 		p.remoteTargets[0]: true,
 		p.remoteTargets[1]: true,
@@ -530,29 +589,30 @@ func (p *readSessionProfile) validateGrants(raw json.RawMessage, catalog, backen
 		backend:            true,
 	}
 	if len(targets) != 4 {
-		return "", "", "", false
+		return "", "", "", nil, false
 	}
 	trimmed := bytes.TrimSpace(raw)
 	if len(trimmed) == 0 || trimmed[0] != '[' {
-		return "", "", "", false
+		return "", "", "", nil, false
 	}
 	var items []json.RawMessage
 	if json.Unmarshal(trimmed, &items) != nil || len(items) < len(targets) {
-		return "", "", "", false
+		return "", "", "", nil, false
 	}
 	manifestSuffix := "/" + TenantShard(tenant) + "/t/" + tenant + "/manifest"
 	seen := make(map[string]bool, len(targets))
+	grants := make([]readSessionGrant, 0, len(items))
 	var prevBucket, prevKey string
 	var manifestBucket, manifestRegion, manifestObjKey string
 	for _, item := range items {
 		grant, ok := parseJSONObject(item)
 		if !ok || len(grant) != 6 {
-			return "", "", "", false
+			return "", "", "", nil, false
 		}
 		_, hasObjectKey := grant["object_key"]
 		_, hasPrefix := grant["prefix"]
 		if hasObjectKey == hasPrefix {
-			return "", "", "", false
+			return "", "", "", nil, false
 		}
 		bucket, ok1 := readSessionText(grant, "bucket")
 		keyField := "object_key"
@@ -564,32 +624,40 @@ func (p *readSessionProfile) validateGrants(raw json.RawMessage, catalog, backen
 		grantCat, ok4 := readSessionText(grant, "catalog")
 		grantReg, ok5 := readSessionText(grant, "region")
 		if !ok1 || !ok2 || !ok3 || !ok4 || !ok5 {
-			return "", "", "", false
+			return "", "", "", nil, false
 		}
 		if !validReadSessionBucket(bucket) || len(key) > readSessionMaxKeyLength ||
 			hasPrefix != strings.HasSuffix(key, "/") ||
 			!validReadSessionPathSegments(strings.TrimSuffix(key, "/")) ||
 			!targets[target] || grantCat != catalog || grantReg != region ||
 			!isGetObjectOnly(grant["actions"]) {
-			return "", "", "", false
+			return "", "", "", nil, false
 		}
 		if target == backend {
 			if hasPrefix || !strings.HasSuffix(key, manifestSuffix) || seen[target] {
-				return "", "", "", false
+				return "", "", "", nil, false
 			}
 			manifestBucket, manifestRegion, manifestObjKey = bucket, grantReg, key
 		}
 		overlaps := strings.HasSuffix(prevKey, "/") && strings.HasPrefix(key, prevKey)
 		if bucket < prevBucket || (bucket == prevBucket && (key <= prevKey || overlaps)) {
-			return "", "", "", false
+			return "", "", "", nil, false
 		}
 		prevBucket, prevKey = bucket, key
 		seen[target] = true
+		grants = append(grants, readSessionGrant{
+			bucket:   bucket,
+			key:      key,
+			isPrefix: hasPrefix,
+			target:   target,
+			catalog:  grantCat,
+			region:   grantReg,
+		})
 	}
 	if len(seen) != len(targets) || manifestObjKey == "" {
-		return "", "", "", false
+		return "", "", "", nil, false
 	}
-	return manifestBucket, manifestRegion, manifestObjKey, true
+	return manifestBucket, manifestRegion, manifestObjKey, grants, true
 }
 
 func isGetObjectOnly(raw json.RawMessage) bool {
