@@ -30,6 +30,7 @@ type AuthConfig struct {
 	Mode, Issuer, BackendID, JWKSFile, JWKSURL, UpstreamAudience string
 	ScopedNamespaceEnabled                                       bool
 	ScopedNamespacePredicateFields                               []string
+	ReadSession                                                  *ReadSessionConfig
 }
 
 type verificationKey struct {
@@ -42,6 +43,7 @@ type JWTAuth struct {
 	issuer, backend, upstream string
 	scopedNamespaceEnabled    bool
 	scopedNamespaceFields     map[string]bool
+	readSession               *readSessionProfile
 	fetch                     func(context.Context) ([]byte, error)
 	now                       func() time.Time
 	mu                        sync.Mutex
@@ -61,6 +63,10 @@ const (
 // Off preserves the internal service's legacy development behavior.
 func NewJWTAuth(ctx context.Context, cfg AuthConfig) (*JWTAuth, error) {
 	fields, err := scopedNamespaceConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
+	readSession, err := readSessionConfig(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -93,6 +99,7 @@ func NewJWTAuth(ctx context.Context, cfg AuthConfig) (*JWTAuth, error) {
 	a := &JWTAuth{
 		issuer: cfg.Issuer, backend: cfg.BackendID, upstream: upstream, now: time.Now,
 		scopedNamespaceEnabled: cfg.ScopedNamespaceEnabled, scopedNamespaceFields: fields,
+		readSession: readSession,
 	}
 	if cfg.JWKSFile != "" {
 		a.fetch = func(context.Context) ([]byte, error) {

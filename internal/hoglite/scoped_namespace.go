@@ -161,6 +161,34 @@ func (s *Server) serveScopedNamespace(w http.ResponseWriter, r *http.Request) {
 		scopedNamespaceRefusal(w, http.StatusUnauthorized)
 		return
 	}
+	if s.auth.readSessionEnabled() {
+		rsa, err := s.auth.verifyReadSession(ctx, fields[1], target.tenant, target.catalog)
+		if err != nil {
+			status := http.StatusUnauthorized
+			if ctx.Err() != nil {
+				status = http.StatusServiceUnavailable
+			} else if errors.Is(err, errUnsupportedAuthority) {
+				status = http.StatusNotFound
+			}
+			scopedNamespaceRefusal(w, status)
+			return
+		}
+		if ctx.Err() != nil {
+			scopedNamespaceRefusal(w, http.StatusServiceUnavailable)
+			return
+		}
+		t := s.mgr.LocalTenant(target.tenant)
+		if t == nil {
+			// Serve only an already loaded tenant on this owner. Never discover a peer or acquire.
+			scopedNamespaceRefusal(w, http.StatusServiceUnavailable)
+			return
+		}
+		getManifest := func(readCtx context.Context) (*Manifest, error) {
+			return s.readSessionManifest(readCtx, target.tenant, rsa.creds)
+		}
+		s.readScopedNamespace(w, r, target, rsa.authority, t, getManifest)
+		return
+	}
 	a, err := s.auth.verifyScopedNamespace(ctx, fields[1], target.tenant, target.catalog)
 	if err != nil {
 		status := http.StatusUnauthorized
@@ -177,23 +205,36 @@ func (s *Server) serveScopedNamespace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if t := s.mgr.LocalTenant(target.tenant); t != nil {
-		s.readScopedNamespace(w, r, target, a, t)
+		getManifest := func(readCtx context.Context) (*Manifest, error) {
+			mf, _, err := s.mgr.store.GetManifest(readCtx, target.tenant)
+			return mf, err
+		}
+		s.readScopedNamespace(w, r, target, a, t, getManifest)
 		return
 	}
 	s.forwardScopedNamespace(w, r, target, a, values[0])
 }
 
 // Use the immutable claim identity, not a cached owner or manifest generation.
-func (s *Server) scopedNamespaceOwned(ctx context.Context, tid string, t *Tenant) bool {
+func (s *Server) scopedNamespaceOwned(ctx context.Context, tid string, t *Tenant, getManifest func(context.Context) (*Manifest, error)) int {
 	if ctx.Err() != nil || !t.claimed || t.self != s.mgr.ID() ||
 		!t.Alive() || t.leaseExpiring() || s.mgr.LocalTenant(tid) != t {
-		return false
+		return http.StatusServiceUnavailable
 	}
-	mf, _, err := s.mgr.store.GetManifest(ctx, tid)
-	return err == nil && mf != nil && mf.Owner == t.self &&
+	mf, err := getManifest(ctx)
+	if err != nil {
+		if errors.Is(err, errReadSessionExpired) {
+			return http.StatusUnauthorized
+		}
+		return http.StatusServiceUnavailable
+	}
+	if mf != nil && mf.Owner == t.self &&
 		mf.Epoch == t.claimEpoch && mf.Instance == t.claimInst &&
 		ctx.Err() == nil && t.Alive() && !t.leaseExpiring() &&
-		s.mgr.LocalTenant(tid) == t
+		s.mgr.LocalTenant(tid) == t {
+		return 0
+	}
+	return http.StatusServiceUnavailable
 }
 
 // The fixed join reads the catalog, live row, and mark in one durable view.
@@ -203,16 +244,16 @@ WHERE m.id = 1 AND m.name = ? COLLATE BINARY AND m.dropping = 0
 AND n.name = ? COLLATE BINARY AND n.dropped_snapshot IS NULL
 LIMIT 2`
 
-func (s *Server) readScopedNamespace(w http.ResponseWriter, r *http.Request, target scopedNamespaceTarget, a *scopedNamespaceAuthority, t *Tenant) {
-	if !s.scopedNamespaceOwned(r.Context(), target.tenant, t) {
-		scopedNamespaceRefusal(w, http.StatusServiceUnavailable)
+func (s *Server) readScopedNamespace(w http.ResponseWriter, r *http.Request, target scopedNamespaceTarget, a *scopedNamespaceAuthority, t *Tenant, getManifest func(context.Context) (*Manifest, error)) {
+	if status := s.scopedNamespaceOwned(r.Context(), target.tenant, t, getManifest); status != 0 {
+		scopedNamespaceRefusal(w, status)
 		return
 	}
 	result, err := t.SubmitQueryCtx(r.Context(), Statement{
 		SQL: scopedNamespaceSQL, Args: []any{target.catalog, target.namespace},
 	})
-	if !s.scopedNamespaceOwned(r.Context(), target.tenant, t) {
-		scopedNamespaceRefusal(w, http.StatusServiceUnavailable)
+	if status := s.scopedNamespaceOwned(r.Context(), target.tenant, t, getManifest); status != 0 {
+		scopedNamespaceRefusal(w, status)
 		return
 	}
 	if err != nil {
