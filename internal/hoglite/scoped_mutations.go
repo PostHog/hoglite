@@ -635,19 +635,7 @@ WHERE m.id = 1 AND n.name = ? COLLATE BINARY AND n.dropped_snapshot IS NULL
   AND t.name = ? COLLATE BINARY AND t.dropped_snapshot IS NULL`,
 				Args: []any{target.namespace, target.table},
 			},
-			// 6: end live files, dvs, columns, table_versions, and drop table
-			{
-				SQL: `UPDATE files SET end_snapshot = (SELECT next_snapshot - 1 FROM meta WHERE id = 1)
-WHERE table_id = (SELECT t.id FROM namespaces AS n JOIN tables AS t ON t.namespace_id = n.id WHERE n.name = ? COLLATE BINARY AND n.dropped_snapshot IS NULL AND t.name = ? COLLATE BINARY AND t.dropped_snapshot IS NULL)
-  AND end_snapshot IS NULL`,
-				Args: []any{target.namespace, target.table},
-			},
-			{
-				SQL: `UPDATE dvs SET end_snapshot = (SELECT next_snapshot - 1 FROM meta WHERE id = 1)
-WHERE table_id = (SELECT t.id FROM namespaces AS n JOIN tables AS t ON t.namespace_id = n.id WHERE n.name = ? COLLATE BINARY AND n.dropped_snapshot IS NULL AND t.name = ? COLLATE BINARY AND t.dropped_snapshot IS NULL)
-  AND end_snapshot IS NULL`,
-				Args: []any{target.namespace, target.table},
-			},
+			// 6: end live columns, table_versions, and mark table dropped (leave file/DV retirement to batched worker)
 			{
 				SQL: `UPDATE columns SET end_snapshot = (SELECT next_snapshot - 1 FROM meta WHERE id = 1)
 WHERE table_id = (SELECT t.id FROM namespaces AS n JOIN tables AS t ON t.namespace_id = n.id WHERE n.name = ? COLLATE BINARY AND n.dropped_snapshot IS NULL AND t.name = ? COLLATE BINARY AND t.dropped_snapshot IS NULL)
@@ -667,7 +655,7 @@ WHERE namespace_id = (SELECT id FROM namespaces WHERE name = ? COLLATE BINARY AN
 				Args:           []any{target.namespace, predField, predValue, target.table},
 				ExpectAffected: int64Ptr(1),
 			},
-			// 11: readback snapshot
+			// 9: readback snapshot
 			{
 				SQL: `SELECT next_snapshot - 1 FROM meta WHERE id = 1`,
 			},
@@ -690,12 +678,12 @@ WHERE namespace_id = (SELECT id FROM namespaces WHERE name = ? COLLATE BINARY AN
 		}
 		return
 	}
-	if len(results) != 12 || len(results[2].Rows) != 1 || len(results[11].Rows) != 1 {
+	if len(results) != 10 || len(results[2].Rows) != 1 || len(results[9].Rows) != 1 {
 		scopedNamespaceRefusal(w, http.StatusServiceUnavailable)
 		return
 	}
 	tableUUID, ok1 := results[2].Rows[0][0].(string)
-	snap, ok2 := results[11].Rows[0][0].(int64)
+	snap, ok2 := results[9].Rows[0][0].(int64)
 	if !ok1 || !ok2 {
 		scopedNamespaceRefusal(w, http.StatusServiceUnavailable)
 		return
