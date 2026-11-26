@@ -61,7 +61,12 @@ func (s *Server) readSessionHTTPClient() *http.Client {
 
 // readSessionManifest fetches one tenant manifest with the caller's AWS session.
 // It does not cache the manifest or use the daemon's storage client.
-func (s *Server) readSessionManifest(ctx context.Context, tid string, creds readSessionCredentials) (*Manifest, error) {
+func (s *Server) readSessionManifest(ctx context.Context, tid string, creds readSessionCredentials) (mf *Manifest, err error) {
+	defer func() {
+		if err != nil && s.mgr != nil && s.mgr.metrics != nil {
+			s.mgr.metrics.ReadSessionManifestErrors.Add(1)
+		}
+	}()
 	if ctx.Err() != nil {
 		return nil, errReadSessionManifestUnavailable
 	}
@@ -121,9 +126,18 @@ func (s *Server) readSessionManifest(ctx context.Context, tid string, creds read
 	if err != nil || len(raw) > maxReadSessionManifestBytes {
 		return nil, errReadSessionManifestUnavailable
 	}
-	var mf Manifest
-	if json.Unmarshal(raw, &mf) != nil {
+	var parsed Manifest
+	if json.Unmarshal(raw, &parsed) != nil {
 		return nil, errReadSessionManifestUnavailable
 	}
-	return &mf, nil
+	if s.mgr != nil && s.mgr.metrics != nil {
+		s.mgr.metrics.ReadSessionManifestReads.Add(1)
+		if s.mgr.metrics.Logger != nil {
+			s.mgr.metrics.Logger.Printf(
+				"read-session manifest read tenant=%s bucket=%s key=%s source=caller-read-session bytes=%d",
+				tid, bucket, key, len(raw),
+			)
+		}
+	}
+	return &parsed, nil
 }
