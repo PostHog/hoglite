@@ -248,7 +248,10 @@ func main() {
 	if opts.PutTimeout >= opts.Lease/3+opts.SkewMargin {
 		log.Printf("WARNING: fencing margin violated: PutTimeout %v must be < lease/3 + skew %v", opts.PutTimeout, opts.SkewMargin)
 	}
-	metrics := &hoglite.Metrics{Logger: log.Default()}
+	metrics := &hoglite.Metrics{
+		Logger:            log.Default(),
+		ReadSessionLogger: log.New(os.Stderr, "", log.LstdFlags),
+	}
 	mgr := hoglite.NewManagerSat(store, *prefix, *id, *class, *dir, opts, *maxOpen, metrics, ctrl, *satCommitMs*1000, *satInflight)
 	if *sweep {
 		sw := hoglite.NewSweeper(mgr, store, *prefix, opts, metrics)

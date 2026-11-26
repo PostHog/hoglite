@@ -757,7 +757,7 @@ func TestReadSessionPostReadOwnershipLossAndMidRequestExpiry(t *testing.T) {
 		}
 
 		logCh := make(chan string, 16)
-		mgr.metrics.Logger = readSessionTestLogger{ch: logCh}
+		mgr.metrics.ReadSessionLogger = readSessionTestLogger{ch: logCh}
 
 		w := scopedNamespaceCall(t, h, readSessionTestPath, "Bearer "+f.token(t, nil))
 		if w.Code != http.StatusOK {
@@ -817,31 +817,54 @@ func TestReadSessionPostReadOwnershipLossAndMidRequestExpiry(t *testing.T) {
 		}
 	})
 
-	t.Run("stalled logger does not block caller-session manifest reads", func(t *testing.T) {
+	t.Run("stalled logger with full queue does not block caller-session manifest reads or daemon logger", func(t *testing.T) {
 		f, s3fx, spy, mgr, _, h := newReadSessionOwnerHarness(t)
 		spy.denyManifest.Store(true)
 		manifestPath := "/" + readSessionTestBucket + "/" + manifestKey(readSessionTestPrefix, readSessionTestTenant)
 		s3fx.setCaller("ASIAEXAMPLEALICE0001", "secret-alice-material-only-for-test", "session-token-alice-only-for-test", manifestPath)
 
+		entered := make(chan struct{}, 1)
 		unblock := make(chan struct{})
 		t.Cleanup(func() { close(unblock) })
-		mgr.metrics.Logger = blockingTestLogger{unblock: unblock}
+		mgr.metrics.ReadSessionLogger = blockingTestLogger{entered: entered, unblock: unblock}
 
-		done := make(chan int, 1)
+		// First read starts the worker and stalls it inside Printf.
+		w0 := scopedNamespaceCall(t, h, readSessionTestPath, "Bearer "+f.token(t, nil))
+		if w0.Code != http.StatusOK {
+			t.Fatalf("initial status=%d, want 200", w0.Code)
+		}
+		select {
+		case <-entered:
+		case <-time.After(2 * time.Second):
+			t.Fatal("worker did not enter stalled ReadSessionLogger")
+		}
+
+		// Fill the entire 256-slot queue while the worker is stalled (2 lines per read => 130 reads > 256).
+		// Then verify additional reads still complete without blocking and still increment the counter.
+		tok := f.token(t, nil)
+		const extraReads = readSessionLogQueueSize/2 + 4
+		done := make(chan error, 1)
 		go func() {
-			w := scopedNamespaceCall(t, h, readSessionTestPath, "Bearer "+f.token(t, nil))
-			done <- w.Code
+			for i := 0; i < extraReads; i++ {
+				w := scopedNamespaceCall(t, h, readSessionTestPath, "Bearer "+tok)
+				if w.Code != http.StatusOK {
+					done <- fmt.Errorf("read %d: status=%d, want 200", i, w.Code)
+					return
+				}
+			}
+			done <- nil
 		}()
 		select {
-		case code := <-done:
-			if code != http.StatusOK {
-				t.Fatalf("status=%d, want 200", code)
+		case err := <-done:
+			if err != nil {
+				t.Fatal(err)
 			}
-		case <-time.After(2 * time.Second):
-			t.Fatal("scoped read blocked on stalled logger")
+		case <-time.After(5 * time.Second):
+			t.Fatal("scoped read blocked once diagnostic log queue filled")
 		}
-		if got := mgr.metrics.ReadSessionManifestReads.Load(); got != 2 {
-			t.Fatalf("ReadSessionManifestReads=%d, want 2", got)
+		wantReads := int64(2 * (1 + extraReads))
+		if got := mgr.metrics.ReadSessionManifestReads.Load(); got != wantReads {
+			t.Fatalf("ReadSessionManifestReads=%d, want %d", got, wantReads)
 		}
 	})
 }
@@ -855,9 +878,14 @@ func (l readSessionTestLogger) Printf(format string, args ...any) {
 }
 
 type blockingTestLogger struct {
+	entered chan<- struct{}
 	unblock <-chan struct{}
 }
 
 func (l blockingTestLogger) Printf(string, ...any) {
+	select {
+	case l.entered <- struct{}{}:
+	default:
+	}
 	<-l.unblock
 }

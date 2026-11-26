@@ -144,14 +144,14 @@ func (s *Server) readSessionManifest(ctx context.Context, tid string, creds read
 // logReadSessionManifestRead enqueues one diagnostic log line without blocking
 // the request path. Lines are dropped if the bounded queue is full.
 func (s *Server) logReadSessionManifestRead(tid, bucket, key string, n int) {
-	if s.mgr == nil || s.mgr.metrics == nil || s.mgr.metrics.Logger == nil {
+	if s.mgr == nil || s.mgr.metrics == nil || s.mgr.metrics.ReadSessionLogger == nil {
 		return
 	}
 	s.readSessionLogOnce.Do(func() {
 		ch := make(chan string, readSessionLogQueueSize)
 		s.readSessionLogCh = ch
 		stop := s.mgr.leaseStop
-		logger := s.mgr.metrics.Logger
+		logger := s.mgr.metrics.ReadSessionLogger
 		go func() {
 			for {
 				select {
