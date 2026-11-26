@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"log"
+	"os"
+	"testing"
+)
 
 func TestBuildReadSessionConfig(t *testing.T) {
 	t.Run("empty profile disables read sessions even with residual settings", func(t *testing.T) {
@@ -60,4 +64,25 @@ func TestBuildReadSessionConfig(t *testing.T) {
 			t.Fatal("plain http endpoint passed")
 		}
 	})
+}
+
+func TestNewDaemonMetricsSeparatesReadSessionLoggerWriter(t *testing.T) {
+	m := newDaemonMetrics()
+	daemonLog, ok := m.Logger.(*log.Logger)
+	if !ok {
+		t.Fatalf("Logger type = %T, want *log.Logger", m.Logger)
+	}
+	rsLog, ok := m.ReadSessionLogger.(*log.Logger)
+	if !ok {
+		t.Fatalf("ReadSessionLogger type = %T, want *log.Logger", m.ReadSessionLogger)
+	}
+	if daemonLog == rsLog {
+		t.Fatal("ReadSessionLogger shares *log.Logger with daemon Logger")
+	}
+	if daemonLog.Writer() == rsLog.Writer() {
+		t.Fatalf("ReadSessionLogger shares underlying io.Writer (%v) with daemon Logger", rsLog.Writer())
+	}
+	if rsLog.Writer() != os.Stdout {
+		t.Fatalf("ReadSessionLogger writer = %v, want os.Stdout", rsLog.Writer())
+	}
 }

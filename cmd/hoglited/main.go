@@ -25,6 +25,17 @@ import (
 	"hoglite/internal/hoglite"
 )
 
+// newDaemonMetrics builds the daemon metrics with an independent stdout logger
+// for best-effort caller-session manifest diagnostics so a stalled diagnostic
+// write never contends on os.Stderr with log.Default() during shutdown or
+// lease heartbeat error logging.
+func newDaemonMetrics() *hoglite.Metrics {
+	return &hoglite.Metrics{
+		Logger:            log.Default(),
+		ReadSessionLogger: log.New(os.Stdout, "", log.LstdFlags),
+	}
+}
+
 func main() {
 	if handled, code := runVersion(os.Args[1:], os.Stdout, os.Stderr); handled {
 		os.Exit(code)
@@ -248,10 +259,7 @@ func main() {
 	if opts.PutTimeout >= opts.Lease/3+opts.SkewMargin {
 		log.Printf("WARNING: fencing margin violated: PutTimeout %v must be < lease/3 + skew %v", opts.PutTimeout, opts.SkewMargin)
 	}
-	metrics := &hoglite.Metrics{
-		Logger:            log.Default(),
-		ReadSessionLogger: log.New(os.Stderr, "", log.LstdFlags),
-	}
+	metrics := newDaemonMetrics()
 	mgr := hoglite.NewManagerSat(store, *prefix, *id, *class, *dir, opts, *maxOpen, metrics, ctrl, *satCommitMs*1000, *satInflight)
 	if *sweep {
 		sw := hoglite.NewSweeper(mgr, store, *prefix, opts, metrics)
