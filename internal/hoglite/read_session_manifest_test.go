@@ -748,9 +748,16 @@ func TestReadSessionPostReadOwnershipLossAndMidRequestExpiry(t *testing.T) {
 		manifestPath := "/" + readSessionTestBucket + "/" + manifestKey(readSessionTestPrefix, readSessionTestTenant)
 		s3fx.setCaller("ASIAEXAMPLEALICE0001", "secret-alice-material-only-for-test", "session-token-alice-only-for-test", manifestPath)
 
-		var logBuf strings.Builder
-		var logMu sync.Mutex
-		mgr.metrics.Logger = readSessionTestLogger{mu: &logMu, buf: &logBuf}
+		// Compute the exact manifest byte length served by the fixture.
+		s3fx.mu.Lock()
+		wantBytes := len(s3fx.objects[manifestPath])
+		s3fx.mu.Unlock()
+		if wantBytes <= 0 {
+			t.Fatalf("fixture manifest at %s is empty", manifestPath)
+		}
+
+		logCh := make(chan string, 16)
+		mgr.metrics.ReadSessionLogger = readSessionTestLogger{ch: logCh}
 
 		w := scopedNamespaceCall(t, h, readSessionTestPath, "Bearer "+f.token(t, nil))
 		if w.Code != http.StatusOK {
@@ -774,18 +781,30 @@ func TestReadSessionPostReadOwnershipLossAndMidRequestExpiry(t *testing.T) {
 			t.Fatalf("/metrics missing error counter:\n%s", metricsBody)
 		}
 
-		// Verify structured log line records caller-read-session and never leaks credentials.
-		logMu.Lock()
-		logged := logBuf.String()
-		logMu.Unlock()
+		// Verify both successful reads emit the full log line with exact byte count and zero secrets.
 		wantKey := manifestKey(readSessionTestPrefix, readSessionTestTenant)
-		wantSubstr := fmt.Sprintf("read-session manifest read tenant=%s bucket=%s key=%s source=caller-read-session", readSessionTestTenant, readSessionTestBucket, wantKey)
-		if !strings.Contains(logged, wantSubstr) {
-			t.Fatalf("logs missing %q, got:\n%s", wantSubstr, logged)
+		wantLine := fmt.Sprintf(
+			"read-session manifest read tenant=%s bucket=%s key=%s source=caller-read-session bytes=%d",
+			readSessionTestTenant, readSessionTestBucket, wantKey, wantBytes,
+		)
+		var lines []string
+		deadline := time.After(2 * time.Second)
+		for len(lines) < 2 {
+			select {
+			case line := <-logCh:
+				lines = append(lines, line)
+			case <-deadline:
+				t.Fatalf("timed out waiting for 2 log lines, got %d: %v", len(lines), lines)
+			}
 		}
-		for _, secret := range []string{"ASIAEXAMPLEALICE0001", "secret-alice-material-only-for-test", "session-token-alice-only-for-test"} {
-			if strings.Contains(logged, secret) {
-				t.Fatalf("logs leaked credential material %q:\n%s", secret, logged)
+		for i, line := range lines {
+			if line != wantLine {
+				t.Fatalf("log line %d = %q, want %q", i, line, wantLine)
+			}
+			for _, secret := range []string{"ASIAEXAMPLEALICE0001", "secret-alice-material-only-for-test", "session-token-alice-only-for-test"} {
+				if strings.Contains(line, secret) {
+					t.Fatalf("log line %d leaked credential material %q: %q", i, secret, line)
+				}
 			}
 		}
 
@@ -797,15 +816,86 @@ func TestReadSessionPostReadOwnershipLossAndMidRequestExpiry(t *testing.T) {
 			t.Fatalf("ReadSessionManifestErrors=%d, want 1", got)
 		}
 	})
+
+	t.Run("stalled logger with full queue does not block caller-session manifest reads or daemon logger", func(t *testing.T) {
+		f, s3fx, spy, mgr, _, h := newReadSessionOwnerHarness(t)
+		spy.denyManifest.Store(true)
+		manifestPath := "/" + readSessionTestBucket + "/" + manifestKey(readSessionTestPrefix, readSessionTestTenant)
+		s3fx.setCaller("ASIAEXAMPLEALICE0001", "secret-alice-material-only-for-test", "session-token-alice-only-for-test", manifestPath)
+
+		entered := make(chan struct{}, 1)
+		unblock := make(chan struct{})
+		t.Cleanup(func() { close(unblock) })
+		mgr.metrics.ReadSessionLogger = blockingTestLogger{entered: entered, unblock: unblock}
+
+		// First read starts the worker and stalls it inside Printf. Run it in a
+		// goroutine so a synchronous regression fails by timeout instead of hanging.
+		firstDone := make(chan int, 1)
+		go func() {
+			w0 := scopedNamespaceCall(t, h, readSessionTestPath, "Bearer "+f.token(t, nil))
+			firstDone <- w0.Code
+		}()
+		select {
+		case code := <-firstDone:
+			if code != http.StatusOK {
+				t.Fatalf("initial status=%d, want 200", code)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("initial scoped read blocked on stalled ReadSessionLogger")
+		}
+		select {
+		case <-entered:
+		case <-time.After(2 * time.Second):
+			t.Fatal("worker did not enter stalled ReadSessionLogger")
+		}
+
+		// Fill the entire 256-slot queue while the worker is stalled (2 lines per read => 130 reads > 256).
+		// Then verify additional reads still complete without blocking and still increment the counter.
+		tok := f.token(t, nil)
+		const extraReads = readSessionLogQueueSize/2 + 4
+		done := make(chan error, 1)
+		go func() {
+			for i := 0; i < extraReads; i++ {
+				w := scopedNamespaceCall(t, h, readSessionTestPath, "Bearer "+tok)
+				if w.Code != http.StatusOK {
+					done <- fmt.Errorf("read %d: status=%d, want 200", i, w.Code)
+					return
+				}
+			}
+			done <- nil
+		}()
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("scoped read blocked once diagnostic log queue filled")
+		}
+		wantReads := int64(2 * (1 + extraReads))
+		if got := mgr.metrics.ReadSessionManifestReads.Load(); got != wantReads {
+			t.Fatalf("ReadSessionManifestReads=%d, want %d", got, wantReads)
+		}
+	})
 }
 
 type readSessionTestLogger struct {
-	mu  *sync.Mutex
-	buf *strings.Builder
+	ch chan string
 }
 
 func (l readSessionTestLogger) Printf(format string, args ...any) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	fmt.Fprintf(l.buf, format+"\n", args...)
+	l.ch <- fmt.Sprintf(format, args...)
+}
+
+type blockingTestLogger struct {
+	entered chan<- struct{}
+	unblock <-chan struct{}
+}
+
+func (l blockingTestLogger) Printf(string, ...any) {
+	select {
+	case l.entered <- struct{}{}:
+	default:
+	}
+	<-l.unblock
 }

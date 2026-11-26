@@ -25,21 +25,25 @@ func newInstanceID() string {
 }
 
 type Metrics struct {
-	Logger       interface{ Printf(string, ...any) }
-	Commits      atomic.Int64
-	Queries      atomic.Int64
-	DedupHits    atomic.Int64
-	SegPuts      atomic.Int64
-	SegBytes     atomic.Int64
-	Acquires     atomic.Int64
-	Checkpoints  atomic.Int64
-	Proxied      atomic.Int64
-	ProxyFails   atomic.Int64
-	Evictions    atomic.Int64
-	Sweeps       atomic.Int64
-	SweptObjects atomic.Int64
-	AcquireWait  atomic.Int64 // ms spent waiting for leases
-	InflightSegs atomic.Int64 // gauge: segment PUTs currently in flight
+	Logger interface{ Printf(string, ...any) }
+	// ReadSessionLogger receives best-effort diagnostic logs for caller-session
+	// manifest reads. It must not share a lock with Logger so a stalled write
+	// cannot block daemon shutdown or lease heartbeat logs.
+	ReadSessionLogger interface{ Printf(string, ...any) }
+	Commits           atomic.Int64
+	Queries           atomic.Int64
+	DedupHits         atomic.Int64
+	SegPuts           atomic.Int64
+	SegBytes          atomic.Int64
+	Acquires          atomic.Int64
+	Checkpoints       atomic.Int64
+	Proxied           atomic.Int64
+	ProxyFails        atomic.Int64
+	Evictions         atomic.Int64
+	Sweeps            atomic.Int64
+	SweptObjects      atomic.Int64
+	AcquireWait       atomic.Int64 // ms spent waiting for leases
+	InflightSegs      atomic.Int64 // gauge: segment PUTs currently in flight
 	// CreateRacesLost counts create-only claims that lost the manifest
 	// CAS to a peer that created the tenant first (the designed fence
 	// outcome of a cold-start race, not a fault).

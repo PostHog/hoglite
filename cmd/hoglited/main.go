@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -24,6 +25,40 @@ import (
 
 	"hoglite/internal/hoglite"
 )
+
+// newDaemonMetrics builds the daemon metrics with a best-effort diagnostic
+// logger for caller-session manifest reads backed by a duplicated stdout
+// descriptor (fd > 2). Using a non-standard fd avoids os.Stderr lock
+// contention with log.Default() and turns a broken stdout pipe into a normal
+// EPIPE error instead of Go's SIGPIPE process termination on fd 1/2. When
+// stdout and stderr refer to the same underlying file or pipe (for example
+// `hoglited 2>&1 | ...`), diagnostics are discarded so they cannot fill the
+// shared pipe buffer and stall shutdown logging.
+func newDaemonMetrics() *hoglite.Metrics {
+	return &hoglite.Metrics{
+		Logger:            log.Default(),
+		ReadSessionLogger: log.New(newReadSessionLogWriter(os.Stdout, os.Stderr), "", log.LstdFlags),
+	}
+}
+
+func newReadSessionLogWriter(target, daemonErr *os.File) io.Writer {
+	if target == nil {
+		return io.Discard
+	}
+	if daemonErr != nil {
+		tInfo, tErr := target.Stat()
+		eInfo, eErr := daemonErr.Stat()
+		if tErr == nil && eErr == nil && os.SameFile(tInfo, eInfo) {
+			return io.Discard
+		}
+	}
+	fd, err := syscall.Dup(int(target.Fd()))
+	if err != nil {
+		return io.Discard
+	}
+	syscall.CloseOnExec(fd)
+	return os.NewFile(uintptr(fd), "read-session-log")
+}
 
 func main() {
 	if handled, code := runVersion(os.Args[1:], os.Stdout, os.Stderr); handled {
@@ -248,7 +283,7 @@ func main() {
 	if opts.PutTimeout >= opts.Lease/3+opts.SkewMargin {
 		log.Printf("WARNING: fencing margin violated: PutTimeout %v must be < lease/3 + skew %v", opts.PutTimeout, opts.SkewMargin)
 	}
-	metrics := &hoglite.Metrics{Logger: log.Default()}
+	metrics := newDaemonMetrics()
 	mgr := hoglite.NewManagerSat(store, *prefix, *id, *class, *dir, opts, *maxOpen, metrics, ctrl, *satCommitMs*1000, *satInflight)
 	if *sweep {
 		sw := hoglite.NewSweeper(mgr, store, *prefix, opts, metrics)
@@ -299,9 +334,13 @@ func main() {
 	case <-time.After(30 * time.Second):
 		log.Printf("drain timed out; exiting anyway")
 	}
-	fmt.Println(httpSrv.Shutdown(context.Background()))
+	if err := httpSrv.Shutdown(context.Background()); err != nil {
+		log.Printf("http shutdown: %v", err)
+	}
 	if metricsSrv != nil {
-		fmt.Println(metricsSrv.Shutdown(context.Background()))
+		if err := metricsSrv.Shutdown(context.Background()); err != nil {
+			log.Printf("metrics shutdown: %v", err)
+		}
 	}
 }
 

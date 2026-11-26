@@ -1,6 +1,11 @@
 package main
 
-import "testing"
+import (
+	"io"
+	"log"
+	"os"
+	"testing"
+)
 
 func TestBuildReadSessionConfig(t *testing.T) {
 	t.Run("empty profile disables read sessions even with residual settings", func(t *testing.T) {
@@ -60,4 +65,82 @@ func TestBuildReadSessionConfig(t *testing.T) {
 			t.Fatal("plain http endpoint passed")
 		}
 	})
+}
+
+func TestNewDaemonMetricsSeparatesReadSessionLoggerWriter(t *testing.T) {
+	m := newDaemonMetrics()
+	daemonLog, ok := m.Logger.(*log.Logger)
+	if !ok {
+		t.Fatalf("Logger type = %T, want *log.Logger", m.Logger)
+	}
+	rsLog, ok := m.ReadSessionLogger.(*log.Logger)
+	if !ok {
+		t.Fatalf("ReadSessionLogger type = %T, want *log.Logger", m.ReadSessionLogger)
+	}
+	if daemonLog == rsLog {
+		t.Fatal("ReadSessionLogger shares *log.Logger with daemon Logger")
+	}
+	if daemonLog.Writer() == rsLog.Writer() {
+		t.Fatalf("ReadSessionLogger shares underlying io.Writer (%v) with daemon Logger", rsLog.Writer())
+	}
+	switch w := rsLog.Writer().(type) {
+	case *os.File:
+		t.Cleanup(func() { _ = w.Close() })
+		if w.Fd() <= 2 {
+			t.Fatalf("ReadSessionLogger fd = %d, want > 2 to avoid Go SIGPIPE on fd 1/2", w.Fd())
+		}
+	default:
+		if w != io.Discard {
+			t.Fatalf("ReadSessionLogger writer = %T, want *os.File or io.Discard", w)
+		}
+	}
+}
+
+func TestReadSessionLogWriterSurvivesClosedPipe(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	defer w.Close()
+	rErr, wErr, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe stderr: %v", err)
+	}
+	defer rErr.Close()
+	defer wErr.Close()
+
+	diagW := newReadSessionLogWriter(w, wErr)
+	f, ok := diagW.(*os.File)
+	if !ok {
+		t.Fatalf("writer type = %T, want *os.File", diagW)
+	}
+	defer f.Close()
+	if f.Fd() <= 2 {
+		t.Fatalf("dup fd = %d, want > 2", f.Fd())
+	}
+
+	// Close the reader so writes hit EPIPE; non-standard fd must return an error, not SIGPIPE.
+	if err := r.Close(); err != nil {
+		t.Fatalf("close reader: %v", err)
+	}
+	if _, err := f.Write([]byte("read-session manifest read test\n")); err == nil {
+		t.Fatal("expected EPIPE write error after closing pipe reader, got nil")
+	}
+}
+
+func TestReadSessionLogWriterDropsWhenMergedWithStderr(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	defer r.Close()
+	defer w.Close()
+
+	// Same underlying pipe for stdout and stderr (e.g. `hoglited 2>&1 | ...`) must discard diagnostics.
+	if got := newReadSessionLogWriter(w, w); got != io.Discard {
+		if f, ok := got.(*os.File); ok {
+			_ = f.Close()
+		}
+		t.Fatalf("merged stdout/stderr writer = %T, want io.Discard", got)
+	}
 }
