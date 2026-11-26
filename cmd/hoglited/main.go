@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -25,15 +26,28 @@ import (
 	"hoglite/internal/hoglite"
 )
 
-// newDaemonMetrics builds the daemon metrics with an independent stdout logger
-// for best-effort caller-session manifest diagnostics so a stalled diagnostic
-// write never contends on os.Stderr with log.Default() during shutdown or
-// lease heartbeat error logging.
+// newDaemonMetrics builds the daemon metrics with a best-effort diagnostic
+// logger for caller-session manifest reads backed by a duplicated stdout
+// descriptor (fd > 2). Using a non-standard fd avoids os.Stderr lock
+// contention with log.Default() and turns a broken stdout pipe into a normal
+// EPIPE error instead of Go's SIGPIPE process termination on fd 1/2.
 func newDaemonMetrics() *hoglite.Metrics {
 	return &hoglite.Metrics{
 		Logger:            log.Default(),
-		ReadSessionLogger: log.New(os.Stdout, "", log.LstdFlags),
+		ReadSessionLogger: log.New(newReadSessionLogWriter(os.Stdout), "", log.LstdFlags),
 	}
+}
+
+func newReadSessionLogWriter(target *os.File) io.Writer {
+	if target == nil {
+		return io.Discard
+	}
+	fd, err := syscall.Dup(int(target.Fd()))
+	if err != nil {
+		return io.Discard
+	}
+	syscall.CloseOnExec(fd)
+	return os.NewFile(uintptr(fd), "read-session-log")
 }
 
 func main() {

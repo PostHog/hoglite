@@ -82,7 +82,38 @@ func TestNewDaemonMetricsSeparatesReadSessionLoggerWriter(t *testing.T) {
 	if daemonLog.Writer() == rsLog.Writer() {
 		t.Fatalf("ReadSessionLogger shares underlying io.Writer (%v) with daemon Logger", rsLog.Writer())
 	}
-	if rsLog.Writer() != os.Stdout {
-		t.Fatalf("ReadSessionLogger writer = %v, want os.Stdout", rsLog.Writer())
+	f, ok := rsLog.Writer().(*os.File)
+	if !ok {
+		t.Fatalf("ReadSessionLogger writer type = %T, want *os.File", rsLog.Writer())
+	}
+	t.Cleanup(func() { _ = f.Close() })
+	if f.Fd() <= 2 {
+		t.Fatalf("ReadSessionLogger fd = %d, want > 2 to avoid Go SIGPIPE on fd 1/2", f.Fd())
+	}
+}
+
+func TestReadSessionLogWriterSurvivesClosedPipe(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	defer w.Close()
+
+	diagW := newReadSessionLogWriter(w)
+	f, ok := diagW.(*os.File)
+	if !ok {
+		t.Fatalf("writer type = %T, want *os.File", diagW)
+	}
+	defer f.Close()
+	if f.Fd() <= 2 {
+		t.Fatalf("dup fd = %d, want > 2", f.Fd())
+	}
+
+	// Close the reader so writes hit EPIPE; non-standard fd must return an error, not SIGPIPE.
+	if err := r.Close(); err != nil {
+		t.Fatalf("close reader: %v", err)
+	}
+	if _, err := f.Write([]byte("read-session manifest read test\n")); err == nil {
+		t.Fatal("expected EPIPE write error after closing pipe reader, got nil")
 	}
 }
