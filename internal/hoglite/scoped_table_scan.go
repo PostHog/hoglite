@@ -6,9 +6,12 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 )
@@ -253,7 +256,12 @@ func parseScopedListQuery(raw, path, rawQuery string, forceQuery bool) (string, 
 	if !found || k != "after" || v == "" {
 		return "", false
 	}
-	return decodeScopedSegment(v)
+	decoded, err := url.QueryUnescape(v)
+	if err != nil || decoded == "" || len(decoded) > 256 || !utf8.ValidString(decoded) ||
+		strings.IndexFunc(decoded, unicode.IsControl) >= 0 {
+		return "", false
+	}
+	return decoded, true
 }
 
 func parseScopedScanQuery(rawQuery string) (int64, string, bool) {
