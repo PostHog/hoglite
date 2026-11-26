@@ -213,11 +213,32 @@ func TestScopedMutationsLifecycleAndSecurity(t *testing.T) {
 
 	// 9. Valid DELETE (DV) commit attaches deletion vector to data_file_id.
 	dataFileID := scanDTO.Files[0].DataFile.DataFileID
+	// Read-only session COMMIT is refused (403), and out-of-scope DV URI is refused (403).
+	scopedNamespaceWantCode(t, scopedMutationCall(t, h, http.MethodPost, base+"/namespaces/scratch/tables/metrics/commit", readOnlyTok, commitTableReq{
+		TableUUID: tblDTO.TableUUID, BaseSnapshotID: commitResp.SnapshotID,
+		AddDeleteFiles: []commitAddDeleteFileReq{{
+			DataFileID: dataFileID, Path: "s3://example-customer/tables/team_id=42/dv-ro.puffin", DeleteCount: 1, FileSizeBytes: 64,
+		}},
+	}), http.StatusForbidden, "forbidden")
+	scopedNamespaceWantCode(t, scopedMutationCall(t, h, http.MethodPost, base+"/namespaces/scratch/tables/metrics/commit", team42WriteTok, commitTableReq{
+		TableUUID: tblDTO.TableUUID, BaseSnapshotID: commitResp.SnapshotID,
+		AddDeleteFiles: []commitAddDeleteFileReq{{
+			DataFileID: dataFileID, Path: "s3://example-customer/tables/team_id=43/dv-bad.puffin", DeleteCount: 1, FileSizeBytes: 64,
+		}},
+	}), http.StatusForbidden, "forbidden")
+	// Over-count DV (delete_count > record_count=3) is refused (409).
+	scopedNamespaceWantCode(t, scopedMutationCall(t, h, http.MethodPost, base+"/namespaces/scratch/tables/metrics/commit", team42WriteTok, commitTableReq{
+		TableUUID: tblDTO.TableUUID, BaseSnapshotID: commitResp.SnapshotID,
+		AddDeleteFiles: []commitAddDeleteFileReq{{
+			DataFileID: dataFileID, Path: "s3://example-customer/tables/team_id=42/dv-over.puffin", DeleteCount: 4, FileSizeBytes: 64,
+		}},
+	}), http.StatusConflict, "conflict")
+
 	w = scopedMutationCall(t, h, http.MethodPost, base+"/namespaces/scratch/tables/metrics/commit", team42WriteTok, commitTableReq{
 		TableUUID:      tblDTO.TableUUID,
 		BaseSnapshotID: commitResp.SnapshotID,
 		AddDeleteFiles: []commitAddDeleteFileReq{{
-			DataFileID: dataFileID, Path: "s3://example-customer/tables/team_id=42/dv-1.puffin", DeleteCount: 1, FileSizeBytes: 128,
+			DataFileID: dataFileID, Path: "s3://example-customer/tables/team_id=42/dv-1.puffin", DeleteCount: 2, FileSizeBytes: 128,
 		}},
 	})
 	if w.Code != http.StatusOK {
@@ -230,13 +251,23 @@ func TestScopedMutationsLifecycleAndSecurity(t *testing.T) {
 	if dvCommit.DeletesAdded != 1 {
 		t.Fatalf("unexpected dv commit resp: %+v", dvCommit)
 	}
+	// Shrinking replacement DV (delete_count=1 < existing 2) is refused (409) to prevent row resurrection.
+	scopedNamespaceWantCode(t, scopedMutationCall(t, h, http.MethodPost, base+"/namespaces/scratch/tables/metrics/commit", team42WriteTok, commitTableReq{
+		TableUUID:      tblDTO.TableUUID,
+		BaseSnapshotID: dvCommit.SnapshotID,
+		AddDeleteFiles: []commitAddDeleteFileReq{{
+			DataFileID: dataFileID, Path: "s3://example-customer/tables/team_id=42/dv-shrink.puffin", DeleteCount: 1, FileSizeBytes: 64,
+		}},
+	}), http.StatusConflict, "conflict")
 
-	// 10. DROP TABLE and DROP SCHEMA succeed cleanly.
-	w = scopedMutationCall(t, h, http.MethodDelete, base+"/namespaces/scratch/tables/metrics", team42WriteTok, nil)
+	// 10. DROP TABLE and DROP SCHEMA reject mismatched identity fences (409) and succeed with matching fences.
+	scopedNamespaceWantCode(t, scopedMutationCall(t, h, http.MethodDelete, base+"/namespaces/scratch/tables/metrics?table_uuid=99999999-9999-4999-8999-999999999999", team42WriteTok, nil), http.StatusConflict, "conflict")
+	w = scopedMutationCall(t, h, http.MethodDelete, base+"/namespaces/scratch/tables/metrics?table_uuid="+tblDTO.TableUUID, team42WriteTok, nil)
 	if w.Code != http.StatusOK {
 		t.Fatalf("drop table status=%d body=%s", w.Code, w.Body.String())
 	}
-	w = scopedMutationCall(t, h, http.MethodDelete, base+"/namespaces/scratch", team42WriteTok, nil)
+	scopedNamespaceWantCode(t, scopedMutationCall(t, h, http.MethodDelete, fmt.Sprintf("%s/namespaces/scratch?namespace_id=%d", base, nsDTO.ID+999), team42WriteTok, nil), http.StatusConflict, "conflict")
+	w = scopedMutationCall(t, h, http.MethodDelete, fmt.Sprintf("%s/namespaces/scratch?namespace_id=%d", base, nsDTO.ID), team42WriteTok, nil)
 	if w.Code != http.StatusOK {
 		t.Fatalf("drop namespace status=%d body=%s", w.Code, w.Body.String())
 	}

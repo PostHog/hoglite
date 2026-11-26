@@ -41,15 +41,16 @@ const (
 )
 
 type scopedMetadataTarget struct {
-	kind      scopedMetadataKind
-	tenant    string
-	catalog   string
-	namespace string
-	table     string
-	after     string
-	snapshot  int64
-	tableUUID string
-	path      string
+	kind        scopedMetadataKind
+	tenant      string
+	catalog     string
+	namespace   string
+	namespaceID int64
+	table       string
+	after       string
+	snapshot    int64
+	tableUUID   string
+	path        string
 }
 
 func (t scopedMetadataTarget) namespaceTarget() scopedNamespaceTarget {
@@ -204,11 +205,11 @@ func parseScopedMetadataTarget(r *http.Request) (scopedMetadataTarget, bool) {
 	}
 	switch len(parts) {
 	case 10:
-		if r.URL.RawQuery != "" || r.URL.ForceQuery || raw != path {
-			return target, false
-		}
 		switch r.Method {
 		case http.MethodGet:
+			if r.URL.RawQuery != "" || r.URL.ForceQuery || raw != path {
+				return target, false
+			}
 			return scopedMetadataTarget{
 				kind:      scopedMetadataKindNamespace,
 				tenant:    tenant,
@@ -217,12 +218,17 @@ func parseScopedMetadataTarget(r *http.Request) (scopedMetadataTarget, bool) {
 				path:      path,
 			}, true
 		case http.MethodDelete:
+			nsID, ok := parseScopedDropNamespaceQuery(raw, path, r.URL.RawQuery, r.URL.ForceQuery)
+			if !ok {
+				return target, false
+			}
 			return scopedMetadataTarget{
-				kind:      scopedMetadataKindDropNamespace,
-				tenant:    tenant,
-				catalog:   catalog,
-				namespace: namespace,
-				path:      path,
+				kind:        scopedMetadataKindDropNamespace,
+				tenant:      tenant,
+				catalog:     catalog,
+				namespace:   namespace,
+				namespaceID: nsID,
+				path:        path,
 			}, true
 		default:
 			return target, false
@@ -259,7 +265,7 @@ func parseScopedMetadataTarget(r *http.Request) (scopedMetadataTarget, bool) {
 			path:      path,
 		}, true
 	case 12:
-		if parts[10] != "tables" || r.URL.RawQuery != "" || r.URL.ForceQuery || raw != path {
+		if parts[10] != "tables" {
 			return target, false
 		}
 		table, ok := decodeScopedSegment(parts[11])
@@ -268,6 +274,9 @@ func parseScopedMetadataTarget(r *http.Request) (scopedMetadataTarget, bool) {
 		}
 		switch r.Method {
 		case http.MethodGet:
+			if r.URL.RawQuery != "" || r.URL.ForceQuery || raw != path {
+				return target, false
+			}
 			return scopedMetadataTarget{
 				kind:      scopedMetadataKindTable,
 				tenant:    tenant,
@@ -277,12 +286,17 @@ func parseScopedMetadataTarget(r *http.Request) (scopedMetadataTarget, bool) {
 				path:      path,
 			}, true
 		case http.MethodDelete:
+			tableUUID, ok := parseScopedDropTableQuery(raw, path, r.URL.RawQuery, r.URL.ForceQuery)
+			if !ok {
+				return target, false
+			}
 			return scopedMetadataTarget{
 				kind:      scopedMetadataKindDropTable,
 				tenant:    tenant,
 				catalog:   catalog,
 				namespace: namespace,
 				table:     table,
+				tableUUID: tableUUID,
 				path:      path,
 			}, true
 		default:
@@ -329,6 +343,44 @@ func parseScopedMetadataTarget(r *http.Request) (scopedMetadataTarget, bool) {
 	default:
 		return target, false
 	}
+}
+
+func parseScopedDropNamespaceQuery(raw, path, rawQuery string, forceQuery bool) (int64, bool) {
+	if rawQuery == "" {
+		if forceQuery || raw != path {
+			return 0, false
+		}
+		return 0, true
+	}
+	if raw != path+"?"+rawQuery || strings.Contains(rawQuery, "&") {
+		return 0, false
+	}
+	k, v, found := strings.Cut(rawQuery, "=")
+	if !found || k != "namespace_id" || !readSessionPositiveIntRe.MatchString(v) {
+		return 0, false
+	}
+	id, err := strconv.ParseInt(v, 10, 64)
+	if err != nil || id <= 0 {
+		return 0, false
+	}
+	return id, true
+}
+
+func parseScopedDropTableQuery(raw, path, rawQuery string, forceQuery bool) (string, bool) {
+	if rawQuery == "" {
+		if forceQuery || raw != path {
+			return "", false
+		}
+		return "", true
+	}
+	if raw != path+"?"+rawQuery || strings.Contains(rawQuery, "&") {
+		return "", false
+	}
+	k, v, found := strings.Cut(rawQuery, "=")
+	if !found || k != "table_uuid" || !isCanonicalLowerUUID(v) {
+		return "", false
+	}
+	return v, true
 }
 
 func parseScopedListQuery(raw, path, rawQuery string, forceQuery bool) (string, bool) {

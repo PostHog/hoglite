@@ -207,8 +207,9 @@ var builtInReadOnlyNamespaceRes = []*regexp.Regexp{
 
 func compileNamespacePatterns(patterns []string) ([]*regexp.Regexp, error) {
 	out := make([]*regexp.Regexp, 0, len(patterns))
-	for _, p := range patterns {
-		if strings.TrimSpace(p) == "" {
+	for _, raw := range patterns {
+		p := strings.TrimSpace(raw)
+		if p == "" {
 			continue
 		}
 		re, err := regexp.Compile("(?i)" + p)

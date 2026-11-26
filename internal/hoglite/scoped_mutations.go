@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"mime"
 	"net/http"
 	"regexp"
@@ -29,8 +30,7 @@ var (
 		"float": true, "double": true, "decimal": true, "date": true, "time": true,
 		"timestamp_s": true, "timestamp_ms": true, "timestamp": true,
 		"timestamp_ns": true, "timestamptz": true, "string": true, "json": true,
-		"uuid": true, "binary": true, "variant": true, "list": true,
-		"struct": true, "map": true,
+		"uuid": true, "binary": true, "variant": true,
 	}
 )
 
@@ -91,7 +91,10 @@ type commitTableResp struct {
 
 func int64Ptr(v int64) *int64 { return &v }
 
-func decodeScopedJSONBody(r *http.Request, dst any) bool {
+func decodeScopedJSONBody(w http.ResponseWriter, r *http.Request, dst any) bool {
+	if deadline, ok := r.Context().Deadline(); ok {
+		_ = http.NewResponseController(w).SetReadDeadline(deadline)
+	}
 	ct := r.Header.Get("Content-Type")
 	if ct != "" {
 		mt, _, err := mime.ParseMediaType(ct)
@@ -154,7 +157,7 @@ func (s *Server) createScopedNamespace(w http.ResponseWriter, r *http.Request, t
 		return
 	}
 	var req createNamespaceReq
-	if !decodeScopedJSONBody(r, &req) || !scopedIdentifierRe.MatchString(req.Name) {
+	if !decodeScopedJSONBody(w, r, &req) || !scopedIdentifierRe.MatchString(req.Name) {
 		scopedNamespaceRefusal(w, http.StatusBadRequest)
 		return
 	}
@@ -282,36 +285,44 @@ WHERE m.id = 1 AND m.name = ? COLLATE BINARY AND m.dropping = 0
 				Args:            []any{target.catalog, target.namespace, predField, predValue},
 				ExpectScalarInt: int64Ptr(1),
 			},
-			// 1: namespace must have no live tables
+			// 1: if namespace_id fence is supplied, verify it matches the live namespace (409 on recreated object)
+			{
+				SQL: `SELECT COUNT(*) FROM namespaces AS n
+WHERE n.name = ? COLLATE BINARY AND n.dropped_snapshot IS NULL
+  AND (? = 0 OR n.id = ?)`,
+				Args:            []any{target.namespace, target.namespaceID, target.namespaceID},
+				ExpectScalarInt: int64Ptr(1),
+			},
+			// 2: namespace must have no live tables
 			{
 				SQL: `SELECT COUNT(*) FROM namespaces AS n JOIN tables AS t ON t.namespace_id = n.id
 WHERE n.name = ? COLLATE BINARY AND n.dropped_snapshot IS NULL AND t.dropped_snapshot IS NULL`,
 				Args:            []any{target.namespace},
 				ExpectScalarInt: int64Ptr(0),
 			},
-			// 2: allocate snapshot
+			// 3: allocate snapshot
 			{
 				SQL:            `UPDATE meta SET next_snapshot = next_snapshot + 1, schema_version = schema_version + 1 WHERE id = 1 AND name = ? COLLATE BINARY AND dropping = 0`,
 				Args:           []any{target.catalog},
 				ExpectAffected: int64Ptr(1),
 			},
-			// 3: snapshot row
+			// 4: snapshot row
 			{
 				SQL:  `INSERT INTO snapshots(id, ts, author, message, schema_version) SELECT next_snapshot - 1, ?, NULL, 'drop namespace', schema_version FROM meta WHERE id = 1`,
 				Args: []any{nowTS},
 			},
-			// 4: change row (must read id before drop)
+			// 5: change row (must read id before drop)
 			{
 				SQL:  `INSERT INTO changes(snapshot_id, kind, object_id) SELECT m.next_snapshot - 1, 'namespace_dropped', n.id FROM meta AS m JOIN namespaces AS n ON 1 = 1 WHERE m.id = 1 AND n.name = ? COLLATE BINARY AND n.dropped_snapshot IS NULL`,
 				Args: []any{target.namespace},
 			},
-			// 5: mark namespace dropped
+			// 6: mark namespace dropped
 			{
 				SQL:            `UPDATE namespaces SET dropped_snapshot = (SELECT next_snapshot - 1 FROM meta WHERE id = 1) WHERE name = ? COLLATE BINARY AND dropped_snapshot IS NULL AND contained_field = ? COLLATE BINARY AND contained_value = ?`,
 				Args:           []any{target.namespace, predField, predValue},
 				ExpectAffected: int64Ptr(1),
 			},
-			// 6: readback snapshot
+			// 7: readback snapshot
 			{
 				SQL: `SELECT next_snapshot - 1 FROM meta WHERE id = 1`,
 			},
@@ -320,7 +331,7 @@ WHERE n.name = ? COLLATE BINARY AND n.dropped_snapshot IS NULL AND t.dropped_sna
 	if err != nil {
 		var expErr *ExpectFailedError
 		if errors.As(err, &expErr) {
-			if expErr.Index == 1 {
+			if expErr.Index == 1 || expErr.Index == 2 {
 				scopedNamespaceRefusal(w, http.StatusConflict)
 				return
 			}
@@ -334,11 +345,11 @@ WHERE n.name = ? COLLATE BINARY AND n.dropped_snapshot IS NULL AND t.dropped_sna
 		}
 		return
 	}
-	if len(results) != 7 || len(results[6].Rows) != 1 || len(results[6].Rows[0]) != 1 {
+	if len(results) != 8 || len(results[7].Rows) != 1 || len(results[7].Rows[0]) != 1 {
 		scopedNamespaceRefusal(w, http.StatusServiceUnavailable)
 		return
 	}
-	snap, ok := results[6].Rows[0][0].(int64)
+	snap, ok := results[7].Rows[0][0].(int64)
 	if !ok {
 		scopedNamespaceRefusal(w, http.StatusServiceUnavailable)
 		return
@@ -361,7 +372,7 @@ func (s *Server) createScopedTable(w http.ResponseWriter, r *http.Request, targe
 		return
 	}
 	var req createTableReq
-	if !decodeScopedJSONBody(r, &req) || !scopedIdentifierRe.MatchString(req.Name) ||
+	if !decodeScopedJSONBody(w, r, &req) || !scopedIdentifierRe.MatchString(req.Name) ||
 		len(req.Columns) == 0 || len(req.Columns) > scopedMutationMaxColumns {
 		scopedNamespaceRefusal(w, http.StatusBadRequest)
 		return
@@ -372,9 +383,11 @@ func (s *Server) createScopedTable(w http.ResponseWriter, r *http.Request, targe
 			scopedNamespaceRefusal(w, http.StatusBadRequest)
 			return
 		}
-		if len(col.TypeParams) > 0 && !json.Valid(col.TypeParams) {
-			scopedNamespaceRefusal(w, http.StatusBadRequest)
-			return
+		if len(col.TypeParams) > 0 {
+			if _, ok := parseScopedTypeParams(string(col.TypeParams)); !ok {
+				scopedNamespaceRefusal(w, http.StatusBadRequest)
+				return
+			}
 		}
 		seenCols[col.Name] = true
 	}
@@ -475,6 +488,21 @@ SELECT next_table_id - 1, ?, NULL, ?, ?, ?, ?, ?, ?, next_snapshot - 1 FROM meta
 			Comment:    col.Comment,
 		})
 	}
+	// Verify encoded response fits within scopedTableResponseLimit before committing.
+	preview, err := json.Marshal(scopedTableDTO{
+		NamespaceID:    math.MaxInt64,
+		Namespace:      target.namespace,
+		Containment:    scopedNamespaceContainment{Field: predField, Value: predValue},
+		TableID:        math.MaxInt64,
+		TableUUID:      tableUUID,
+		Name:           req.Name,
+		ReadSnapshotID: math.MaxInt64,
+		Columns:        colDTOs,
+	})
+	if err != nil || len(preview) > scopedTableResponseLimit {
+		scopedNamespaceRefusal(w, http.StatusBadRequest)
+		return
+	}
 	readbackIdx := len(stmts)
 	stmts = append(stmts, Statement{
 		SQL: `SELECT n.id, m.next_table_id - 1, m.next_snapshot - 1 FROM meta AS m JOIN namespaces AS n ON 1 = 1
@@ -562,25 +590,34 @@ WHERE m.id = 1 AND m.name = ? COLLATE BINARY AND m.dropping = 0
 				Args:            []any{target.catalog, target.namespace, predField, predValue, target.table},
 				ExpectScalarInt: int64Ptr(1),
 			},
-			// 1: read table_uuid before drop
+			// 1: if table_uuid fence is supplied, verify it matches the live table (409 on recreated object)
+			{
+				SQL: `SELECT COUNT(*) FROM namespaces AS n JOIN tables AS t ON t.namespace_id = n.id
+WHERE n.name = ? COLLATE BINARY AND n.dropped_snapshot IS NULL
+  AND t.name = ? COLLATE BINARY AND t.dropped_snapshot IS NULL
+  AND (? = '' OR t.table_uuid = ? COLLATE BINARY)`,
+				Args:            []any{target.namespace, target.table, target.tableUUID, target.tableUUID},
+				ExpectScalarInt: int64Ptr(1),
+			},
+			// 2: read table_uuid before drop
 			{
 				SQL: `SELECT t.table_uuid FROM namespaces AS n JOIN tables AS t ON t.namespace_id = n.id
 WHERE n.name = ? COLLATE BINARY AND n.dropped_snapshot IS NULL
   AND t.name = ? COLLATE BINARY AND t.dropped_snapshot IS NULL LIMIT 1`,
 				Args: []any{target.namespace, target.table},
 			},
-			// 2: allocate snapshot
+			// 3: allocate snapshot
 			{
 				SQL:            `UPDATE meta SET next_snapshot = next_snapshot + 1, schema_version = schema_version + 1 WHERE id = 1 AND name = ? COLLATE BINARY AND dropping = 0`,
 				Args:           []any{target.catalog},
 				ExpectAffected: int64Ptr(1),
 			},
-			// 3: snapshot row
+			// 4: snapshot row
 			{
 				SQL:  `INSERT INTO snapshots(id, ts, author, message, schema_version) SELECT next_snapshot - 1, ?, NULL, 'drop table', schema_version FROM meta WHERE id = 1`,
 				Args: []any{nowTS},
 			},
-			// 4: change row
+			// 5: change row
 			{
 				SQL: `INSERT INTO changes(snapshot_id, kind, object_id)
 SELECT m.next_snapshot - 1, 'table_dropped', t.id
@@ -589,7 +626,7 @@ WHERE m.id = 1 AND n.name = ? COLLATE BINARY AND n.dropped_snapshot IS NULL
   AND t.name = ? COLLATE BINARY AND t.dropped_snapshot IS NULL`,
 				Args: []any{target.namespace, target.table},
 			},
-			// 5: end live files, dvs, columns, table_versions, and drop table
+			// 6: end live files, dvs, columns, table_versions, and drop table
 			{
 				SQL: `UPDATE files SET end_snapshot = (SELECT next_snapshot - 1 FROM meta WHERE id = 1)
 WHERE table_id = (SELECT t.id FROM namespaces AS n JOIN tables AS t ON t.namespace_id = n.id WHERE n.name = ? COLLATE BINARY AND n.dropped_snapshot IS NULL AND t.name = ? COLLATE BINARY AND t.dropped_snapshot IS NULL)
@@ -621,7 +658,7 @@ WHERE namespace_id = (SELECT id FROM namespaces WHERE name = ? COLLATE BINARY AN
 				Args:           []any{target.namespace, predField, predValue, target.table},
 				ExpectAffected: int64Ptr(1),
 			},
-			// 10: readback snapshot
+			// 11: readback snapshot
 			{
 				SQL: `SELECT next_snapshot - 1 FROM meta WHERE id = 1`,
 			},
@@ -630,6 +667,10 @@ WHERE namespace_id = (SELECT id FROM namespaces WHERE name = ? COLLATE BINARY AN
 	if err != nil {
 		var expErr *ExpectFailedError
 		if errors.As(err, &expErr) {
+			if expErr.Index == 1 {
+				scopedNamespaceRefusal(w, http.StatusConflict)
+				return
+			}
 			scopedNamespaceRefusal(w, http.StatusNotFound)
 			return
 		}
@@ -640,12 +681,12 @@ WHERE namespace_id = (SELECT id FROM namespaces WHERE name = ? COLLATE BINARY AN
 		}
 		return
 	}
-	if len(results) != 11 || len(results[1].Rows) != 1 || len(results[10].Rows) != 1 {
+	if len(results) != 12 || len(results[2].Rows) != 1 || len(results[11].Rows) != 1 {
 		scopedNamespaceRefusal(w, http.StatusServiceUnavailable)
 		return
 	}
-	tableUUID, ok1 := results[1].Rows[0][0].(string)
-	snap, ok2 := results[10].Rows[0][0].(int64)
+	tableUUID, ok1 := results[2].Rows[0][0].(string)
+	snap, ok2 := results[11].Rows[0][0].(int64)
 	if !ok1 || !ok2 {
 		scopedNamespaceRefusal(w, http.StatusServiceUnavailable)
 		return
@@ -671,14 +712,15 @@ func (s *Server) commitScopedTable(w http.ResponseWriter, r *http.Request, targe
 		return
 	}
 	var req commitTableReq
-	if !decodeScopedJSONBody(r, &req) || !isCanonicalLowerUUID(req.TableUUID) || req.BaseSnapshotID < 0 ||
+	if !decodeScopedJSONBody(w, r, &req) || !isCanonicalLowerUUID(req.TableUUID) || req.BaseSnapshotID < 0 ||
 		(len(req.AddFiles) == 0 && len(req.AddDeleteFiles) == 0) ||
 		len(req.AddFiles)+len(req.AddDeleteFiles) > scopedMutationMaxFiles {
 		scopedNamespaceRefusal(w, http.StatusBadRequest)
 		return
 	}
 	// Defense-in-depth: verify every committed data file and deletion vector URI against
-	// the verified primary-catalog write grant prefix before opening any SQLite transaction.
+	// the verified primary-catalog write grant prefix before opening any SQLite transaction,
+	// and guard against int64 overflow in counts and byte totals.
 	var totalAddedRecords, totalAddedBytes int64
 	for _, f := range req.AddFiles {
 		if f.RecordCount < 0 || f.FileSizeBytes < 0 || (f.FooterSize != nil && *f.FooterSize < 0) {
@@ -687,6 +729,10 @@ func (s *Server) commitScopedTable(w http.ResponseWriter, r *http.Request, targe
 		}
 		if !rsa.allowsPrimaryCatalogWriteLocation(target.catalog, f.Path) {
 			scopedNamespaceRefusal(w, http.StatusForbidden)
+			return
+		}
+		if totalAddedRecords > math.MaxInt64-f.RecordCount || totalAddedBytes > math.MaxInt64-f.FileSizeBytes {
+			scopedNamespaceRefusal(w, http.StatusBadRequest)
 			return
 		}
 		totalAddedRecords += f.RecordCount
@@ -739,18 +785,47 @@ WHERE m.id = 1 AND m.name = ? COLLATE BINARY AND m.dropping = 0
 			ExpectScalarInt: int64Ptr(1),
 		},
 	}
-	// Verify every delete target data_file_id belongs to this table and is live (409 Conflict if not).
-	firstDVCheckIdx := len(stmts)
+	// Check live file cap, row-ID / total overflow bounds, and deletion-vector bounds atomically.
+	firstConflictCheckIdx := len(stmts)
+	if len(req.AddFiles) > 0 {
+		stmts = append(stmts,
+			// Keep total live files within scopedScanMaxFiles so head remains readable via scoped scan.
+			Statement{
+				SQL:             `SELECT CASE WHEN (SELECT COUNT(*) FROM files AS f JOIN tables AS t ON f.table_id = t.id WHERE t.table_uuid = ? COLLATE BINARY AND t.dropped_snapshot IS NULL AND f.end_snapshot IS NULL) + ? <= ? THEN 1 ELSE 0 END`,
+				Args:            []any{req.TableUUID, int64(len(req.AddFiles)), int64(scopedScanMaxFiles)},
+				ExpectScalarInt: int64Ptr(1),
+			},
+			// Prevent int64 overflow in tables.next_row_id and table_totals.
+			Statement{
+				SQL: `SELECT COUNT(*) FROM tables AS t JOIN table_totals AS tot ON tot.table_id = t.id
+WHERE t.table_uuid = ? COLLATE BINARY AND t.dropped_snapshot IS NULL
+  AND t.next_row_id <= ? - ?
+  AND tot.record_count <= ? - ?
+  AND tot.file_size_bytes <= ? - ?`,
+				Args: []any{
+					req.TableUUID,
+					int64(math.MaxInt64), totalAddedRecords,
+					int64(math.MaxInt64), totalAddedRecords,
+					int64(math.MaxInt64), totalAddedBytes,
+				},
+				ExpectScalarInt: int64Ptr(1),
+			},
+		)
+	}
 	for _, dv := range req.AddDeleteFiles {
+		// Target file must belong to this table, be live, satisfy delete_count <= record_count,
+		// and never shrink below any existing live deletion vector's delete_count (prevents row resurrection).
 		stmts = append(stmts, Statement{
 			SQL: `SELECT COUNT(*) FROM tables AS t JOIN files AS f ON f.table_id = t.id
 WHERE t.table_uuid = ? COLLATE BINARY AND t.dropped_snapshot IS NULL
-  AND f.id = ? AND f.end_snapshot IS NULL`,
-			Args:            []any{req.TableUUID, dv.DataFileID},
+  AND f.id = ? AND f.end_snapshot IS NULL
+  AND ? <= f.record_count
+  AND ? >= COALESCE((SELECT delete_count FROM dvs WHERE data_file_id = f.id AND end_snapshot IS NULL), 0)`,
+			Args:            []any{req.TableUUID, dv.DataFileID, dv.DeleteCount, dv.DeleteCount},
 			ExpectScalarInt: int64Ptr(1),
 		})
 	}
-	lastDVCheckIdx := len(stmts) - 1
+	lastConflictCheckIdx := len(stmts) - 1
 
 	// Allocate snapshot and file IDs.
 	stmts = append(stmts,
@@ -843,7 +918,7 @@ WHERE m.id = 1 AND t.table_uuid = ? COLLATE BINARY AND t.dropped_snapshot IS NUL
 	if err != nil {
 		var expErr *ExpectFailedError
 		if errors.As(err, &expErr) {
-			if expErr.Index == 1 || (expErr.Index >= firstDVCheckIdx && expErr.Index <= lastDVCheckIdx) {
+			if expErr.Index == 1 || (expErr.Index >= firstConflictCheckIdx && expErr.Index <= lastConflictCheckIdx) {
 				scopedNamespaceRefusal(w, http.StatusConflict)
 				return
 			}
