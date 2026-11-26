@@ -276,6 +276,8 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) (int, any
 	fmt.Fprintf(&b, "hoglite_read_timeouts_total %d\n", m.ReadTimeouts.Load())
 	fmt.Fprintf(&b, "hoglite_write_timeouts_total %d\n", m.WriteTimeouts.Load())
 	fmt.Fprintf(&b, "hoglite_result_too_large_total %d\n", m.ResultTooLarge.Load())
+	fmt.Fprintf(&b, "hoglite_read_session_manifest_reads_total %d\n", m.ReadSessionManifestReads.Load())
+	fmt.Fprintf(&b, "hoglite_read_session_manifest_errors_total %d\n", m.ReadSessionManifestErrors.Load())
 	interruptOK := 0
 	if interruptSupport() == nil {
 		interruptOK = 1

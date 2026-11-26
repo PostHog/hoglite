@@ -48,6 +48,11 @@ type Metrics struct {
 	// included); QueryBatchItems counts the items they carried.
 	QueryBatches    atomic.Int64
 	QueryBatchItems atomic.Int64
+	// ReadSessionManifestReads counts tenant manifest reads completed with
+	// a verified caller AWS session. ReadSessionManifestErrors counts
+	// caller-session manifest reads that failed or expired.
+	ReadSessionManifestReads  atomic.Int64
+	ReadSessionManifestErrors atomic.Int64
 	// CommitEwmaUs is the EWMA of full commit latency (submit to durable
 	// ack) across the pod. It is the primary autoscaling signal: it rises
 	// as soon as S3 queueing starts, well before client-visible timeouts.

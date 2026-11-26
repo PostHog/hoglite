@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -740,4 +741,71 @@ func TestReadSessionPostReadOwnershipLossAndMidRequestExpiry(t *testing.T) {
 			t.Fatalf("plain HTTP S3 endpoint received %d requests, want 0", hits.Load())
 		}
 	})
+
+	t.Run("metrics and logs record caller-session manifest reads without leaking secrets", func(t *testing.T) {
+		f, s3fx, spy, mgr, _, h := newReadSessionOwnerHarness(t)
+		spy.denyManifest.Store(true)
+		manifestPath := "/" + readSessionTestBucket + "/" + manifestKey(readSessionTestPrefix, readSessionTestTenant)
+		s3fx.setCaller("ASIAEXAMPLEALICE0001", "secret-alice-material-only-for-test", "session-token-alice-only-for-test", manifestPath)
+
+		var logBuf strings.Builder
+		var logMu sync.Mutex
+		mgr.metrics.Logger = readSessionTestLogger{mu: &logMu, buf: &logBuf}
+
+		w := scopedNamespaceCall(t, h, readSessionTestPath, "Bearer "+f.token(t, nil))
+		if w.Code != http.StatusOK {
+			t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+		}
+		if got := mgr.metrics.ReadSessionManifestReads.Load(); got != 2 {
+			t.Fatalf("ReadSessionManifestReads=%d, want 2 (pre-check and post-check)", got)
+		}
+		if got := mgr.metrics.ReadSessionManifestErrors.Load(); got != 0 {
+			t.Fatalf("ReadSessionManifestErrors=%d, want 0", got)
+		}
+
+		// Verify /metrics exposes both counters.
+		mw := httptest.NewRecorder()
+		NewServer(mgr, nil).MetricsHandler().ServeHTTP(mw, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+		metricsBody := mw.Body.String()
+		if !strings.Contains(metricsBody, "hoglite_read_session_manifest_reads_total 2\n") {
+			t.Fatalf("/metrics missing read counter:\n%s", metricsBody)
+		}
+		if !strings.Contains(metricsBody, "hoglite_read_session_manifest_errors_total 0\n") {
+			t.Fatalf("/metrics missing error counter:\n%s", metricsBody)
+		}
+
+		// Verify structured log line records caller-read-session and never leaks credentials.
+		logMu.Lock()
+		logged := logBuf.String()
+		logMu.Unlock()
+		wantKey := manifestKey(readSessionTestPrefix, readSessionTestTenant)
+		wantSubstr := fmt.Sprintf("read-session manifest read tenant=%s bucket=%s key=%s source=caller-read-session", readSessionTestTenant, readSessionTestBucket, wantKey)
+		if !strings.Contains(logged, wantSubstr) {
+			t.Fatalf("logs missing %q, got:\n%s", wantSubstr, logged)
+		}
+		for _, secret := range []string{"ASIAEXAMPLEALICE0001", "secret-alice-material-only-for-test", "session-token-alice-only-for-test"} {
+			if strings.Contains(logged, secret) {
+				t.Fatalf("logs leaked credential material %q:\n%s", secret, logged)
+			}
+		}
+
+		// Trigger an S3 refusal on the caller-session manifest read and confirm the error counter increments.
+		s3fx.setCaller("ASIAEXAMPLEALICE0001", "wrong-secret", "wrong-session", manifestPath)
+		ew := scopedNamespaceCall(t, h, readSessionTestPath, "Bearer "+f.token(t, nil))
+		scopedNamespaceWantCode(t, ew, http.StatusServiceUnavailable, "unavailable")
+		if got := mgr.metrics.ReadSessionManifestErrors.Load(); got != 1 {
+			t.Fatalf("ReadSessionManifestErrors=%d, want 1", got)
+		}
+	})
+}
+
+type readSessionTestLogger struct {
+	mu  *sync.Mutex
+	buf *strings.Builder
+}
+
+func (l readSessionTestLogger) Printf(format string, args ...any) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	fmt.Fprintf(l.buf, format+"\n", args...)
 }
