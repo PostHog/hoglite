@@ -55,14 +55,22 @@ type ReadSessionConfig struct {
 	Bucket        string
 	Prefix        string
 	Region        string
+	// Optional case-insensitive regexes blocking all local mutations on matching namespaces
+	// in addition to built-in reserved names (information_schema, team_<digits>).
+	ReadOnlyNamespaces []string
+	// Optional case-insensitive regexes blocking schema create/drop on matching namespaces
+	// while keeping table reads and mutations subject to normal containment checks.
+	ProtectedSchemaLifecycle []string
 }
 
 type readSessionProfile struct {
-	profile       string
-	remoteTargets [2]string
-	bucket        string
-	prefix        string
-	region        string
+	profile                  string
+	remoteTargets            [2]string
+	bucket                   string
+	prefix                   string
+	region                   string
+	readOnlyNamespaces       []*regexp.Regexp
+	protectedSchemaLifecycle []*regexp.Regexp
 }
 
 type readSessionCredentials struct {
@@ -173,13 +181,75 @@ func readSessionConfig(cfg AuthConfig) (*readSessionProfile, error) {
 	if !readSessionRegionRe.MatchString(rs.Region) {
 		return nil, errors.New("invalid read session control region")
 	}
+	readOnlyRes, err := compileNamespacePatterns(rs.ReadOnlyNamespaces)
+	if err != nil {
+		return nil, err
+	}
+	protectedRes, err := compileNamespacePatterns(rs.ProtectedSchemaLifecycle)
+	if err != nil {
+		return nil, err
+	}
 	return &readSessionProfile{
-		profile:       rs.Profile,
-		remoteTargets: [2]string{t0, t1},
-		bucket:        rs.Bucket,
-		prefix:        prefix,
-		region:        rs.Region,
+		profile:                  rs.Profile,
+		remoteTargets:            [2]string{t0, t1},
+		bucket:                   rs.Bucket,
+		prefix:                   prefix,
+		region:                   rs.Region,
+		readOnlyNamespaces:       readOnlyRes,
+		protectedSchemaLifecycle: protectedRes,
 	}, nil
+}
+
+var builtInReadOnlyNamespaceRes = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)^information_schema$`),
+	regexp.MustCompile(`(?i)^team_[0-9]+$`),
+}
+
+func compileNamespacePatterns(patterns []string) ([]*regexp.Regexp, error) {
+	out := make([]*regexp.Regexp, 0, len(patterns))
+	for _, p := range patterns {
+		if strings.TrimSpace(p) == "" {
+			continue
+		}
+		re, err := regexp.Compile("(?i)" + p)
+		if err != nil {
+			return nil, errors.New("invalid namespace pattern")
+		}
+		out = append(out, re)
+	}
+	return out, nil
+}
+
+func (p *readSessionProfile) isReadOnlyNamespace(name string) bool {
+	for _, re := range builtInReadOnlyNamespaceRes {
+		if re.MatchString(name) {
+			return true
+		}
+	}
+	if p == nil {
+		return false
+	}
+	for _, re := range p.readOnlyNamespaces {
+		if re.MatchString(name) {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *readSessionProfile) isProtectedSchemaLifecycle(name string) bool {
+	if p.isReadOnlyNamespace(name) {
+		return true
+	}
+	if p == nil {
+		return false
+	}
+	for _, re := range p.protectedSchemaLifecycle {
+		if re.MatchString(name) {
+			return true
+		}
+	}
+	return false
 }
 
 func validReadSessionBucket(bucket string) bool {

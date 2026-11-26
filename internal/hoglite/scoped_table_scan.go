@@ -33,6 +33,11 @@ const (
 	scopedMetadataKindTables
 	scopedMetadataKindTable
 	scopedMetadataKindScan
+	scopedMetadataKindCreateNamespace
+	scopedMetadataKindDropNamespace
+	scopedMetadataKindCreateTable
+	scopedMetadataKindDropTable
+	scopedMetadataKindCommitTable
 )
 
 type scopedMetadataTarget struct {
@@ -137,9 +142,21 @@ func parseScopedMetadataTarget(r *http.Request) (scopedMetadataTarget, bool) {
 	if raw == "" {
 		raw = r.URL.RequestURI()
 	}
-	if r.Method != http.MethodGet || len(raw) > scopedNamespaceTargetLimit ||
-		r.URL.Fragment != "" || r.ContentLength != 0 ||
-		len(r.TransferEncoding) != 0 || (r.Body != nil && r.Body != http.NoBody) {
+	if len(raw) > scopedNamespaceTargetLimit || r.URL.Fragment != "" {
+		return target, false
+	}
+	switch r.Method {
+	case http.MethodGet:
+		if r.ContentLength != 0 || len(r.TransferEncoding) != 0 || (r.Body != nil && r.Body != http.NoBody) {
+			return target, false
+		}
+	case http.MethodDelete:
+		if r.ContentLength != 0 || len(r.TransferEncoding) != 0 || (r.Body != nil && r.Body != http.NoBody) {
+			return target, false
+		}
+	case http.MethodPost:
+		// Body is validated and size-limited inside the mutation handler.
+	default:
 		return target, false
 	}
 	path := r.URL.EscapedPath()
@@ -155,6 +172,20 @@ func parseScopedMetadataTarget(r *http.Request) (scopedMetadataTarget, bool) {
 		return target, false
 	}
 	if len(parts) == 9 {
+		if r.Method == http.MethodPost {
+			if r.URL.RawQuery != "" || r.URL.ForceQuery || raw != path {
+				return target, false
+			}
+			return scopedMetadataTarget{
+				kind:    scopedMetadataKindCreateNamespace,
+				tenant:  tenant,
+				catalog: catalog,
+				path:    path,
+			}, true
+		}
+		if r.Method != http.MethodGet {
+			return target, false
+		}
 		after, ok := parseScopedListQuery(raw, path, r.URL.RawQuery, r.URL.ForceQuery)
 		if !ok {
 			return target, false
@@ -176,15 +207,43 @@ func parseScopedMetadataTarget(r *http.Request) (scopedMetadataTarget, bool) {
 		if r.URL.RawQuery != "" || r.URL.ForceQuery || raw != path {
 			return target, false
 		}
-		return scopedMetadataTarget{
-			kind:      scopedMetadataKindNamespace,
-			tenant:    tenant,
-			catalog:   catalog,
-			namespace: namespace,
-			path:      path,
-		}, true
+		switch r.Method {
+		case http.MethodGet:
+			return scopedMetadataTarget{
+				kind:      scopedMetadataKindNamespace,
+				tenant:    tenant,
+				catalog:   catalog,
+				namespace: namespace,
+				path:      path,
+			}, true
+		case http.MethodDelete:
+			return scopedMetadataTarget{
+				kind:      scopedMetadataKindDropNamespace,
+				tenant:    tenant,
+				catalog:   catalog,
+				namespace: namespace,
+				path:      path,
+			}, true
+		default:
+			return target, false
+		}
 	case 11:
 		if parts[10] != "tables" {
+			return target, false
+		}
+		if r.Method == http.MethodPost {
+			if r.URL.RawQuery != "" || r.URL.ForceQuery || raw != path {
+				return target, false
+			}
+			return scopedMetadataTarget{
+				kind:      scopedMetadataKindCreateTable,
+				tenant:    tenant,
+				catalog:   catalog,
+				namespace: namespace,
+				path:      path,
+			}, true
+		}
+		if r.Method != http.MethodGet {
 			return target, false
 		}
 		after, ok := parseScopedListQuery(raw, path, r.URL.RawQuery, r.URL.ForceQuery)
@@ -207,20 +266,50 @@ func parseScopedMetadataTarget(r *http.Request) (scopedMetadataTarget, bool) {
 		if !ok {
 			return target, false
 		}
-		return scopedMetadataTarget{
-			kind:      scopedMetadataKindTable,
-			tenant:    tenant,
-			catalog:   catalog,
-			namespace: namespace,
-			table:     table,
-			path:      path,
-		}, true
+		switch r.Method {
+		case http.MethodGet:
+			return scopedMetadataTarget{
+				kind:      scopedMetadataKindTable,
+				tenant:    tenant,
+				catalog:   catalog,
+				namespace: namespace,
+				table:     table,
+				path:      path,
+			}, true
+		case http.MethodDelete:
+			return scopedMetadataTarget{
+				kind:      scopedMetadataKindDropTable,
+				tenant:    tenant,
+				catalog:   catalog,
+				namespace: namespace,
+				table:     table,
+				path:      path,
+			}, true
+		default:
+			return target, false
+		}
 	case 13:
-		if parts[10] != "tables" || parts[12] != "scan" || r.URL.RawQuery == "" || raw != path+"?"+r.URL.RawQuery {
+		if parts[10] != "tables" {
 			return target, false
 		}
 		table, ok := decodeScopedSegment(parts[11])
 		if !ok {
+			return target, false
+		}
+		if parts[12] == "commit" && r.Method == http.MethodPost {
+			if r.URL.RawQuery != "" || r.URL.ForceQuery || raw != path {
+				return target, false
+			}
+			return scopedMetadataTarget{
+				kind:      scopedMetadataKindCommitTable,
+				tenant:    tenant,
+				catalog:   catalog,
+				namespace: namespace,
+				table:     table,
+				path:      path,
+			}, true
+		}
+		if parts[12] != "scan" || r.Method != http.MethodGet || r.URL.RawQuery == "" || raw != path+"?"+r.URL.RawQuery {
 			return target, false
 		}
 		snapshot, tableUUID, ok := parseScopedScanQuery(r.URL.RawQuery)
