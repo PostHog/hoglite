@@ -10,6 +10,7 @@ import (
 	"mime"
 	"net/http"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -300,29 +301,36 @@ WHERE n.name = ? COLLATE BINARY AND n.dropped_snapshot IS NULL AND t.dropped_sna
 				Args:            []any{target.namespace},
 				ExpectScalarInt: int64Ptr(0),
 			},
-			// 3: allocate snapshot
+			// 3: namespace must have no live views
+			{
+				SQL: `SELECT COUNT(*) FROM namespaces AS n JOIN views AS v ON v.namespace_id = n.id
+WHERE n.name = ? COLLATE BINARY AND n.dropped_snapshot IS NULL AND v.dropped_snapshot IS NULL`,
+				Args:            []any{target.namespace},
+				ExpectScalarInt: int64Ptr(0),
+			},
+			// 4: allocate snapshot
 			{
 				SQL:            `UPDATE meta SET next_snapshot = next_snapshot + 1, schema_version = schema_version + 1 WHERE id = 1 AND name = ? COLLATE BINARY AND dropping = 0`,
 				Args:           []any{target.catalog},
 				ExpectAffected: int64Ptr(1),
 			},
-			// 4: snapshot row
+			// 5: snapshot row
 			{
 				SQL:  `INSERT INTO snapshots(id, ts, author, message, schema_version) SELECT next_snapshot - 1, ?, NULL, 'drop namespace', schema_version FROM meta WHERE id = 1`,
 				Args: []any{nowTS},
 			},
-			// 5: change row (must read id before drop)
+			// 6: change row (must read id before drop)
 			{
 				SQL:  `INSERT INTO changes(snapshot_id, kind, object_id) SELECT m.next_snapshot - 1, 'namespace_dropped', n.id FROM meta AS m JOIN namespaces AS n ON 1 = 1 WHERE m.id = 1 AND n.name = ? COLLATE BINARY AND n.dropped_snapshot IS NULL`,
 				Args: []any{target.namespace},
 			},
-			// 6: mark namespace dropped
+			// 7: mark namespace dropped
 			{
 				SQL:            `UPDATE namespaces SET dropped_snapshot = (SELECT next_snapshot - 1 FROM meta WHERE id = 1) WHERE name = ? COLLATE BINARY AND dropped_snapshot IS NULL AND contained_field = ? COLLATE BINARY AND contained_value = ?`,
 				Args:           []any{target.namespace, predField, predValue},
 				ExpectAffected: int64Ptr(1),
 			},
-			// 7: readback snapshot
+			// 8: readback snapshot
 			{
 				SQL: `SELECT next_snapshot - 1 FROM meta WHERE id = 1`,
 			},
@@ -331,7 +339,7 @@ WHERE n.name = ? COLLATE BINARY AND n.dropped_snapshot IS NULL AND t.dropped_sna
 	if err != nil {
 		var expErr *ExpectFailedError
 		if errors.As(err, &expErr) {
-			if expErr.Index == 1 || expErr.Index == 2 {
+			if expErr.Index == 1 || expErr.Index == 2 || expErr.Index == 3 {
 				scopedNamespaceRefusal(w, http.StatusConflict)
 				return
 			}
@@ -345,11 +353,11 @@ WHERE n.name = ? COLLATE BINARY AND n.dropped_snapshot IS NULL AND t.dropped_sna
 		}
 		return
 	}
-	if len(results) != 8 || len(results[7].Rows) != 1 || len(results[7].Rows[0]) != 1 {
+	if len(results) != 9 || len(results[8].Rows) != 1 || len(results[8].Rows[0]) != 1 {
 		scopedNamespaceRefusal(w, http.StatusServiceUnavailable)
 		return
 	}
-	snap, ok := results[7].Rows[0][0].(int64)
+	snap, ok := results[8].Rows[0][0].(int64)
 	if !ok {
 		scopedNamespaceRefusal(w, http.StatusServiceUnavailable)
 		return
@@ -379,7 +387,8 @@ func (s *Server) createScopedTable(w http.ResponseWriter, r *http.Request, targe
 	}
 	seenCols := make(map[string]bool, len(req.Columns))
 	for _, col := range req.Columns {
-		if !scopedIdentifierRe.MatchString(col.Name) || seenCols[col.Name] || !scopedColumnTypes[col.Type] {
+		if !scopedIdentifierRe.MatchString(col.Name) || strings.HasPrefix(col.Name, "_hog") ||
+			seenCols[col.Name] || !scopedColumnTypes[col.Type] {
 			scopedNamespaceRefusal(w, http.StatusBadRequest)
 			return
 		}
@@ -626,19 +635,7 @@ WHERE m.id = 1 AND n.name = ? COLLATE BINARY AND n.dropped_snapshot IS NULL
   AND t.name = ? COLLATE BINARY AND t.dropped_snapshot IS NULL`,
 				Args: []any{target.namespace, target.table},
 			},
-			// 6: end live files, dvs, columns, table_versions, and drop table
-			{
-				SQL: `UPDATE files SET end_snapshot = (SELECT next_snapshot - 1 FROM meta WHERE id = 1)
-WHERE table_id = (SELECT t.id FROM namespaces AS n JOIN tables AS t ON t.namespace_id = n.id WHERE n.name = ? COLLATE BINARY AND n.dropped_snapshot IS NULL AND t.name = ? COLLATE BINARY AND t.dropped_snapshot IS NULL)
-  AND end_snapshot IS NULL`,
-				Args: []any{target.namespace, target.table},
-			},
-			{
-				SQL: `UPDATE dvs SET end_snapshot = (SELECT next_snapshot - 1 FROM meta WHERE id = 1)
-WHERE table_id = (SELECT t.id FROM namespaces AS n JOIN tables AS t ON t.namespace_id = n.id WHERE n.name = ? COLLATE BINARY AND n.dropped_snapshot IS NULL AND t.name = ? COLLATE BINARY AND t.dropped_snapshot IS NULL)
-  AND end_snapshot IS NULL`,
-				Args: []any{target.namespace, target.table},
-			},
+			// 6: end live columns, table_versions, and mark table dropped (leave file/DV retirement to batched worker)
 			{
 				SQL: `UPDATE columns SET end_snapshot = (SELECT next_snapshot - 1 FROM meta WHERE id = 1)
 WHERE table_id = (SELECT t.id FROM namespaces AS n JOIN tables AS t ON t.namespace_id = n.id WHERE n.name = ? COLLATE BINARY AND n.dropped_snapshot IS NULL AND t.name = ? COLLATE BINARY AND t.dropped_snapshot IS NULL)
@@ -658,7 +655,7 @@ WHERE namespace_id = (SELECT id FROM namespaces WHERE name = ? COLLATE BINARY AN
 				Args:           []any{target.namespace, predField, predValue, target.table},
 				ExpectAffected: int64Ptr(1),
 			},
-			// 11: readback snapshot
+			// 9: readback snapshot
 			{
 				SQL: `SELECT next_snapshot - 1 FROM meta WHERE id = 1`,
 			},
@@ -681,12 +678,12 @@ WHERE namespace_id = (SELECT id FROM namespaces WHERE name = ? COLLATE BINARY AN
 		}
 		return
 	}
-	if len(results) != 12 || len(results[2].Rows) != 1 || len(results[11].Rows) != 1 {
+	if len(results) != 10 || len(results[2].Rows) != 1 || len(results[9].Rows) != 1 {
 		scopedNamespaceRefusal(w, http.StatusServiceUnavailable)
 		return
 	}
 	tableUUID, ok1 := results[2].Rows[0][0].(string)
-	snap, ok2 := results[11].Rows[0][0].(int64)
+	snap, ok2 := results[9].Rows[0][0].(int64)
 	if !ok1 || !ok2 {
 		scopedNamespaceRefusal(w, http.StatusServiceUnavailable)
 		return
@@ -785,8 +782,39 @@ WHERE m.id = 1 AND m.name = ? COLLATE BINARY AND m.dropping = 0
 			ExpectScalarInt: int64Ptr(1),
 		},
 	}
-	// Check live file cap, row-ID / total overflow bounds, and deletion-vector bounds atomically.
+	// Check table_layouts, undrained file removals, live file cap, row-ID / total overflow bounds, and DV bounds atomically.
 	firstConflictCheckIdx := len(stmts)
+	// Reject tables with an active object-prefix layout or active partition spec on data-file appends
+	// until local commit carries partition values.
+	stmts = append(stmts, Statement{
+		SQL: `SELECT COUNT(*) FROM table_layouts AS l JOIN tables AS t ON l.table_id = t.id
+WHERE t.table_uuid = ? COLLATE BINARY AND t.dropped_snapshot IS NULL AND l.end_snapshot IS NULL`,
+		Args:            []any{req.TableUUID},
+		ExpectScalarInt: int64Ptr(0),
+	})
+	if len(req.AddFiles) > 0 {
+		stmts = append(stmts, Statement{
+			SQL: `SELECT COUNT(*) FROM partition_specs AS ps JOIN tables AS t ON ps.table_id = t.id
+WHERE t.table_uuid = ? COLLATE BINARY AND t.dropped_snapshot IS NULL AND ps.end_snapshot IS NULL`,
+			Args:            []any{req.TableUUID},
+			ExpectScalarInt: int64Ptr(0),
+		})
+	}
+	// Fence every added data file and deletion vector against undrained cleanup removals.
+	for _, f := range req.AddFiles {
+		stmts = append(stmts, Statement{
+			SQL:             `SELECT COUNT(*) FROM removals WHERE path = ? COLLATE BINARY AND drained_at IS NULL`,
+			Args:            []any{f.Path},
+			ExpectScalarInt: int64Ptr(0),
+		})
+	}
+	for _, dv := range req.AddDeleteFiles {
+		stmts = append(stmts, Statement{
+			SQL:             `SELECT COUNT(*) FROM removals WHERE path = ? COLLATE BINARY AND drained_at IS NULL`,
+			Args:            []any{dv.Path},
+			ExpectScalarInt: int64Ptr(0),
+		})
+	}
 	if len(req.AddFiles) > 0 {
 		stmts = append(stmts,
 			// Keep total live files within scopedScanMaxFiles so head remains readable via scoped scan.
