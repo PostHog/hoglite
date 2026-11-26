@@ -60,6 +60,7 @@ func TestScopedMutationsLifecycleAndSecurity(t *testing.T) {
 		Statement{SQL: `CREATE TABLE IF NOT EXISTS views(id INTEGER PRIMARY KEY, namespace_id INTEGER NOT NULL, namespace TEXT NOT NULL, name TEXT NOT NULL, view_uuid TEXT NOT NULL UNIQUE, dialect TEXT NOT NULL, sql_text TEXT NOT NULL, created_snapshot INTEGER NOT NULL, dropped_snapshot INTEGER)`},
 		Statement{SQL: `CREATE TABLE IF NOT EXISTS removals(id INTEGER PRIMARY KEY, path TEXT NOT NULL, file_kind TEXT NOT NULL, reason TEXT NOT NULL, queued_snapshot INTEGER NOT NULL, queued_at TEXT NOT NULL, drained_at TEXT)`},
 		Statement{SQL: `CREATE TABLE IF NOT EXISTS table_layouts(table_id INTEGER NOT NULL, begin_snapshot INTEGER NOT NULL, end_snapshot INTEGER, object_prefix_field_id INTEGER NOT NULL, PRIMARY KEY(table_id, begin_snapshot))`},
+		Statement{SQL: `CREATE TABLE IF NOT EXISTS partition_specs(table_id INTEGER NOT NULL, spec_id INTEGER NOT NULL, fields_json TEXT NOT NULL, begin_snapshot INTEGER NOT NULL, end_snapshot INTEGER, PRIMARY KEY(table_id, spec_id))`},
 	)
 	// Configure optional post-neutral patterns: reserved_ro (all mutations blocked) and managed_team_<digits> (schema create/drop blocked).
 	roRes, err := compileNamespacePatterns([]string{`^reserved_ro$`})

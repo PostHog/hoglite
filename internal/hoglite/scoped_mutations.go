@@ -796,13 +796,22 @@ WHERE m.id = 1 AND m.name = ? COLLATE BINARY AND m.dropping = 0
 	}
 	// Check table_layouts, undrained file removals, live file cap, row-ID / total overflow bounds, and DV bounds atomically.
 	firstConflictCheckIdx := len(stmts)
-	// Reject tables with an active object-prefix layout until local commit carries partition values.
+	// Reject tables with an active object-prefix layout or active partition spec on data-file appends
+	// until local commit carries partition values.
 	stmts = append(stmts, Statement{
 		SQL: `SELECT COUNT(*) FROM table_layouts AS l JOIN tables AS t ON l.table_id = t.id
 WHERE t.table_uuid = ? COLLATE BINARY AND t.dropped_snapshot IS NULL AND l.end_snapshot IS NULL`,
 		Args:            []any{req.TableUUID},
 		ExpectScalarInt: int64Ptr(0),
 	})
+	if len(req.AddFiles) > 0 {
+		stmts = append(stmts, Statement{
+			SQL: `SELECT COUNT(*) FROM partition_specs AS ps JOIN tables AS t ON ps.table_id = t.id
+WHERE t.table_uuid = ? COLLATE BINARY AND t.dropped_snapshot IS NULL AND ps.end_snapshot IS NULL`,
+			Args:            []any{req.TableUUID},
+			ExpectScalarInt: int64Ptr(0),
+		})
+	}
 	// Fence every added data file and deletion vector against undrained cleanup removals.
 	for _, f := range req.AddFiles {
 		stmts = append(stmts, Statement{
