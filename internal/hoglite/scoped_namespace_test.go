@@ -230,7 +230,7 @@ func TestScopedNamespaceRequestShape(t *testing.T) {
 	} {
 		scopedNamespaceWantCode(t, scopedNamespaceCall(t, h, path, token), 400, "invalid_request")
 	}
-	for _, method := range []string{http.MethodHead, http.MethodPost, http.MethodPut, http.MethodDelete} {
+	for _, method := range []string{http.MethodHead, http.MethodPost, http.MethodPut} {
 		r := httptest.NewRequest(method, scopedNamespaceTestPath, nil)
 		r.Header.Set("Authorization", token)
 		w := httptest.NewRecorder()

@@ -116,6 +116,8 @@ func main() {
 		rsRegion        = flag.String("scoped-namespace-read-session-region", envOr("HL_SCOPED_NAMESPACE_READ_SESSION_REGION", ""), "exact AWS region for caller-credential manifest reads")
 		rsEndpoint      = flag.String("scoped-namespace-read-session-s3-endpoint", envOr("HL_SCOPED_NAMESPACE_READ_SESSION_S3_ENDPOINT", ""), "optional HTTPS S3 endpoint URL for caller-credential manifest reads")
 		rsPathStyle     = flag.Bool("scoped-namespace-read-session-s3-path-style", envBool("HL_SCOPED_NAMESPACE_READ_SESSION_S3_PATH_STYLE", false), "use path-style S3 requests for caller-credential manifest reads")
+		rsReadOnlyNs    = flag.String("scoped-namespace-read-only-patterns", envOr("HL_SCOPED_NAMESPACE_READ_ONLY_PATTERNS", ""), "optional comma-separated case-insensitive regexes blocking all mutations on matching namespaces")
+		rsProtectedNs   = flag.String("scoped-namespace-protected-schema-patterns", envOr("HL_SCOPED_NAMESPACE_PROTECTED_SCHEMA_PATTERNS", ""), "optional comma-separated case-insensitive regexes blocking schema create/drop on matching namespaces")
 	)
 	flag.Parse()
 	metricsAddr, err := metricsAddress(*addr, *metricsPort)
@@ -129,6 +131,14 @@ func main() {
 	readSession, readSessionS3, err := buildReadSessionConfig(*rsProfile, *rsTargets, *bucket, *prefix, *rsRegion, *rsEndpoint, *rsPathStyle)
 	if err != nil {
 		log.Fatal(err)
+	}
+	if readSession != nil {
+		if *rsReadOnlyNs != "" {
+			readSession.ReadOnlyNamespaces = strings.Split(*rsReadOnlyNs, ",")
+		}
+		if *rsProtectedNs != "" {
+			readSession.ProtectedSchemaLifecycle = strings.Split(*rsProtectedNs, ",")
+		}
 	}
 	auth, err := hoglite.NewJWTAuth(context.Background(), hoglite.AuthConfig{
 		Mode: *authMode, Issuer: *authIssuer, BackendID: *authBackend, JWKSFile: *authFile, JWKSURL: *authURL,

@@ -406,7 +406,7 @@ func TestScopedTableAndScanDefaultOffAndRequestShape(t *testing.T) {
 	for _, target := range badTargets {
 		scopedNamespaceWantCode(t, scopedNamespaceCall(t, h, target, token), http.StatusBadRequest, "invalid_request")
 	}
-	for _, method := range []string{http.MethodHead, http.MethodPost, http.MethodPut, http.MethodDelete} {
+	for _, method := range []string{http.MethodHead, http.MethodPost, http.MethodPut} {
 		for _, path := range []string{scopedTableTestPath, scopedScanTestPath + "?snapshot=5&table_uuid=" + scopedTestUUID1} {
 			r := httptest.NewRequest(method, path, nil)
 			r.Header.Set("Authorization", token)
@@ -414,6 +414,21 @@ func TestScopedTableAndScanDefaultOffAndRequestShape(t *testing.T) {
 			h.ServeHTTP(w, r)
 			scopedNamespaceWantCode(t, w, http.StatusBadRequest, "invalid_request")
 		}
+	}
+	// DELETE is invalid on scan and forbidden for a read-only token on a table.
+	{
+		r := httptest.NewRequest(http.MethodDelete, scopedScanTestPath+"?snapshot=5&table_uuid="+scopedTestUUID1, nil)
+		r.Header.Set("Authorization", token)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		scopedNamespaceWantCode(t, w, http.StatusBadRequest, "invalid_request")
+	}
+	{
+		r := httptest.NewRequest(http.MethodDelete, scopedTableTestPath, nil)
+		r.Header.Set("Authorization", token)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		scopedNamespaceWantCode(t, w, http.StatusForbidden, "forbidden")
 	}
 	r := httptest.NewRequest(http.MethodGet, scopedTableTestPath, strings.NewReader("{}"))
 	r.Header.Set("Authorization", token)

@@ -122,6 +122,8 @@ func scopedNamespaceRefusal(w http.ResponseWriter, status int) {
 		code = "forbidden"
 	case http.StatusNotFound:
 		code = "not_found"
+	case http.StatusConflict:
+		code = "conflict"
 	}
 	scopedNamespaceReply(w, status, map[string]string{"code": code})
 }
@@ -186,6 +188,16 @@ func (s *Server) serveScopedNamespace(w http.ResponseWriter, r *http.Request) {
 			s.readScopedTable(w, r, target, rsa, t, getManifest)
 		case scopedMetadataKindScan:
 			s.readScopedScan(w, r, target, rsa, t, getManifest)
+		case scopedMetadataKindCreateNamespace:
+			s.createScopedNamespace(w, r, target, rsa, t, getManifest)
+		case scopedMetadataKindDropNamespace:
+			s.dropScopedNamespace(w, r, target, rsa, t, getManifest)
+		case scopedMetadataKindCreateTable:
+			s.createScopedTable(w, r, target, rsa, t, getManifest)
+		case scopedMetadataKindDropTable:
+			s.dropScopedTable(w, r, target, rsa, t, getManifest)
+		case scopedMetadataKindCommitTable:
+			s.commitScopedTable(w, r, target, rsa, t, getManifest)
 		default:
 			scopedNamespaceRefusal(w, http.StatusBadRequest)
 		}
