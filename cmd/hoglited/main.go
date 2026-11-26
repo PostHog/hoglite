@@ -310,9 +310,13 @@ func main() {
 	case <-time.After(30 * time.Second):
 		log.Printf("drain timed out; exiting anyway")
 	}
-	fmt.Println(httpSrv.Shutdown(context.Background()))
+	if err := httpSrv.Shutdown(context.Background()); err != nil {
+		log.Printf("http shutdown: %v", err)
+	}
 	if metricsSrv != nil {
-		fmt.Println(metricsSrv.Shutdown(context.Background()))
+		if err := metricsSrv.Shutdown(context.Background()); err != nil {
+			log.Printf("metrics shutdown: %v", err)
+		}
 	}
 }
 

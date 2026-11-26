@@ -828,10 +828,20 @@ func TestReadSessionPostReadOwnershipLossAndMidRequestExpiry(t *testing.T) {
 		t.Cleanup(func() { close(unblock) })
 		mgr.metrics.ReadSessionLogger = blockingTestLogger{entered: entered, unblock: unblock}
 
-		// First read starts the worker and stalls it inside Printf.
-		w0 := scopedNamespaceCall(t, h, readSessionTestPath, "Bearer "+f.token(t, nil))
-		if w0.Code != http.StatusOK {
-			t.Fatalf("initial status=%d, want 200", w0.Code)
+		// First read starts the worker and stalls it inside Printf. Run it in a
+		// goroutine so a synchronous regression fails by timeout instead of hanging.
+		firstDone := make(chan int, 1)
+		go func() {
+			w0 := scopedNamespaceCall(t, h, readSessionTestPath, "Bearer "+f.token(t, nil))
+			firstDone <- w0.Code
+		}()
+		select {
+		case code := <-firstDone:
+			if code != http.StatusOK {
+				t.Fatalf("initial status=%d, want 200", code)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("initial scoped read blocked on stalled ReadSessionLogger")
 		}
 		select {
 		case <-entered:
