@@ -30,17 +30,27 @@ import (
 // logger for caller-session manifest reads backed by a duplicated stdout
 // descriptor (fd > 2). Using a non-standard fd avoids os.Stderr lock
 // contention with log.Default() and turns a broken stdout pipe into a normal
-// EPIPE error instead of Go's SIGPIPE process termination on fd 1/2.
+// EPIPE error instead of Go's SIGPIPE process termination on fd 1/2. When
+// stdout and stderr refer to the same underlying file or pipe (for example
+// `hoglited 2>&1 | ...`), diagnostics are discarded so they cannot fill the
+// shared pipe buffer and stall shutdown logging.
 func newDaemonMetrics() *hoglite.Metrics {
 	return &hoglite.Metrics{
 		Logger:            log.Default(),
-		ReadSessionLogger: log.New(newReadSessionLogWriter(os.Stdout), "", log.LstdFlags),
+		ReadSessionLogger: log.New(newReadSessionLogWriter(os.Stdout, os.Stderr), "", log.LstdFlags),
 	}
 }
 
-func newReadSessionLogWriter(target *os.File) io.Writer {
+func newReadSessionLogWriter(target, daemonErr *os.File) io.Writer {
 	if target == nil {
 		return io.Discard
+	}
+	if daemonErr != nil {
+		tInfo, tErr := target.Stat()
+		eInfo, eErr := daemonErr.Stat()
+		if tErr == nil && eErr == nil && os.SameFile(tInfo, eInfo) {
+			return io.Discard
+		}
 	}
 	fd, err := syscall.Dup(int(target.Fd()))
 	if err != nil {

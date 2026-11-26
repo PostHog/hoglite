@@ -1,6 +1,7 @@
 package main
 
 import (
+	"io"
 	"log"
 	"os"
 	"testing"
@@ -82,13 +83,16 @@ func TestNewDaemonMetricsSeparatesReadSessionLoggerWriter(t *testing.T) {
 	if daemonLog.Writer() == rsLog.Writer() {
 		t.Fatalf("ReadSessionLogger shares underlying io.Writer (%v) with daemon Logger", rsLog.Writer())
 	}
-	f, ok := rsLog.Writer().(*os.File)
-	if !ok {
-		t.Fatalf("ReadSessionLogger writer type = %T, want *os.File", rsLog.Writer())
-	}
-	t.Cleanup(func() { _ = f.Close() })
-	if f.Fd() <= 2 {
-		t.Fatalf("ReadSessionLogger fd = %d, want > 2 to avoid Go SIGPIPE on fd 1/2", f.Fd())
+	switch w := rsLog.Writer().(type) {
+	case *os.File:
+		t.Cleanup(func() { _ = w.Close() })
+		if w.Fd() <= 2 {
+			t.Fatalf("ReadSessionLogger fd = %d, want > 2 to avoid Go SIGPIPE on fd 1/2", w.Fd())
+		}
+	default:
+		if w != io.Discard {
+			t.Fatalf("ReadSessionLogger writer = %T, want *os.File or io.Discard", w)
+		}
 	}
 }
 
@@ -98,8 +102,14 @@ func TestReadSessionLogWriterSurvivesClosedPipe(t *testing.T) {
 		t.Fatalf("os.Pipe: %v", err)
 	}
 	defer w.Close()
+	rErr, wErr, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe stderr: %v", err)
+	}
+	defer rErr.Close()
+	defer wErr.Close()
 
-	diagW := newReadSessionLogWriter(w)
+	diagW := newReadSessionLogWriter(w, wErr)
 	f, ok := diagW.(*os.File)
 	if !ok {
 		t.Fatalf("writer type = %T, want *os.File", diagW)
@@ -115,5 +125,22 @@ func TestReadSessionLogWriterSurvivesClosedPipe(t *testing.T) {
 	}
 	if _, err := f.Write([]byte("read-session manifest read test\n")); err == nil {
 		t.Fatal("expected EPIPE write error after closing pipe reader, got nil")
+	}
+}
+
+func TestReadSessionLogWriterDropsWhenMergedWithStderr(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	defer r.Close()
+	defer w.Close()
+
+	// Same underlying pipe for stdout and stderr (e.g. `hoglited 2>&1 | ...`) must discard diagnostics.
+	if got := newReadSessionLogWriter(w, w); got != io.Discard {
+		if f, ok := got.(*os.File); ok {
+			_ = f.Close()
+		}
+		t.Fatalf("merged stdout/stderr writer = %T, want io.Discard", got)
 	}
 }
