@@ -357,6 +357,7 @@ func TestReadSessionHoglakeConformanceVectors(t *testing.T) {
 			Expect struct {
 				Read     string `json:"read"`
 				Ordinary string `json:"ordinary"`
+				Writable bool   `json:"writable"`
 			} `json:"expect"`
 		} `json:"vectors"`
 	}
@@ -403,13 +404,29 @@ func TestReadSessionHoglakeConformanceVectors(t *testing.T) {
 				if claims.subject != vec.Claims.Sub {
 					t.Fatalf("subject=%q want %q", claims.subject, vec.Claims.Sub)
 				}
+				if claims.writable != vec.Expect.Writable {
+					t.Fatalf("writable=%v want %v", claims.writable, vec.Expect.Writable)
+				}
 				// Also verify full route + storage target binding succeeds.
 				rsa, err := readAuth.verifyReadSession(context.Background(), vec.Token, "fixture_3", "example-catalog")
 				if err != nil {
 					t.Fatalf("route binding failed: %v", err)
 				}
+				if rsa.writable != vec.Expect.Writable {
+					t.Fatalf("authority writable=%v want %v", rsa.writable, vec.Expect.Writable)
+				}
 				if !rsa.authority.permits("team_id", 42) || rsa.authority.permits("team_id", 43) {
 					t.Fatal("bound predicate permissions differ")
+				}
+				if vec.Expect.Writable {
+					if !rsa.allowsPrimaryCatalogWriteLocation("example-catalog", "s3://example-customer/data/team_42/part.parquet") {
+						t.Fatal("writable session denied in-prefix primary catalog write")
+					}
+					if rsa.allowsPrimaryCatalogWriteLocation("example-catalog", "s3://example-customer/data/team_43/part.parquet") {
+						t.Fatal("writable session allowed sibling team primary catalog write")
+					}
+				} else if rsa.allowsPrimaryCatalogWriteLocation("example-catalog", "s3://example-customer/tables/data.parquet") {
+					t.Fatal("read-only session allowed primary catalog write")
 				}
 			} else {
 				var rerr *readSessionError

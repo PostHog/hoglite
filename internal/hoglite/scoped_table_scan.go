@@ -6,9 +6,12 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 )
@@ -16,6 +19,8 @@ import (
 const (
 	scopedTableResponseLimit = 256 << 10
 	scopedScanResponseLimit  = 1 << 20
+	scopedListResponseLimit  = 256 << 10
+	scopedListMaxItems       = 1000
 	scopedScanMaxFiles       = 1000
 	scopedColumnMaxDepth     = 64
 )
@@ -23,7 +28,9 @@ const (
 type scopedMetadataKind int
 
 const (
-	scopedMetadataKindNamespace scopedMetadataKind = iota + 1
+	scopedMetadataKindNamespaces scopedMetadataKind = iota + 1
+	scopedMetadataKindNamespace
+	scopedMetadataKindTables
 	scopedMetadataKindTable
 	scopedMetadataKindScan
 )
@@ -34,6 +41,7 @@ type scopedMetadataTarget struct {
 	catalog   string
 	namespace string
 	table     string
+	after     string
 	snapshot  int64
 	tableUUID string
 	path      string
@@ -46,6 +54,24 @@ func (t scopedMetadataTarget) namespaceTarget() scopedNamespaceTarget {
 		namespace: t.namespace,
 		path:      t.path,
 	}
+}
+
+type scopedNamespacesDTO struct {
+	Namespaces []scopedNamespaceDTO `json:"namespaces"`
+	NextAfter  string               `json:"next_after,omitempty"`
+}
+
+type scopedTablesDTO struct {
+	NamespaceID int64                 `json:"namespace_id"`
+	Namespace   string                `json:"namespace"`
+	Tables      []scopedTableEntryDTO `json:"tables"`
+	NextAfter   string                `json:"next_after,omitempty"`
+}
+
+type scopedTableEntryDTO struct {
+	TableID   int64  `json:"table_id"`
+	TableUUID string `json:"table_uuid"`
+	Name      string `json:"name"`
 }
 
 type scopedTableDTO struct {
@@ -118,15 +144,31 @@ func parseScopedMetadataTarget(r *http.Request) (scopedMetadataTarget, bool) {
 	}
 	path := r.URL.EscapedPath()
 	parts := strings.Split(path, "/")
-	if len(parts) < 10 || parts[0] != "" || parts[1] != "v1" ||
+	if len(parts) < 9 || parts[0] != "" || parts[1] != "v1" ||
 		parts[2] != "t" || parts[4] != "metadata" || parts[5] != "v1" ||
 		parts[6] != "catalogs" || parts[8] != "namespaces" {
 		return target, false
 	}
 	tenant, ok1 := decodeScopedSegment(parts[3])
 	catalog, ok2 := decodeScopedSegment(parts[7])
+	if !ok1 || !ok2 || !validTID(tenant) {
+		return target, false
+	}
+	if len(parts) == 9 {
+		after, ok := parseScopedListQuery(raw, path, r.URL.RawQuery, r.URL.ForceQuery)
+		if !ok {
+			return target, false
+		}
+		return scopedMetadataTarget{
+			kind:    scopedMetadataKindNamespaces,
+			tenant:  tenant,
+			catalog: catalog,
+			after:   after,
+			path:    path,
+		}, true
+	}
 	namespace, ok3 := decodeScopedSegment(parts[9])
-	if !ok1 || !ok2 || !ok3 || !validTID(tenant) {
+	if !ok3 {
 		return target, false
 	}
 	switch len(parts) {
@@ -139,6 +181,22 @@ func parseScopedMetadataTarget(r *http.Request) (scopedMetadataTarget, bool) {
 			tenant:    tenant,
 			catalog:   catalog,
 			namespace: namespace,
+			path:      path,
+		}, true
+	case 11:
+		if parts[10] != "tables" {
+			return target, false
+		}
+		after, ok := parseScopedListQuery(raw, path, r.URL.RawQuery, r.URL.ForceQuery)
+		if !ok {
+			return target, false
+		}
+		return scopedMetadataTarget{
+			kind:      scopedMetadataKindTables,
+			tenant:    tenant,
+			catalog:   catalog,
+			namespace: namespace,
+			after:     after,
 			path:      path,
 		}, true
 	case 12:
@@ -182,6 +240,28 @@ func parseScopedMetadataTarget(r *http.Request) (scopedMetadataTarget, bool) {
 	default:
 		return target, false
 	}
+}
+
+func parseScopedListQuery(raw, path, rawQuery string, forceQuery bool) (string, bool) {
+	if rawQuery == "" {
+		if forceQuery || raw != path {
+			return "", false
+		}
+		return "", true
+	}
+	if raw != path+"?"+rawQuery || strings.Contains(rawQuery, "&") {
+		return "", false
+	}
+	k, v, found := strings.Cut(rawQuery, "=")
+	if !found || k != "after" || v == "" {
+		return "", false
+	}
+	decoded, err := url.QueryUnescape(v)
+	if err != nil || decoded == "" || len(decoded) > 256 || !utf8.ValidString(decoded) ||
+		strings.IndexFunc(decoded, unicode.IsControl) >= 0 {
+		return "", false
+	}
+	return decoded, true
 }
 
 func parseScopedScanQuery(rawQuery string) (int64, string, bool) {
@@ -262,6 +342,207 @@ func isMissingScopedSchemaError(err error) bool {
 		}
 	}
 	return false
+}
+
+const scopedCatalogLiveSQL = `SELECT 1 FROM meta AS m
+WHERE m.id = 1 AND m.name = ? COLLATE BINARY AND m.dropping = 0
+LIMIT 1`
+
+const scopedNamespacesListSQL = `SELECT n.id, n.name, n.contained_field, n.contained_value
+FROM meta AS m
+JOIN namespaces AS n ON 1 = 1
+WHERE m.id = 1 AND m.name = ? COLLATE BINARY AND m.dropping = 0
+  AND n.dropped_snapshot IS NULL
+  AND n.contained_field = ? COLLATE BINARY
+  AND typeof(n.contained_value) = 'integer'
+  AND n.contained_value = ?
+  AND n.name > ? COLLATE BINARY
+ORDER BY n.name COLLATE BINARY
+LIMIT 1001`
+
+const scopedTablesListSQL = `SELECT t.id, t.table_uuid, v.name
+FROM meta AS m
+JOIN namespaces AS n ON 1 = 1
+JOIN table_versions AS v ON v.namespace_id = n.id
+JOIN tables AS t ON t.id = v.table_id
+WHERE m.id = 1 AND m.name = ? COLLATE BINARY AND m.dropping = 0
+  AND m.next_snapshot - 1 >= 0
+  AND m.next_snapshot - 1 >= m.earliest_snapshot_id
+  AND n.name = ? COLLATE BINARY AND n.dropped_snapshot IS NULL
+  AND n.contained_field = ? COLLATE BINARY
+  AND typeof(n.contained_value) = 'integer'
+  AND n.contained_value = ?
+  AND v.begin_snapshot <= m.next_snapshot - 1
+  AND (v.end_snapshot IS NULL OR v.end_snapshot > m.next_snapshot - 1)
+  AND t.created_snapshot <= m.next_snapshot - 1
+  AND (t.dropped_snapshot IS NULL OR t.dropped_snapshot > m.next_snapshot - 1)
+  AND v.name > ? COLLATE BINARY
+ORDER BY v.name COLLATE BINARY
+LIMIT 1001`
+
+func (s *Server) readScopedNamespaces(w http.ResponseWriter, r *http.Request, target scopedMetadataTarget, rsa *readSessionAuthority, t *Tenant, getManifest func(context.Context) (*Manifest, error)) {
+	predField, predValue, ok := rsa.containmentPredicate()
+	if !ok {
+		scopedNamespaceRefusal(w, http.StatusNotFound)
+		return
+	}
+	if status := s.scopedNamespaceOwned(r.Context(), target.tenant, t, getManifest); status != 0 {
+		scopedNamespaceRefusal(w, status)
+		return
+	}
+	results, _, err := t.SubmitTxCtx(r.Context(), TxRequest{
+		Stmts: []Statement{
+			{SQL: scopedCatalogLiveSQL, Args: []any{target.catalog}},
+			{SQL: scopedNamespacesListSQL, Args: []any{target.catalog, predField, predValue, target.after}},
+		},
+	})
+	if status := s.scopedNamespaceOwned(r.Context(), target.tenant, t, getManifest); status != 0 {
+		scopedNamespaceRefusal(w, status)
+		return
+	}
+	if err != nil {
+		if isMissingScopedSchemaError(err) {
+			scopedNamespaceRefusal(w, http.StatusNotFound)
+		} else {
+			scopedNamespaceRefusal(w, http.StatusServiceUnavailable)
+		}
+		return
+	}
+	if len(results) != 2 {
+		scopedNamespaceRefusal(w, http.StatusServiceUnavailable)
+		return
+	}
+	if len(results[0].Rows) != 1 {
+		scopedNamespaceRefusal(w, http.StatusNotFound)
+		return
+	}
+	rows := results[1].Rows
+	hasMore := len(rows) > scopedListMaxItems
+	if hasMore {
+		rows = rows[:scopedListMaxItems]
+	}
+	items := make([]scopedNamespaceDTO, 0, len(rows))
+	for _, row := range rows {
+		if len(row) != 4 {
+			scopedNamespaceRefusal(w, http.StatusServiceUnavailable)
+			return
+		}
+		id, ok1 := row[0].(int64)
+		name, ok2 := row[1].(string)
+		field, ok3 := row[2].(string)
+		val, ok4 := row[3].(int64)
+		if !ok1 || !ok2 || !ok3 || !ok4 || name == "" || field != predField || val != predValue {
+			scopedNamespaceRefusal(w, http.StatusServiceUnavailable)
+			return
+		}
+		items = append(items, scopedNamespaceDTO{
+			ID:          id,
+			Name:        name,
+			Containment: scopedNamespaceContainment{Field: field, Value: val},
+		})
+	}
+	// Shrink page if encoded payload exceeds scopedListResponseLimit.
+	resp := scopedNamespacesDTO{Namespaces: items}
+	if hasMore && len(items) > 0 {
+		resp.NextAfter = items[len(items)-1].Name
+	}
+	for len(resp.Namespaces) > 1 {
+		b, err := json.Marshal(resp)
+		if err == nil && len(b) <= scopedListResponseLimit {
+			break
+		}
+		resp.Namespaces = resp.Namespaces[:len(resp.Namespaces)/2]
+		resp.NextAfter = resp.Namespaces[len(resp.Namespaces)-1].Name
+	}
+	scopedMetadataReply(w, http.StatusOK, resp, scopedListResponseLimit)
+}
+
+func (s *Server) readScopedTables(w http.ResponseWriter, r *http.Request, target scopedMetadataTarget, rsa *readSessionAuthority, t *Tenant, getManifest func(context.Context) (*Manifest, error)) {
+	predField, predValue, ok := rsa.containmentPredicate()
+	if !ok {
+		scopedNamespaceRefusal(w, http.StatusNotFound)
+		return
+	}
+	if status := s.scopedNamespaceOwned(r.Context(), target.tenant, t, getManifest); status != 0 {
+		scopedNamespaceRefusal(w, status)
+		return
+	}
+	results, _, err := t.SubmitTxCtx(r.Context(), TxRequest{
+		Stmts: []Statement{
+			{SQL: scopedNamespaceSQL, Args: []any{target.catalog, target.namespace}},
+			{SQL: scopedTablesListSQL, Args: []any{target.catalog, target.namespace, predField, predValue, target.after}},
+		},
+	})
+	if status := s.scopedNamespaceOwned(r.Context(), target.tenant, t, getManifest); status != 0 {
+		scopedNamespaceRefusal(w, status)
+		return
+	}
+	if err != nil {
+		if isMissingScopedSchemaError(err) {
+			scopedNamespaceRefusal(w, http.StatusNotFound)
+		} else {
+			scopedNamespaceRefusal(w, http.StatusServiceUnavailable)
+		}
+		return
+	}
+	if len(results) != 2 {
+		scopedNamespaceRefusal(w, http.StatusServiceUnavailable)
+		return
+	}
+	if len(results[0].Rows) != 1 || len(results[0].Rows[0]) != 4 {
+		scopedNamespaceRefusal(w, http.StatusNotFound)
+		return
+	}
+	nsRow := results[0].Rows[0]
+	nsID, ok1 := nsRow[0].(int64)
+	nsName, ok2 := nsRow[1].(string)
+	nsField, ok3 := nsRow[2].(string)
+	nsVal, ok4 := nsRow[3].(int64)
+	if !ok1 || !ok2 || !ok3 || !ok4 || nsName != target.namespace || nsField != predField || nsVal != predValue {
+		scopedNamespaceRefusal(w, http.StatusNotFound)
+		return
+	}
+	rows := results[1].Rows
+	hasMore := len(rows) > scopedListMaxItems
+	if hasMore {
+		rows = rows[:scopedListMaxItems]
+	}
+	tables := make([]scopedTableEntryDTO, 0, len(rows))
+	for _, row := range rows {
+		if len(row) != 3 {
+			scopedNamespaceRefusal(w, http.StatusServiceUnavailable)
+			return
+		}
+		tableID, ok1 := row[0].(int64)
+		tableUUID, ok2 := row[1].(string)
+		name, ok3 := row[2].(string)
+		if !ok1 || !ok2 || !ok3 || name == "" || !isCanonicalLowerUUID(tableUUID) {
+			scopedNamespaceRefusal(w, http.StatusServiceUnavailable)
+			return
+		}
+		tables = append(tables, scopedTableEntryDTO{
+			TableID:   tableID,
+			TableUUID: tableUUID,
+			Name:      name,
+		})
+	}
+	resp := scopedTablesDTO{
+		NamespaceID: nsID,
+		Namespace:   nsName,
+		Tables:      tables,
+	}
+	if hasMore && len(tables) > 0 {
+		resp.NextAfter = tables[len(tables)-1].Name
+	}
+	for len(resp.Tables) > 1 {
+		b, err := json.Marshal(resp)
+		if err == nil && len(b) <= scopedListResponseLimit {
+			break
+		}
+		resp.Tables = resp.Tables[:len(resp.Tables)/2]
+		resp.NextAfter = resp.Tables[len(resp.Tables)-1].Name
+	}
+	scopedMetadataReply(w, http.StatusOK, resp, scopedListResponseLimit)
 }
 
 const scopedTableMetaSQL = `SELECT m.next_snapshot - 1, m.earliest_snapshot_id,
