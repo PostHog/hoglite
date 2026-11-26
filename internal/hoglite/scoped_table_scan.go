@@ -38,6 +38,7 @@ type scopedMetadataTarget struct {
 	catalog   string
 	namespace string
 	table     string
+	after     string
 	snapshot  int64
 	tableUUID string
 	path      string
@@ -54,12 +55,14 @@ func (t scopedMetadataTarget) namespaceTarget() scopedNamespaceTarget {
 
 type scopedNamespacesDTO struct {
 	Namespaces []scopedNamespaceDTO `json:"namespaces"`
+	NextAfter  string               `json:"next_after,omitempty"`
 }
 
 type scopedTablesDTO struct {
 	NamespaceID int64                 `json:"namespace_id"`
 	Namespace   string                `json:"namespace"`
 	Tables      []scopedTableEntryDTO `json:"tables"`
+	NextAfter   string                `json:"next_after,omitempty"`
 }
 
 type scopedTableEntryDTO struct {
@@ -149,13 +152,15 @@ func parseScopedMetadataTarget(r *http.Request) (scopedMetadataTarget, bool) {
 		return target, false
 	}
 	if len(parts) == 9 {
-		if r.URL.RawQuery != "" || r.URL.ForceQuery || raw != path {
+		after, ok := parseScopedListQuery(raw, path, r.URL.RawQuery, r.URL.ForceQuery)
+		if !ok {
 			return target, false
 		}
 		return scopedMetadataTarget{
 			kind:    scopedMetadataKindNamespaces,
 			tenant:  tenant,
 			catalog: catalog,
+			after:   after,
 			path:    path,
 		}, true
 	}
@@ -176,7 +181,11 @@ func parseScopedMetadataTarget(r *http.Request) (scopedMetadataTarget, bool) {
 			path:      path,
 		}, true
 	case 11:
-		if parts[10] != "tables" || r.URL.RawQuery != "" || r.URL.ForceQuery || raw != path {
+		if parts[10] != "tables" {
+			return target, false
+		}
+		after, ok := parseScopedListQuery(raw, path, r.URL.RawQuery, r.URL.ForceQuery)
+		if !ok {
 			return target, false
 		}
 		return scopedMetadataTarget{
@@ -184,6 +193,7 @@ func parseScopedMetadataTarget(r *http.Request) (scopedMetadataTarget, bool) {
 			tenant:    tenant,
 			catalog:   catalog,
 			namespace: namespace,
+			after:     after,
 			path:      path,
 		}, true
 	case 12:
@@ -227,6 +237,23 @@ func parseScopedMetadataTarget(r *http.Request) (scopedMetadataTarget, bool) {
 	default:
 		return target, false
 	}
+}
+
+func parseScopedListQuery(raw, path, rawQuery string, forceQuery bool) (string, bool) {
+	if rawQuery == "" {
+		if forceQuery || raw != path {
+			return "", false
+		}
+		return "", true
+	}
+	if raw != path+"?"+rawQuery || strings.Contains(rawQuery, "&") {
+		return "", false
+	}
+	k, v, found := strings.Cut(rawQuery, "=")
+	if !found || k != "after" || v == "" {
+		return "", false
+	}
+	return decodeScopedSegment(v)
 }
 
 func parseScopedScanQuery(rawQuery string) (int64, string, bool) {
@@ -321,6 +348,7 @@ WHERE m.id = 1 AND m.name = ? COLLATE BINARY AND m.dropping = 0
   AND n.contained_field = ? COLLATE BINARY
   AND typeof(n.contained_value) = 'integer'
   AND n.contained_value = ?
+  AND (? = '' OR n.name > ? COLLATE BINARY)
 ORDER BY n.name COLLATE BINARY
 LIMIT 1001`
 
@@ -340,6 +368,7 @@ WHERE m.id = 1 AND m.name = ? COLLATE BINARY AND m.dropping = 0
   AND (v.end_snapshot IS NULL OR v.end_snapshot > m.next_snapshot - 1)
   AND t.created_snapshot <= m.next_snapshot - 1
   AND (t.dropped_snapshot IS NULL OR t.dropped_snapshot > m.next_snapshot - 1)
+  AND (? = '' OR v.name > ? COLLATE BINARY)
 ORDER BY v.name COLLATE BINARY
 LIMIT 1001`
 
@@ -356,7 +385,7 @@ func (s *Server) readScopedNamespaces(w http.ResponseWriter, r *http.Request, ta
 	results, _, err := t.SubmitTxCtx(r.Context(), TxRequest{
 		Stmts: []Statement{
 			{SQL: scopedCatalogLiveSQL, Args: []any{target.catalog}},
-			{SQL: scopedNamespacesListSQL, Args: []any{target.catalog, predField, predValue}},
+			{SQL: scopedNamespacesListSQL, Args: []any{target.catalog, predField, predValue, target.after, target.after}},
 		},
 	})
 	if status := s.scopedNamespaceOwned(r.Context(), target.tenant, t, getManifest); status != 0 {
@@ -379,12 +408,13 @@ func (s *Server) readScopedNamespaces(w http.ResponseWriter, r *http.Request, ta
 		scopedNamespaceRefusal(w, http.StatusNotFound)
 		return
 	}
-	if len(results[1].Rows) > scopedListMaxItems {
-		scopedNamespaceRefusal(w, http.StatusServiceUnavailable)
-		return
+	rows := results[1].Rows
+	hasMore := len(rows) > scopedListMaxItems
+	if hasMore {
+		rows = rows[:scopedListMaxItems]
 	}
-	items := make([]scopedNamespaceDTO, 0, len(results[1].Rows))
-	for _, row := range results[1].Rows {
+	items := make([]scopedNamespaceDTO, 0, len(rows))
+	for _, row := range rows {
 		if len(row) != 4 {
 			scopedNamespaceRefusal(w, http.StatusServiceUnavailable)
 			return
@@ -403,7 +433,20 @@ func (s *Server) readScopedNamespaces(w http.ResponseWriter, r *http.Request, ta
 			Containment: scopedNamespaceContainment{Field: field, Value: val},
 		})
 	}
-	scopedMetadataReply(w, http.StatusOK, scopedNamespacesDTO{Namespaces: items}, scopedListResponseLimit)
+	// Shrink page if encoded payload exceeds scopedListResponseLimit.
+	resp := scopedNamespacesDTO{Namespaces: items}
+	if hasMore && len(items) > 0 {
+		resp.NextAfter = items[len(items)-1].Name
+	}
+	for len(resp.Namespaces) > 1 {
+		b, err := json.Marshal(resp)
+		if err == nil && len(b) <= scopedListResponseLimit {
+			break
+		}
+		resp.Namespaces = resp.Namespaces[:len(resp.Namespaces)/2]
+		resp.NextAfter = resp.Namespaces[len(resp.Namespaces)-1].Name
+	}
+	scopedMetadataReply(w, http.StatusOK, resp, scopedListResponseLimit)
 }
 
 func (s *Server) readScopedTables(w http.ResponseWriter, r *http.Request, target scopedMetadataTarget, rsa *readSessionAuthority, t *Tenant, getManifest func(context.Context) (*Manifest, error)) {
@@ -419,7 +462,7 @@ func (s *Server) readScopedTables(w http.ResponseWriter, r *http.Request, target
 	results, _, err := t.SubmitTxCtx(r.Context(), TxRequest{
 		Stmts: []Statement{
 			{SQL: scopedNamespaceSQL, Args: []any{target.catalog, target.namespace}},
-			{SQL: scopedTablesListSQL, Args: []any{target.catalog, target.namespace, predField, predValue}},
+			{SQL: scopedTablesListSQL, Args: []any{target.catalog, target.namespace, predField, predValue, target.after, target.after}},
 		},
 	})
 	if status := s.scopedNamespaceOwned(r.Context(), target.tenant, t, getManifest); status != 0 {
@@ -451,12 +494,13 @@ func (s *Server) readScopedTables(w http.ResponseWriter, r *http.Request, target
 		scopedNamespaceRefusal(w, http.StatusNotFound)
 		return
 	}
-	if len(results[1].Rows) > scopedListMaxItems {
-		scopedNamespaceRefusal(w, http.StatusServiceUnavailable)
-		return
+	rows := results[1].Rows
+	hasMore := len(rows) > scopedListMaxItems
+	if hasMore {
+		rows = rows[:scopedListMaxItems]
 	}
-	tables := make([]scopedTableEntryDTO, 0, len(results[1].Rows))
-	for _, row := range results[1].Rows {
+	tables := make([]scopedTableEntryDTO, 0, len(rows))
+	for _, row := range rows {
 		if len(row) != 3 {
 			scopedNamespaceRefusal(w, http.StatusServiceUnavailable)
 			return
@@ -474,11 +518,23 @@ func (s *Server) readScopedTables(w http.ResponseWriter, r *http.Request, target
 			Name:      name,
 		})
 	}
-	scopedMetadataReply(w, http.StatusOK, scopedTablesDTO{
+	resp := scopedTablesDTO{
 		NamespaceID: nsID,
 		Namespace:   nsName,
 		Tables:      tables,
-	}, scopedListResponseLimit)
+	}
+	if hasMore && len(tables) > 0 {
+		resp.NextAfter = tables[len(tables)-1].Name
+	}
+	for len(resp.Tables) > 1 {
+		b, err := json.Marshal(resp)
+		if err == nil && len(b) <= scopedListResponseLimit {
+			break
+		}
+		resp.Tables = resp.Tables[:len(resp.Tables)/2]
+		resp.NextAfter = resp.Tables[len(resp.Tables)-1].Name
+	}
+	scopedMetadataReply(w, http.StatusOK, resp, scopedListResponseLimit)
 }
 
 const scopedTableMetaSQL = `SELECT m.next_snapshot - 1, m.earliest_snapshot_id,

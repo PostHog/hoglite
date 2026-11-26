@@ -944,20 +944,27 @@ func TestScopedTableAndScanBoundsAndColdSchema(t *testing.T) {
 				if err := json.Unmarshal(w.Body.Bytes(), &nsList); err != nil {
 					t.Fatal(err)
 				}
-				var hasReports, hasOther bool
+				var gotNames []string
 				for _, ns := range nsList.Namespaces {
 					if ns.Containment.Field != "team_id" || ns.Containment.Value != 42 {
 						t.Fatalf("unexpected containment %+v", ns)
 					}
-					if ns.Name == "reports" {
-						hasReports = true
-					}
-					if ns.Name == "other_reports" {
-						hasOther = true
-					}
+					gotNames = append(gotNames, ns.Name)
 				}
-				if !hasReports || hasOther {
-					t.Fatalf("unexpected namespaces: %+v", nsList.Namespaces)
+				if len(gotNames) != 1 || gotNames[0] != "reports" {
+					t.Fatalf("unexpected namespaces: %v (want [reports], excluding seeded sibling 'other')", gotNames)
+				}
+				// Keyset pagination with ?after=reports returns an empty next page.
+				w = scopedNamespaceCall(t, h, base+"/namespaces?after=reports", tok)
+				if w.Code != http.StatusOK {
+					t.Fatalf("list namespaces after status=%d body=%s", w.Code, w.Body.String())
+				}
+				var afterNs scopedNamespacesDTO
+				if err := json.Unmarshal(w.Body.Bytes(), &afterNs); err != nil {
+					t.Fatal(err)
+				}
+				if len(afterNs.Namespaces) != 0 || afterNs.NextAfter != "" {
+					t.Fatalf("unexpected paginated namespaces: %+v", afterNs)
 				}
 
 				w = scopedNamespaceCall(t, h, base+"/namespaces/reports/tables", tok)
@@ -971,9 +978,23 @@ func TestScopedTableAndScanBoundsAndColdSchema(t *testing.T) {
 				if tblList.Namespace != "reports" || len(tblList.Tables) == 0 {
 					t.Fatalf("unexpected tables response: %+v", tblList)
 				}
+				// Keyset pagination on tables with ?after=<first> advances past it.
+				w = scopedNamespaceCall(t, h, base+"/namespaces/reports/tables?after="+tblList.Tables[0].Name, tok)
+				if w.Code != http.StatusOK {
+					t.Fatalf("list tables after status=%d body=%s", w.Code, w.Body.String())
+				}
+				var afterTbl scopedTablesDTO
+				if err := json.Unmarshal(w.Body.Bytes(), &afterTbl); err != nil {
+					t.Fatal(err)
+				}
+				if len(afterTbl.Tables) >= len(tblList.Tables) {
+					t.Fatalf("expected fewer tables after %q, got %+v", tblList.Tables[0].Name, afterTbl.Tables)
+				}
+				// Unknown query parameters are rejected with 400.
+				scopedNamespaceWantCode(t, scopedNamespaceCall(t, h, base+"/namespaces?limit=10", tok), http.StatusBadRequest, "invalid_request")
 
-				// Another team's namespace must return 404.
-				scopedNamespaceWantCode(t, scopedNamespaceCall(t, h, base+"/namespaces/other_reports/tables", tok), http.StatusNotFound, "not_found")
+				// Seeded sibling team-43 namespace ("other") must return 404.
+				scopedNamespaceWantCode(t, scopedNamespaceCall(t, h, base+"/namespaces/other/tables", tok), http.StatusNotFound, "not_found")
 				// Existing typed read routes also admit writable sessions.
 				if w := scopedNamespaceCall(t, h, readSessionTestPath, tok); w.Code != http.StatusOK {
 					t.Fatalf("namespace GET status=%d body=%s", w.Code, w.Body.String())
