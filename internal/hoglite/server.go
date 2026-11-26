@@ -15,13 +15,15 @@ import (
 )
 
 type Server struct {
-	mgr           *Manager
-	auth          *JWTAuth
-	peers         map[string]string // replica id -> base URL
-	client        *http.Client
-	readSessionS3 ReadSessionS3Config
-	readS3Once    sync.Once
-	readS3Client  *http.Client
+	mgr                *Manager
+	auth               *JWTAuth
+	peers              map[string]string // replica id -> base URL
+	client             *http.Client
+	readSessionS3      ReadSessionS3Config
+	readS3Once         sync.Once
+	readS3Client       *http.Client
+	readSessionLogOnce sync.Once
+	readSessionLogCh   chan string
 
 	mu          sync.Mutex
 	ownerCache  map[string]ownerCacheEntry

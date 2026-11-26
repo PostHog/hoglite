@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -13,7 +14,10 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
-const maxReadSessionManifestBytes = 4 << 20
+const (
+	maxReadSessionManifestBytes = 4 << 20
+	readSessionLogQueueSize     = 256
+)
 
 var (
 	errReadSessionExpired             = errors.New("read session credentials expired")
@@ -132,12 +136,46 @@ func (s *Server) readSessionManifest(ctx context.Context, tid string, creds read
 	}
 	if s.mgr != nil && s.mgr.metrics != nil {
 		s.mgr.metrics.ReadSessionManifestReads.Add(1)
-		if s.mgr.metrics.Logger != nil {
-			s.mgr.metrics.Logger.Printf(
-				"read-session manifest read tenant=%s bucket=%s key=%s source=caller-read-session bytes=%d",
-				tid, bucket, key, len(raw),
-			)
-		}
+		s.logReadSessionManifestRead(tid, bucket, key, len(raw))
 	}
 	return &parsed, nil
+}
+
+// logReadSessionManifestRead enqueues one diagnostic log line without blocking
+// the request path. Lines are dropped if the bounded queue is full.
+func (s *Server) logReadSessionManifestRead(tid, bucket, key string, n int) {
+	if s.mgr == nil || s.mgr.metrics == nil || s.mgr.metrics.Logger == nil {
+		return
+	}
+	s.readSessionLogOnce.Do(func() {
+		ch := make(chan string, readSessionLogQueueSize)
+		s.readSessionLogCh = ch
+		stop := s.mgr.leaseStop
+		logger := s.mgr.metrics.Logger
+		go func() {
+			for {
+				select {
+				case line := <-ch:
+					logger.Printf("%s", line)
+				case <-stop:
+					for {
+						select {
+						case line := <-ch:
+							logger.Printf("%s", line)
+						default:
+							return
+						}
+					}
+				}
+			}
+		}()
+	})
+	line := fmt.Sprintf(
+		"read-session manifest read tenant=%s bucket=%s key=%s source=caller-read-session bytes=%d",
+		tid, bucket, key, n,
+	)
+	select {
+	case s.readSessionLogCh <- line:
+	default:
+	}
 }

@@ -748,9 +748,16 @@ func TestReadSessionPostReadOwnershipLossAndMidRequestExpiry(t *testing.T) {
 		manifestPath := "/" + readSessionTestBucket + "/" + manifestKey(readSessionTestPrefix, readSessionTestTenant)
 		s3fx.setCaller("ASIAEXAMPLEALICE0001", "secret-alice-material-only-for-test", "session-token-alice-only-for-test", manifestPath)
 
-		var logBuf strings.Builder
-		var logMu sync.Mutex
-		mgr.metrics.Logger = readSessionTestLogger{mu: &logMu, buf: &logBuf}
+		// Compute the exact manifest byte length served by the fixture.
+		s3fx.mu.Lock()
+		wantBytes := len(s3fx.objects[manifestPath])
+		s3fx.mu.Unlock()
+		if wantBytes <= 0 {
+			t.Fatalf("fixture manifest at %s is empty", manifestPath)
+		}
+
+		logCh := make(chan string, 16)
+		mgr.metrics.Logger = readSessionTestLogger{ch: logCh}
 
 		w := scopedNamespaceCall(t, h, readSessionTestPath, "Bearer "+f.token(t, nil))
 		if w.Code != http.StatusOK {
@@ -774,18 +781,30 @@ func TestReadSessionPostReadOwnershipLossAndMidRequestExpiry(t *testing.T) {
 			t.Fatalf("/metrics missing error counter:\n%s", metricsBody)
 		}
 
-		// Verify structured log line records caller-read-session and never leaks credentials.
-		logMu.Lock()
-		logged := logBuf.String()
-		logMu.Unlock()
+		// Verify both successful reads emit the full log line with exact byte count and zero secrets.
 		wantKey := manifestKey(readSessionTestPrefix, readSessionTestTenant)
-		wantSubstr := fmt.Sprintf("read-session manifest read tenant=%s bucket=%s key=%s source=caller-read-session", readSessionTestTenant, readSessionTestBucket, wantKey)
-		if !strings.Contains(logged, wantSubstr) {
-			t.Fatalf("logs missing %q, got:\n%s", wantSubstr, logged)
+		wantLine := fmt.Sprintf(
+			"read-session manifest read tenant=%s bucket=%s key=%s source=caller-read-session bytes=%d",
+			readSessionTestTenant, readSessionTestBucket, wantKey, wantBytes,
+		)
+		var lines []string
+		deadline := time.After(2 * time.Second)
+		for len(lines) < 2 {
+			select {
+			case line := <-logCh:
+				lines = append(lines, line)
+			case <-deadline:
+				t.Fatalf("timed out waiting for 2 log lines, got %d: %v", len(lines), lines)
+			}
 		}
-		for _, secret := range []string{"ASIAEXAMPLEALICE0001", "secret-alice-material-only-for-test", "session-token-alice-only-for-test"} {
-			if strings.Contains(logged, secret) {
-				t.Fatalf("logs leaked credential material %q:\n%s", secret, logged)
+		for i, line := range lines {
+			if line != wantLine {
+				t.Fatalf("log line %d = %q, want %q", i, line, wantLine)
+			}
+			for _, secret := range []string{"ASIAEXAMPLEALICE0001", "secret-alice-material-only-for-test", "session-token-alice-only-for-test"} {
+				if strings.Contains(line, secret) {
+					t.Fatalf("log line %d leaked credential material %q: %q", i, secret, line)
+				}
 			}
 		}
 
@@ -797,15 +816,48 @@ func TestReadSessionPostReadOwnershipLossAndMidRequestExpiry(t *testing.T) {
 			t.Fatalf("ReadSessionManifestErrors=%d, want 1", got)
 		}
 	})
+
+	t.Run("stalled logger does not block caller-session manifest reads", func(t *testing.T) {
+		f, s3fx, spy, mgr, _, h := newReadSessionOwnerHarness(t)
+		spy.denyManifest.Store(true)
+		manifestPath := "/" + readSessionTestBucket + "/" + manifestKey(readSessionTestPrefix, readSessionTestTenant)
+		s3fx.setCaller("ASIAEXAMPLEALICE0001", "secret-alice-material-only-for-test", "session-token-alice-only-for-test", manifestPath)
+
+		unblock := make(chan struct{})
+		t.Cleanup(func() { close(unblock) })
+		mgr.metrics.Logger = blockingTestLogger{unblock: unblock}
+
+		done := make(chan int, 1)
+		go func() {
+			w := scopedNamespaceCall(t, h, readSessionTestPath, "Bearer "+f.token(t, nil))
+			done <- w.Code
+		}()
+		select {
+		case code := <-done:
+			if code != http.StatusOK {
+				t.Fatalf("status=%d, want 200", code)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("scoped read blocked on stalled logger")
+		}
+		if got := mgr.metrics.ReadSessionManifestReads.Load(); got != 2 {
+			t.Fatalf("ReadSessionManifestReads=%d, want 2", got)
+		}
+	})
 }
 
 type readSessionTestLogger struct {
-	mu  *sync.Mutex
-	buf *strings.Builder
+	ch chan string
 }
 
 func (l readSessionTestLogger) Printf(format string, args ...any) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	fmt.Fprintf(l.buf, format+"\n", args...)
+	l.ch <- fmt.Sprintf(format, args...)
+}
+
+type blockingTestLogger struct {
+	unblock <-chan struct{}
+}
+
+func (l blockingTestLogger) Printf(string, ...any) {
+	<-l.unblock
 }
