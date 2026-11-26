@@ -356,7 +356,7 @@ WHERE m.id = 1 AND m.name = ? COLLATE BINARY AND m.dropping = 0
   AND n.contained_field = ? COLLATE BINARY
   AND typeof(n.contained_value) = 'integer'
   AND n.contained_value = ?
-  AND (? = '' OR n.name > ? COLLATE BINARY)
+  AND n.name > ? COLLATE BINARY
 ORDER BY n.name COLLATE BINARY
 LIMIT 1001`
 
@@ -376,7 +376,7 @@ WHERE m.id = 1 AND m.name = ? COLLATE BINARY AND m.dropping = 0
   AND (v.end_snapshot IS NULL OR v.end_snapshot > m.next_snapshot - 1)
   AND t.created_snapshot <= m.next_snapshot - 1
   AND (t.dropped_snapshot IS NULL OR t.dropped_snapshot > m.next_snapshot - 1)
-  AND (? = '' OR v.name > ? COLLATE BINARY)
+  AND v.name > ? COLLATE BINARY
 ORDER BY v.name COLLATE BINARY
 LIMIT 1001`
 
@@ -393,7 +393,7 @@ func (s *Server) readScopedNamespaces(w http.ResponseWriter, r *http.Request, ta
 	results, _, err := t.SubmitTxCtx(r.Context(), TxRequest{
 		Stmts: []Statement{
 			{SQL: scopedCatalogLiveSQL, Args: []any{target.catalog}},
-			{SQL: scopedNamespacesListSQL, Args: []any{target.catalog, predField, predValue, target.after, target.after}},
+			{SQL: scopedNamespacesListSQL, Args: []any{target.catalog, predField, predValue, target.after}},
 		},
 	})
 	if status := s.scopedNamespaceOwned(r.Context(), target.tenant, t, getManifest); status != 0 {
@@ -470,7 +470,7 @@ func (s *Server) readScopedTables(w http.ResponseWriter, r *http.Request, target
 	results, _, err := t.SubmitTxCtx(r.Context(), TxRequest{
 		Stmts: []Statement{
 			{SQL: scopedNamespaceSQL, Args: []any{target.catalog, target.namespace}},
-			{SQL: scopedTablesListSQL, Args: []any{target.catalog, target.namespace, predField, predValue, target.after, target.after}},
+			{SQL: scopedTablesListSQL, Args: []any{target.catalog, target.namespace, predField, predValue, target.after}},
 		},
 	})
 	if status := s.scopedNamespaceOwned(r.Context(), target.tenant, t, getManifest); status != 0 {
