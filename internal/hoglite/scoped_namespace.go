@@ -176,8 +176,12 @@ func (s *Server) serveScopedNamespace(w http.ResponseWriter, r *http.Request) {
 			return s.readSessionManifest(readCtx, target.tenant, rsa.creds)
 		}
 		switch target.kind {
+		case scopedMetadataKindNamespaces:
+			s.readScopedNamespaces(w, r, target, rsa, t, getManifest)
 		case scopedMetadataKindNamespace:
 			s.readScopedNamespace(w, r, target.namespaceTarget(), rsa.authority, t, getManifest)
+		case scopedMetadataKindTables:
+			s.readScopedTables(w, r, target, rsa, t, getManifest)
 		case scopedMetadataKindTable:
 			s.readScopedTable(w, r, target, rsa, t, getManifest)
 		case scopedMetadataKindScan:

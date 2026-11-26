@@ -919,4 +919,69 @@ func TestScopedTableAndScanBoundsAndColdSchema(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("list namespaces and tables with read-only and writable sessions", func(t *testing.T) {
+		f, s3fx, spy, _, _, srv := newScopedTableScanHarness(t)
+		spy.denyManifest.Store(true)
+		h := srv.Handler()
+		readOnlyTok := scopedTableScanToken(t, f, s3fx, "42",
+			"ASIAEXAMPLEALICE0001", "secret-alice-list", "session-alice-list", nil)
+		writableTok := scopedTableScanToken(t, f, s3fx, "42",
+			"ASIAEXAMPLEALICE0002", "secret-alice-write", "session-alice-write", func(c map[string]any) {
+				c["cat"] = map[string]any{readSessionTestCatalog: []string{"read", "write"}}
+				c["prd"] = map[string]any{"team_id": map[string]string{"42": "write"}}
+				grants := c["grants"].([]map[string]any)
+				grants[0]["actions"] = readSessionWriteActions
+			})
+		base := "/v1/t/" + readSessionTestTenant + "/metadata/v1/catalogs/" + readSessionTestCatalog
+		for name, tok := range map[string]string{"read-only": readOnlyTok, "writable": writableTok} {
+			t.Run(name, func(t *testing.T) {
+				w := scopedNamespaceCall(t, h, base+"/namespaces", tok)
+				if w.Code != http.StatusOK {
+					t.Fatalf("list namespaces status=%d body=%s", w.Code, w.Body.String())
+				}
+				var nsList scopedNamespacesDTO
+				if err := json.Unmarshal(w.Body.Bytes(), &nsList); err != nil {
+					t.Fatal(err)
+				}
+				var hasReports, hasOther bool
+				for _, ns := range nsList.Namespaces {
+					if ns.Containment.Field != "team_id" || ns.Containment.Value != 42 {
+						t.Fatalf("unexpected containment %+v", ns)
+					}
+					if ns.Name == "reports" {
+						hasReports = true
+					}
+					if ns.Name == "other_reports" {
+						hasOther = true
+					}
+				}
+				if !hasReports || hasOther {
+					t.Fatalf("unexpected namespaces: %+v", nsList.Namespaces)
+				}
+
+				w = scopedNamespaceCall(t, h, base+"/namespaces/reports/tables", tok)
+				if w.Code != http.StatusOK {
+					t.Fatalf("list tables status=%d body=%s", w.Code, w.Body.String())
+				}
+				var tblList scopedTablesDTO
+				if err := json.Unmarshal(w.Body.Bytes(), &tblList); err != nil {
+					t.Fatal(err)
+				}
+				if tblList.Namespace != "reports" || len(tblList.Tables) == 0 {
+					t.Fatalf("unexpected tables response: %+v", tblList)
+				}
+
+				// Another team's namespace must return 404.
+				scopedNamespaceWantCode(t, scopedNamespaceCall(t, h, base+"/namespaces/other_reports/tables", tok), http.StatusNotFound, "not_found")
+				// Existing typed read routes also admit writable sessions.
+				if w := scopedNamespaceCall(t, h, readSessionTestPath, tok); w.Code != http.StatusOK {
+					t.Fatalf("namespace GET status=%d body=%s", w.Code, w.Body.String())
+				}
+				if w := scopedNamespaceCall(t, h, readSessionTestPath+"/tables/"+tblList.Tables[0].Name, tok); w.Code != http.StatusOK {
+					t.Fatalf("table GET status=%d body=%s", w.Code, w.Body.String())
+				}
+			})
+		}
+	})
 }

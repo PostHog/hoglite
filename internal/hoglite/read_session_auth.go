@@ -38,6 +38,13 @@ var (
 	readSessionBucketRe       = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$`)
 	readSessionSegmentRe      = regexp.MustCompile(`^[A-Za-z0-9_.=-]+$`)
 	readSessionRegionRe       = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
+	readSessionReadActions    = []string{"s3:GetObject"}
+	readSessionWriteActions   = []string{
+		"s3:AbortMultipartUpload",
+		"s3:GetObject",
+		"s3:ListMultipartUploadParts",
+		"s3:PutObject",
+	}
 )
 
 // ReadSessionConfig enables dedicated read-session verification on the typed namespace route.
@@ -95,6 +102,7 @@ type readSessionClaims struct {
 	manifestBucket string
 	manifestRegion string
 	manifestKey    string
+	writable       bool
 	creds          readSessionCredentials
 	grants         []readSessionGrant
 }
@@ -103,6 +111,7 @@ type readSessionAuthority struct {
 	authority      *scopedNamespaceAuthority
 	predicateField string
 	predicateValue int64
+	writable       bool
 	creds          readSessionCredentials
 	grants         []readSessionGrant
 }
@@ -243,6 +252,11 @@ func (a *readSessionAuthority) allowsPrimaryCatalogLocation(catalog, location st
 	return false
 }
 
+// allowsPrimaryCatalogWriteLocation reports whether a writable session's primary-catalog grant allows the S3 URI.
+func (a *readSessionAuthority) allowsPrimaryCatalogWriteLocation(catalog, location string) bool {
+	return a != nil && a.writable && a.allowsPrimaryCatalogLocation(catalog, location)
+}
+
 func (a *JWTAuth) readSessionEnabled() bool {
 	return a != nil && a.readSession != nil
 }
@@ -267,6 +281,7 @@ func (a *JWTAuth) verifyReadSession(ctx context.Context, raw, tenant, catalog st
 		authority:      &scopedNamespaceAuthority{predicates: claims.predicates},
 		predicateField: claims.predicateField,
 		predicateValue: claims.predicateValue,
+		writable:       claims.writable,
 		creds:          claims.creds,
 		grants:         claims.grants,
 	}, nil
@@ -415,10 +430,11 @@ func (p *readSessionProfile) validate(payload map[string]json.RawMessage, now in
 	if !ok {
 		return invalid()
 	}
-	if !requireSingleReadMap(payload["cat"], primary) || !requireSingleReadMap(payload["remote_schemas"], "team") {
+	writable, ok := parsePrimaryCatalogAccess(payload["cat"], primary)
+	if !ok || !requireSingleReadMap(payload["remote_schemas"], "team") {
 		return invalid()
 	}
-	teamKey, teamValue, ok := validateReadSessionPredicate(payload["prd"])
+	teamKey, teamValue, ok := validateReadSessionPredicate(payload["prd"], writable)
 	if !ok {
 		return invalid()
 	}
@@ -450,24 +466,29 @@ func (p *readSessionProfile) validate(payload map[string]json.RawMessage, now in
 	if !ok {
 		return invalid()
 	}
-	manifestBucket, manifestRegion, manifestObjKey, grants, ok := p.validateGrants(payload["grants"], primary, backend, tenant, creds.region)
+	manifestBucket, manifestRegion, manifestObjKey, grants, ok := p.validateGrants(payload["grants"], primary, backend, tenant, creds.region, writable)
 	if !ok {
 		return invalid()
 	}
 	creds.bucket = manifestBucket
 	creds.key = manifestObjKey
+	teamPerm := "read"
+	if writable {
+		teamPerm = "write"
+	}
 	return &readSessionClaims{
 		subject:        sub,
 		org:            org,
 		catalog:        primary,
 		backend:        backend,
 		tenant:         tenant,
-		predicates:     map[string]map[string]string{"team_id": {teamKey: "read"}},
+		predicates:     map[string]map[string]string{"team_id": {teamKey: teamPerm}},
 		predicateField: "team_id",
 		predicateValue: teamValue,
 		manifestBucket: manifestBucket,
 		manifestRegion: manifestRegion,
 		manifestKey:    manifestObjKey,
+		writable:       writable,
 		creds:          creds,
 		grants:         grants,
 	}, nil
@@ -497,32 +518,54 @@ func validateReadSessionAudiences(raw json.RawMessage) bool {
 	return len(seen) == len(readSessionAudiences)
 }
 
-func requireSingleReadMap(raw json.RawMessage, expectedKey string) bool {
+func parsePrimaryCatalogAccess(raw json.RawMessage, expectedKey string) (bool, bool) {
 	obj, ok := parseJSONObject(raw)
 	if !ok || len(obj) != 1 {
-		return false
+		return false, false
 	}
 	rawScopes, present := obj[expectedKey]
 	if !present {
-		return false
+		return false, false
 	}
 	trimmed := bytes.TrimSpace(rawScopes)
 	if len(trimmed) == 0 || trimmed[0] != '[' {
-		return false
+		return false, false
 	}
 	var scopes []json.RawMessage
-	if json.Unmarshal(trimmed, &scopes) != nil || len(scopes) != 1 {
-		return false
+	if json.Unmarshal(trimmed, &scopes) != nil {
+		return false, false
 	}
-	s := bytes.TrimSpace(scopes[0])
-	if len(s) == 0 || s[0] != '"' {
-		return false
+	switch len(scopes) {
+	case 1:
+		w, ok := decodeJSONString(scopes[0])
+		return false, ok && w == "read"
+	case 2:
+		w0, ok0 := decodeJSONString(scopes[0])
+		w1, ok1 := decodeJSONString(scopes[1])
+		return true, ok0 && ok1 && w0 == "read" && w1 == "write"
+	default:
+		return false, false
 	}
-	var word string
-	return json.Unmarshal(s, &word) == nil && word == "read"
 }
 
-func validateReadSessionPredicate(raw json.RawMessage) (string, int64, bool) {
+func decodeJSONString(raw json.RawMessage) (string, bool) {
+	s := bytes.TrimSpace(raw)
+	if len(s) == 0 || s[0] != '"' {
+		return "", false
+	}
+	var word string
+	if json.Unmarshal(s, &word) != nil {
+		return "", false
+	}
+	return word, true
+}
+
+func requireSingleReadMap(raw json.RawMessage, expectedKey string) bool {
+	writable, ok := parsePrimaryCatalogAccess(raw, expectedKey)
+	return ok && !writable
+}
+
+func validateReadSessionPredicate(raw json.RawMessage, writable bool) (string, int64, bool) {
 	prd, ok := parseJSONObject(raw)
 	if !ok || len(prd) != 1 {
 		return "", 0, false
@@ -530,6 +573,10 @@ func validateReadSessionPredicate(raw json.RawMessage) (string, int64, bool) {
 	teams, ok := parseJSONObject(prd["team_id"])
 	if !ok || len(teams) != 1 {
 		return "", 0, false
+	}
+	expectedPerm := "read"
+	if writable {
+		expectedPerm = "write"
 	}
 	for k, v := range teams {
 		if !readSessionPositiveIntRe.MatchString(k) {
@@ -539,12 +586,8 @@ func validateReadSessionPredicate(raw json.RawMessage) (string, int64, bool) {
 		if err != nil || n <= 0 {
 			return "", 0, false
 		}
-		t := bytes.TrimSpace(v)
-		if len(t) == 0 || t[0] != '"' {
-			return "", 0, false
-		}
-		var perm string
-		if json.Unmarshal(t, &perm) != nil || perm != "read" {
+		perm, ok := decodeJSONString(v)
+		if !ok || perm != expectedPerm {
 			return "", 0, false
 		}
 		return k, n, true
@@ -610,7 +653,7 @@ func parseReadSessionRouting(raw json.RawMessage) (string, string, bool) {
 	return backend, tenant, true
 }
 
-func (p *readSessionProfile) validateGrants(raw json.RawMessage, catalog, backend, tenant, region string) (string, string, string, []readSessionGrant, bool) {
+func (p *readSessionProfile) validateGrants(raw json.RawMessage, catalog, backend, tenant, region string, writable bool) (string, string, string, []readSessionGrant, bool) {
 	targets := map[string]bool{
 		p.remoteTargets[0]: true,
 		p.remoteTargets[1]: true,
@@ -655,11 +698,18 @@ func (p *readSessionProfile) validateGrants(raw json.RawMessage, catalog, backen
 		if !ok1 || !ok2 || !ok3 || !ok4 || !ok5 {
 			return "", "", "", nil, false
 		}
+		expectedActions := readSessionReadActions
+		if writable && target == catalog {
+			expectedActions = readSessionWriteActions
+		}
 		if !validReadSessionBucket(bucket) || len(key) > readSessionMaxKeyLength ||
 			hasPrefix != strings.HasSuffix(key, "/") ||
 			!validReadSessionPathSegments(strings.TrimSuffix(key, "/")) ||
 			!targets[target] || seen[target] || grantCat != catalog || grantReg != region ||
-			!isGetObjectOnly(grant["actions"]) {
+			!matchesActions(grant["actions"], expectedActions) {
+			return "", "", "", nil, false
+		}
+		if writable && target == catalog && !hasPrefix {
 			return "", "", "", nil, false
 		}
 		if target == backend {
@@ -689,21 +739,22 @@ func (p *readSessionProfile) validateGrants(raw json.RawMessage, catalog, backen
 	return manifestBucket, manifestRegion, manifestObjKey, grants, true
 }
 
-func isGetObjectOnly(raw json.RawMessage) bool {
+func matchesActions(raw json.RawMessage, expected []string) bool {
 	trimmed := bytes.TrimSpace(raw)
 	if len(trimmed) == 0 || trimmed[0] != '[' {
 		return false
 	}
 	var actions []json.RawMessage
-	if json.Unmarshal(trimmed, &actions) != nil || len(actions) != 1 {
+	if json.Unmarshal(trimmed, &actions) != nil || len(actions) != len(expected) {
 		return false
 	}
-	a := bytes.TrimSpace(actions[0])
-	if len(a) == 0 || a[0] != '"' {
-		return false
+	for i, exp := range expected {
+		a, ok := decodeJSONString(actions[i])
+		if !ok || a != exp {
+			return false
+		}
 	}
-	var action string
-	return json.Unmarshal(a, &action) == nil && action == "s3:GetObject"
+	return true
 }
 
 func parseJSONObject(raw json.RawMessage) (map[string]json.RawMessage, bool) {

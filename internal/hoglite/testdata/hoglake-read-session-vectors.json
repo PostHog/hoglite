@@ -120,9 +120,1167 @@
           }
         ]
       },
-      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImNjMTBiNWFiNjQ5YzM0YTQiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2hvZ2xha2UuY29udHJhY3QudGVzdCIsImF1ZCI6WyJ0cmluby1zZXNzaW9uIiwiaG9nbGFrZS1zZXNzaW9uIiwiaG9nbGl0ZS1zZXNzaW9uIl0sInN1YiI6ImV4YW1wbGUuYWxpY2UiLCJ1c3IiOiJleGFtcGxlLmFsaWNlIiwianRpIjoidG9rZW4tYSIsInByb2ZpbGUiOiJleGFtcGxlLmF3cy1zZXNzaW9uIiwidmVyc2lvbiI6MSwicHVycG9zZSI6InVzZXItc2Vzc2lvbiIsInRlbiI6InNjb3BlZCIsIm9yZyI6ImV4YW1wbGUtb3JnIiwicHJpbWFyeV9jYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwic2lkIjoic2Vzc2lvbi1hIiwiZ2VuZXJhdGlvbiI6MSwic2Vzc2lvbl9kZWFkbGluZSI6MjAwMDAwMDEyMCwiaWF0IjoyMDAwMDAwMDAwLCJuYmYiOjIwMDAwMDAwMDAsImV4cCI6MjAwMDAwMDA2MCwiY2F0Ijp7ImV4YW1wbGUtY2F0YWxvZyI6WyJyZWFkIl19LCJwcmQiOnsidGVhbV9pZCI6eyI0MiI6InJlYWQifX0sInJ0ZyI6eyJiIjoiaG9nbGl0ZSIsImJlIjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwidCI6ImZpeHR1cmVfMyJ9LCJyZW1vdGVfc2NoZW1hcyI6eyJ0ZWFtIjpbInJlYWQiXX0sImF3cyI6eyJhY2Nlc3Nfa2V5X2lkIjoiZmljdGlvbmFsLWtleSIsInNlY3JldF9hY2Nlc3Nfa2V5IjoiZmljdGlvbmFsLXNlY3JldCIsInNlc3Npb25fdG9rZW4iOiJmaWN0aW9uYWwtc2Vzc2lvbiIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImV4cGlyZXNfYXQiOjIwMDAwMDAwNjB9LCJncmFudHMiOlt7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJleGFtcGxlLWNhdGFsb2ciLCJidWNrZXQiOiJleGFtcGxlLWN1c3RvbWVyIiwib2JqZWN0X2tleSI6InRhYmxlcy9kYXRhLnBhcnF1ZXQiLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiIxMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEiLCJidWNrZXQiOiJleGFtcGxlLW93bmVyIiwib2JqZWN0X2tleSI6InJvb3QvMmMvdC9maXh0dXJlXzMvbWFuaWZlc3QiLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJyZW1vdGU6ZXZlbnRzIiwiYnVja2V0IjoiZXhhbXBsZS1yZW1vdGUiLCJwcmVmaXgiOiJldmVudHMvdGVhbV9pZD00Mi8iLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJyZW1vdGU6aW1wb3J0cyIsImJ1Y2tldCI6ImV4YW1wbGUtcmVtb3RlIiwicHJlZml4IjoiaW1wb3J0cy90ZWFtX2lkPTQyLyIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImFjdGlvbnMiOlsiczM6R2V0T2JqZWN0Il19XX0.VybrNIsk0dXnwX0hvGzMYvpZhPGDiYel9UQcUBzPuzb5tqTpmqYLU5wocszn9hFyy1XR6l1qmB-yaUVhyfHfSw",
+      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImNjMTBiNWFiNjQ5YzM0YTQiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2hvZ2xha2UuY29udHJhY3QudGVzdCIsImF1ZCI6WyJ0cmluby1zZXNzaW9uIiwiaG9nbGFrZS1zZXNzaW9uIiwiaG9nbGl0ZS1zZXNzaW9uIl0sInN1YiI6ImV4YW1wbGUuYWxpY2UiLCJ1c3IiOiJleGFtcGxlLmFsaWNlIiwianRpIjoidG9rZW4tYSIsInByb2ZpbGUiOiJleGFtcGxlLmF3cy1zZXNzaW9uIiwidmVyc2lvbiI6MSwicHVycG9zZSI6InVzZXItc2Vzc2lvbiIsInRlbiI6InNjb3BlZCIsIm9yZyI6ImV4YW1wbGUtb3JnIiwicHJpbWFyeV9jYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwic2lkIjoic2Vzc2lvbi1hIiwiZ2VuZXJhdGlvbiI6MSwic2Vzc2lvbl9kZWFkbGluZSI6MjAwMDAwMDEyMCwiaWF0IjoyMDAwMDAwMDAwLCJuYmYiOjIwMDAwMDAwMDAsImV4cCI6MjAwMDAwMDA2MCwiY2F0Ijp7ImV4YW1wbGUtY2F0YWxvZyI6WyJyZWFkIl19LCJwcmQiOnsidGVhbV9pZCI6eyI0MiI6InJlYWQifX0sInJ0ZyI6eyJiIjoiaG9nbGl0ZSIsImJlIjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwidCI6ImZpeHR1cmVfMyJ9LCJyZW1vdGVfc2NoZW1hcyI6eyJ0ZWFtIjpbInJlYWQiXX0sImF3cyI6eyJhY2Nlc3Nfa2V5X2lkIjoiZmljdGlvbmFsLWtleSIsInNlY3JldF9hY2Nlc3Nfa2V5IjoiZmljdGlvbmFsLXNlY3JldCIsInNlc3Npb25fdG9rZW4iOiJmaWN0aW9uYWwtc2Vzc2lvbiIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImV4cGlyZXNfYXQiOjIwMDAwMDAwNjB9LCJncmFudHMiOlt7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJleGFtcGxlLWNhdGFsb2ciLCJidWNrZXQiOiJleGFtcGxlLWN1c3RvbWVyIiwib2JqZWN0X2tleSI6InRhYmxlcy9kYXRhLnBhcnF1ZXQiLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiIxMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEiLCJidWNrZXQiOiJleGFtcGxlLW93bmVyIiwib2JqZWN0X2tleSI6InJvb3QvMmMvdC9maXh0dXJlXzMvbWFuaWZlc3QiLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJyZW1vdGU6ZXZlbnRzIiwiYnVja2V0IjoiZXhhbXBsZS1yZW1vdGUiLCJwcmVmaXgiOiJldmVudHMvdGVhbV9pZD00Mi8iLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJyZW1vdGU6aW1wb3J0cyIsImJ1Y2tldCI6ImV4YW1wbGUtcmVtb3RlIiwicHJlZml4IjoiaW1wb3J0cy90ZWFtX2lkPTQyLyIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImFjdGlvbnMiOlsiczM6R2V0T2JqZWN0Il19XX0.-aXvJDjNrgx-NtHfmWTVLWwbyVb9z5eeR4Aa5SkA3QkaqoG9MIp0ClaHDEc3lydnKqlSQVehAi6a4nyT_Qj8SQ",
       "expect": {
         "read": "accept",
+        "ordinary": "invalid_audience",
+        "writable": false
+      }
+    },
+    {
+      "name": "complete writable session",
+      "verify_at": 2000000001,
+      "claims": {
+        "iss": "https://hoglake.contract.test",
+        "aud": [
+          "trino-session",
+          "hoglake-session",
+          "hoglite-session"
+        ],
+        "sub": "example.alice",
+        "usr": "example.alice",
+        "jti": "token-a",
+        "profile": "example.aws-session",
+        "version": 1,
+        "purpose": "user-session",
+        "ten": "scoped",
+        "org": "example-org",
+        "primary_catalog": "example-catalog",
+        "sid": "session-a",
+        "generation": 1,
+        "session_deadline": 2000000120,
+        "iat": 2000000000,
+        "nbf": 2000000000,
+        "exp": 2000000060,
+        "cat": {
+          "example-catalog": [
+            "read",
+            "write"
+          ]
+        },
+        "prd": {
+          "team_id": {
+            "42": "write"
+          }
+        },
+        "rtg": {
+          "b": "hoglite",
+          "be": "11111111-1111-4111-8111-111111111111",
+          "t": "fixture_3"
+        },
+        "remote_schemas": {
+          "team": [
+            "read"
+          ]
+        },
+        "aws": {
+          "access_key_id": "fictional-key",
+          "secret_access_key": "fictional-secret",
+          "session_token": "fictional-session",
+          "region": "us-east-1",
+          "expires_at": 2000000060
+        },
+        "grants": [
+          {
+            "catalog": "example-catalog",
+            "target": "example-catalog",
+            "bucket": "example-customer",
+            "region": "us-east-1",
+            "actions": [
+              "s3:AbortMultipartUpload",
+              "s3:GetObject",
+              "s3:ListMultipartUploadParts",
+              "s3:PutObject"
+            ],
+            "prefix": "data/team_42/"
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "11111111-1111-4111-8111-111111111111",
+            "bucket": "example-owner",
+            "object_key": "root/2c/t/fixture_3/manifest",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "remote:events",
+            "bucket": "example-remote",
+            "prefix": "events/team_id=42/",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "remote:imports",
+            "bucket": "example-remote",
+            "prefix": "imports/team_id=42/",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          }
+        ]
+      },
+      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImNjMTBiNWFiNjQ5YzM0YTQiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2hvZ2xha2UuY29udHJhY3QudGVzdCIsImF1ZCI6WyJ0cmluby1zZXNzaW9uIiwiaG9nbGFrZS1zZXNzaW9uIiwiaG9nbGl0ZS1zZXNzaW9uIl0sInN1YiI6ImV4YW1wbGUuYWxpY2UiLCJ1c3IiOiJleGFtcGxlLmFsaWNlIiwianRpIjoidG9rZW4tYSIsInByb2ZpbGUiOiJleGFtcGxlLmF3cy1zZXNzaW9uIiwidmVyc2lvbiI6MSwicHVycG9zZSI6InVzZXItc2Vzc2lvbiIsInRlbiI6InNjb3BlZCIsIm9yZyI6ImV4YW1wbGUtb3JnIiwicHJpbWFyeV9jYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwic2lkIjoic2Vzc2lvbi1hIiwiZ2VuZXJhdGlvbiI6MSwic2Vzc2lvbl9kZWFkbGluZSI6MjAwMDAwMDEyMCwiaWF0IjoyMDAwMDAwMDAwLCJuYmYiOjIwMDAwMDAwMDAsImV4cCI6MjAwMDAwMDA2MCwiY2F0Ijp7ImV4YW1wbGUtY2F0YWxvZyI6WyJyZWFkIiwid3JpdGUiXX0sInByZCI6eyJ0ZWFtX2lkIjp7IjQyIjoid3JpdGUifX0sInJ0ZyI6eyJiIjoiaG9nbGl0ZSIsImJlIjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwidCI6ImZpeHR1cmVfMyJ9LCJyZW1vdGVfc2NoZW1hcyI6eyJ0ZWFtIjpbInJlYWQiXX0sImF3cyI6eyJhY2Nlc3Nfa2V5X2lkIjoiZmljdGlvbmFsLWtleSIsInNlY3JldF9hY2Nlc3Nfa2V5IjoiZmljdGlvbmFsLXNlY3JldCIsInNlc3Npb25fdG9rZW4iOiJmaWN0aW9uYWwtc2Vzc2lvbiIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImV4cGlyZXNfYXQiOjIwMDAwMDAwNjB9LCJncmFudHMiOlt7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJleGFtcGxlLWNhdGFsb2ciLCJidWNrZXQiOiJleGFtcGxlLWN1c3RvbWVyIiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpBYm9ydE11bHRpcGFydFVwbG9hZCIsInMzOkdldE9iamVjdCIsInMzOkxpc3RNdWx0aXBhcnRVcGxvYWRQYXJ0cyIsInMzOlB1dE9iamVjdCJdLCJwcmVmaXgiOiJkYXRhL3RlYW1fNDIvIn0seyJjYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwidGFyZ2V0IjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwiYnVja2V0IjoiZXhhbXBsZS1vd25lciIsIm9iamVjdF9rZXkiOiJyb290LzJjL3QvZml4dHVyZV8zL21hbmlmZXN0IiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXX0seyJjYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwidGFyZ2V0IjoicmVtb3RlOmV2ZW50cyIsImJ1Y2tldCI6ImV4YW1wbGUtcmVtb3RlIiwicHJlZml4IjoiZXZlbnRzL3RlYW1faWQ9NDIvIiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXX0seyJjYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwidGFyZ2V0IjoicmVtb3RlOmltcG9ydHMiLCJidWNrZXQiOiJleGFtcGxlLXJlbW90ZSIsInByZWZpeCI6ImltcG9ydHMvdGVhbV9pZD00Mi8iLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfV19.BNq-wWS86eRSP6VR4hFWSRTUtnl2rC84YI6-xqrpM71ZJAMqZ0WdeZX38GTv958k-bs5ipDhe1cfZQfrUjs14Q",
+      "expect": {
+        "read": "accept",
+        "ordinary": "invalid_audience",
+        "writable": true
+      }
+    },
+    {
+      "name": "writable cat with read predicate",
+      "verify_at": 2000000001,
+      "claims": {
+        "iss": "https://hoglake.contract.test",
+        "aud": [
+          "trino-session",
+          "hoglake-session",
+          "hoglite-session"
+        ],
+        "sub": "example.alice",
+        "usr": "example.alice",
+        "jti": "token-a",
+        "profile": "example.aws-session",
+        "version": 1,
+        "purpose": "user-session",
+        "ten": "scoped",
+        "org": "example-org",
+        "primary_catalog": "example-catalog",
+        "sid": "session-a",
+        "generation": 1,
+        "session_deadline": 2000000120,
+        "iat": 2000000000,
+        "nbf": 2000000000,
+        "exp": 2000000060,
+        "cat": {
+          "example-catalog": [
+            "read",
+            "write"
+          ]
+        },
+        "prd": {
+          "team_id": {
+            "42": "read"
+          }
+        },
+        "rtg": {
+          "b": "hoglite",
+          "be": "11111111-1111-4111-8111-111111111111",
+          "t": "fixture_3"
+        },
+        "remote_schemas": {
+          "team": [
+            "read"
+          ]
+        },
+        "aws": {
+          "access_key_id": "fictional-key",
+          "secret_access_key": "fictional-secret",
+          "session_token": "fictional-session",
+          "region": "us-east-1",
+          "expires_at": 2000000060
+        },
+        "grants": [
+          {
+            "catalog": "example-catalog",
+            "target": "example-catalog",
+            "bucket": "example-customer",
+            "region": "us-east-1",
+            "actions": [
+              "s3:AbortMultipartUpload",
+              "s3:GetObject",
+              "s3:ListMultipartUploadParts",
+              "s3:PutObject"
+            ],
+            "prefix": "data/team_42/"
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "11111111-1111-4111-8111-111111111111",
+            "bucket": "example-owner",
+            "object_key": "root/2c/t/fixture_3/manifest",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "remote:events",
+            "bucket": "example-remote",
+            "prefix": "events/team_id=42/",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "remote:imports",
+            "bucket": "example-remote",
+            "prefix": "imports/team_id=42/",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          }
+        ]
+      },
+      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImNjMTBiNWFiNjQ5YzM0YTQiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2hvZ2xha2UuY29udHJhY3QudGVzdCIsImF1ZCI6WyJ0cmluby1zZXNzaW9uIiwiaG9nbGFrZS1zZXNzaW9uIiwiaG9nbGl0ZS1zZXNzaW9uIl0sInN1YiI6ImV4YW1wbGUuYWxpY2UiLCJ1c3IiOiJleGFtcGxlLmFsaWNlIiwianRpIjoidG9rZW4tYSIsInByb2ZpbGUiOiJleGFtcGxlLmF3cy1zZXNzaW9uIiwidmVyc2lvbiI6MSwicHVycG9zZSI6InVzZXItc2Vzc2lvbiIsInRlbiI6InNjb3BlZCIsIm9yZyI6ImV4YW1wbGUtb3JnIiwicHJpbWFyeV9jYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwic2lkIjoic2Vzc2lvbi1hIiwiZ2VuZXJhdGlvbiI6MSwic2Vzc2lvbl9kZWFkbGluZSI6MjAwMDAwMDEyMCwiaWF0IjoyMDAwMDAwMDAwLCJuYmYiOjIwMDAwMDAwMDAsImV4cCI6MjAwMDAwMDA2MCwiY2F0Ijp7ImV4YW1wbGUtY2F0YWxvZyI6WyJyZWFkIiwid3JpdGUiXX0sInByZCI6eyJ0ZWFtX2lkIjp7IjQyIjoicmVhZCJ9fSwicnRnIjp7ImIiOiJob2dsaXRlIiwiYmUiOiIxMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEiLCJ0IjoiZml4dHVyZV8zIn0sInJlbW90ZV9zY2hlbWFzIjp7InRlYW0iOlsicmVhZCJdfSwiYXdzIjp7ImFjY2Vzc19rZXlfaWQiOiJmaWN0aW9uYWwta2V5Iiwic2VjcmV0X2FjY2Vzc19rZXkiOiJmaWN0aW9uYWwtc2VjcmV0Iiwic2Vzc2lvbl90b2tlbiI6ImZpY3Rpb25hbC1zZXNzaW9uIiwicmVnaW9uIjoidXMtZWFzdC0xIiwiZXhwaXJlc19hdCI6MjAwMDAwMDA2MH0sImdyYW50cyI6W3siY2F0YWxvZyI6ImV4YW1wbGUtY2F0YWxvZyIsInRhcmdldCI6ImV4YW1wbGUtY2F0YWxvZyIsImJ1Y2tldCI6ImV4YW1wbGUtY3VzdG9tZXIiLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkFib3J0TXVsdGlwYXJ0VXBsb2FkIiwiczM6R2V0T2JqZWN0IiwiczM6TGlzdE11bHRpcGFydFVwbG9hZFBhcnRzIiwiczM6UHV0T2JqZWN0Il0sInByZWZpeCI6ImRhdGEvdGVhbV80Mi8ifSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiIxMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEiLCJidWNrZXQiOiJleGFtcGxlLW93bmVyIiwib2JqZWN0X2tleSI6InJvb3QvMmMvdC9maXh0dXJlXzMvbWFuaWZlc3QiLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJyZW1vdGU6ZXZlbnRzIiwiYnVja2V0IjoiZXhhbXBsZS1yZW1vdGUiLCJwcmVmaXgiOiJldmVudHMvdGVhbV9pZD00Mi8iLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJyZW1vdGU6aW1wb3J0cyIsImJ1Y2tldCI6ImV4YW1wbGUtcmVtb3RlIiwicHJlZml4IjoiaW1wb3J0cy90ZWFtX2lkPTQyLyIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImFjdGlvbnMiOlsiczM6R2V0T2JqZWN0Il19XX0.bmE_CpvCqNRPdhCLnhqKozQ8VThmiFoHhPKnw8o1JNeI_Ku2PE79tSsGw5OTK2t72q1ty4A4wU7C6yG0JAB5hQ",
+      "expect": {
+        "read": "invalid_token",
+        "ordinary": "invalid_audience"
+      }
+    },
+    {
+      "name": "read cat with writable predicate",
+      "verify_at": 2000000001,
+      "claims": {
+        "iss": "https://hoglake.contract.test",
+        "aud": [
+          "trino-session",
+          "hoglake-session",
+          "hoglite-session"
+        ],
+        "sub": "example.alice",
+        "usr": "example.alice",
+        "jti": "token-a",
+        "profile": "example.aws-session",
+        "version": 1,
+        "purpose": "user-session",
+        "ten": "scoped",
+        "org": "example-org",
+        "primary_catalog": "example-catalog",
+        "sid": "session-a",
+        "generation": 1,
+        "session_deadline": 2000000120,
+        "iat": 2000000000,
+        "nbf": 2000000000,
+        "exp": 2000000060,
+        "cat": {
+          "example-catalog": [
+            "read"
+          ]
+        },
+        "prd": {
+          "team_id": {
+            "42": "write"
+          }
+        },
+        "rtg": {
+          "b": "hoglite",
+          "be": "11111111-1111-4111-8111-111111111111",
+          "t": "fixture_3"
+        },
+        "remote_schemas": {
+          "team": [
+            "read"
+          ]
+        },
+        "aws": {
+          "access_key_id": "fictional-key",
+          "secret_access_key": "fictional-secret",
+          "session_token": "fictional-session",
+          "region": "us-east-1",
+          "expires_at": 2000000060
+        },
+        "grants": [
+          {
+            "catalog": "example-catalog",
+            "target": "example-catalog",
+            "bucket": "example-customer",
+            "region": "us-east-1",
+            "actions": [
+              "s3:AbortMultipartUpload",
+              "s3:GetObject",
+              "s3:ListMultipartUploadParts",
+              "s3:PutObject"
+            ],
+            "prefix": "data/team_42/"
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "11111111-1111-4111-8111-111111111111",
+            "bucket": "example-owner",
+            "object_key": "root/2c/t/fixture_3/manifest",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "remote:events",
+            "bucket": "example-remote",
+            "prefix": "events/team_id=42/",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "remote:imports",
+            "bucket": "example-remote",
+            "prefix": "imports/team_id=42/",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          }
+        ]
+      },
+      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImNjMTBiNWFiNjQ5YzM0YTQiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2hvZ2xha2UuY29udHJhY3QudGVzdCIsImF1ZCI6WyJ0cmluby1zZXNzaW9uIiwiaG9nbGFrZS1zZXNzaW9uIiwiaG9nbGl0ZS1zZXNzaW9uIl0sInN1YiI6ImV4YW1wbGUuYWxpY2UiLCJ1c3IiOiJleGFtcGxlLmFsaWNlIiwianRpIjoidG9rZW4tYSIsInByb2ZpbGUiOiJleGFtcGxlLmF3cy1zZXNzaW9uIiwidmVyc2lvbiI6MSwicHVycG9zZSI6InVzZXItc2Vzc2lvbiIsInRlbiI6InNjb3BlZCIsIm9yZyI6ImV4YW1wbGUtb3JnIiwicHJpbWFyeV9jYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwic2lkIjoic2Vzc2lvbi1hIiwiZ2VuZXJhdGlvbiI6MSwic2Vzc2lvbl9kZWFkbGluZSI6MjAwMDAwMDEyMCwiaWF0IjoyMDAwMDAwMDAwLCJuYmYiOjIwMDAwMDAwMDAsImV4cCI6MjAwMDAwMDA2MCwiY2F0Ijp7ImV4YW1wbGUtY2F0YWxvZyI6WyJyZWFkIl19LCJwcmQiOnsidGVhbV9pZCI6eyI0MiI6IndyaXRlIn19LCJydGciOnsiYiI6ImhvZ2xpdGUiLCJiZSI6IjExMTExMTExLTExMTEtNDExMS04MTExLTExMTExMTExMTExMSIsInQiOiJmaXh0dXJlXzMifSwicmVtb3RlX3NjaGVtYXMiOnsidGVhbSI6WyJyZWFkIl19LCJhd3MiOnsiYWNjZXNzX2tleV9pZCI6ImZpY3Rpb25hbC1rZXkiLCJzZWNyZXRfYWNjZXNzX2tleSI6ImZpY3Rpb25hbC1zZWNyZXQiLCJzZXNzaW9uX3Rva2VuIjoiZmljdGlvbmFsLXNlc3Npb24iLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJleHBpcmVzX2F0IjoyMDAwMDAwMDYwfSwiZ3JhbnRzIjpbeyJjYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwidGFyZ2V0IjoiZXhhbXBsZS1jYXRhbG9nIiwiYnVja2V0IjoiZXhhbXBsZS1jdXN0b21lciIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImFjdGlvbnMiOlsiczM6QWJvcnRNdWx0aXBhcnRVcGxvYWQiLCJzMzpHZXRPYmplY3QiLCJzMzpMaXN0TXVsdGlwYXJ0VXBsb2FkUGFydHMiLCJzMzpQdXRPYmplY3QiXSwicHJlZml4IjoiZGF0YS90ZWFtXzQyLyJ9LHsiY2F0YWxvZyI6ImV4YW1wbGUtY2F0YWxvZyIsInRhcmdldCI6IjExMTExMTExLTExMTEtNDExMS04MTExLTExMTExMTExMTExMSIsImJ1Y2tldCI6ImV4YW1wbGUtb3duZXIiLCJvYmplY3Rfa2V5Ijoicm9vdC8yYy90L2ZpeHR1cmVfMy9tYW5pZmVzdCIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImFjdGlvbnMiOlsiczM6R2V0T2JqZWN0Il19LHsiY2F0YWxvZyI6ImV4YW1wbGUtY2F0YWxvZyIsInRhcmdldCI6InJlbW90ZTpldmVudHMiLCJidWNrZXQiOiJleGFtcGxlLXJlbW90ZSIsInByZWZpeCI6ImV2ZW50cy90ZWFtX2lkPTQyLyIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImFjdGlvbnMiOlsiczM6R2V0T2JqZWN0Il19LHsiY2F0YWxvZyI6ImV4YW1wbGUtY2F0YWxvZyIsInRhcmdldCI6InJlbW90ZTppbXBvcnRzIiwiYnVja2V0IjoiZXhhbXBsZS1yZW1vdGUiLCJwcmVmaXgiOiJpbXBvcnRzL3RlYW1faWQ9NDIvIiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXX1dfQ.aZQ2NPpLsmrQfDHyPynHHmkiic2Tdq9piPigblRXSj1TAcmmm6jmvb-6BjS6aPJTCKStlZQ00ktepW4CacC2Og",
+      "expect": {
+        "read": "invalid_token",
+        "ordinary": "invalid_audience"
+      }
+    },
+    {
+      "name": "writable claims with read-only primary grant",
+      "verify_at": 2000000001,
+      "claims": {
+        "iss": "https://hoglake.contract.test",
+        "aud": [
+          "trino-session",
+          "hoglake-session",
+          "hoglite-session"
+        ],
+        "sub": "example.alice",
+        "usr": "example.alice",
+        "jti": "token-a",
+        "profile": "example.aws-session",
+        "version": 1,
+        "purpose": "user-session",
+        "ten": "scoped",
+        "org": "example-org",
+        "primary_catalog": "example-catalog",
+        "sid": "session-a",
+        "generation": 1,
+        "session_deadline": 2000000120,
+        "iat": 2000000000,
+        "nbf": 2000000000,
+        "exp": 2000000060,
+        "cat": {
+          "example-catalog": [
+            "read",
+            "write"
+          ]
+        },
+        "prd": {
+          "team_id": {
+            "42": "write"
+          }
+        },
+        "rtg": {
+          "b": "hoglite",
+          "be": "11111111-1111-4111-8111-111111111111",
+          "t": "fixture_3"
+        },
+        "remote_schemas": {
+          "team": [
+            "read"
+          ]
+        },
+        "aws": {
+          "access_key_id": "fictional-key",
+          "secret_access_key": "fictional-secret",
+          "session_token": "fictional-session",
+          "region": "us-east-1",
+          "expires_at": 2000000060
+        },
+        "grants": [
+          {
+            "catalog": "example-catalog",
+            "target": "example-catalog",
+            "bucket": "example-customer",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ],
+            "prefix": "data/team_42/"
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "11111111-1111-4111-8111-111111111111",
+            "bucket": "example-owner",
+            "object_key": "root/2c/t/fixture_3/manifest",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "remote:events",
+            "bucket": "example-remote",
+            "prefix": "events/team_id=42/",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "remote:imports",
+            "bucket": "example-remote",
+            "prefix": "imports/team_id=42/",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          }
+        ]
+      },
+      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImNjMTBiNWFiNjQ5YzM0YTQiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2hvZ2xha2UuY29udHJhY3QudGVzdCIsImF1ZCI6WyJ0cmluby1zZXNzaW9uIiwiaG9nbGFrZS1zZXNzaW9uIiwiaG9nbGl0ZS1zZXNzaW9uIl0sInN1YiI6ImV4YW1wbGUuYWxpY2UiLCJ1c3IiOiJleGFtcGxlLmFsaWNlIiwianRpIjoidG9rZW4tYSIsInByb2ZpbGUiOiJleGFtcGxlLmF3cy1zZXNzaW9uIiwidmVyc2lvbiI6MSwicHVycG9zZSI6InVzZXItc2Vzc2lvbiIsInRlbiI6InNjb3BlZCIsIm9yZyI6ImV4YW1wbGUtb3JnIiwicHJpbWFyeV9jYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwic2lkIjoic2Vzc2lvbi1hIiwiZ2VuZXJhdGlvbiI6MSwic2Vzc2lvbl9kZWFkbGluZSI6MjAwMDAwMDEyMCwiaWF0IjoyMDAwMDAwMDAwLCJuYmYiOjIwMDAwMDAwMDAsImV4cCI6MjAwMDAwMDA2MCwiY2F0Ijp7ImV4YW1wbGUtY2F0YWxvZyI6WyJyZWFkIiwid3JpdGUiXX0sInByZCI6eyJ0ZWFtX2lkIjp7IjQyIjoid3JpdGUifX0sInJ0ZyI6eyJiIjoiaG9nbGl0ZSIsImJlIjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwidCI6ImZpeHR1cmVfMyJ9LCJyZW1vdGVfc2NoZW1hcyI6eyJ0ZWFtIjpbInJlYWQiXX0sImF3cyI6eyJhY2Nlc3Nfa2V5X2lkIjoiZmljdGlvbmFsLWtleSIsInNlY3JldF9hY2Nlc3Nfa2V5IjoiZmljdGlvbmFsLXNlY3JldCIsInNlc3Npb25fdG9rZW4iOiJmaWN0aW9uYWwtc2Vzc2lvbiIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImV4cGlyZXNfYXQiOjIwMDAwMDAwNjB9LCJncmFudHMiOlt7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJleGFtcGxlLWNhdGFsb2ciLCJidWNrZXQiOiJleGFtcGxlLWN1c3RvbWVyIiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXSwicHJlZml4IjoiZGF0YS90ZWFtXzQyLyJ9LHsiY2F0YWxvZyI6ImV4YW1wbGUtY2F0YWxvZyIsInRhcmdldCI6IjExMTExMTExLTExMTEtNDExMS04MTExLTExMTExMTExMTExMSIsImJ1Y2tldCI6ImV4YW1wbGUtb3duZXIiLCJvYmplY3Rfa2V5Ijoicm9vdC8yYy90L2ZpeHR1cmVfMy9tYW5pZmVzdCIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImFjdGlvbnMiOlsiczM6R2V0T2JqZWN0Il19LHsiY2F0YWxvZyI6ImV4YW1wbGUtY2F0YWxvZyIsInRhcmdldCI6InJlbW90ZTpldmVudHMiLCJidWNrZXQiOiJleGFtcGxlLXJlbW90ZSIsInByZWZpeCI6ImV2ZW50cy90ZWFtX2lkPTQyLyIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImFjdGlvbnMiOlsiczM6R2V0T2JqZWN0Il19LHsiY2F0YWxvZyI6ImV4YW1wbGUtY2F0YWxvZyIsInRhcmdldCI6InJlbW90ZTppbXBvcnRzIiwiYnVja2V0IjoiZXhhbXBsZS1yZW1vdGUiLCJwcmVmaXgiOiJpbXBvcnRzL3RlYW1faWQ9NDIvIiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXX1dfQ.iwTQGqgO3s1UEIp6MgvbSQiDVzyQZxazvDiqRHnsgGaxJ1ULHt8OEyKFFB-qs5OJ-rIu2WESS_ywcbPHLkxoAw",
+      "expect": {
+        "read": "invalid_token",
+        "ordinary": "invalid_audience"
+      }
+    },
+    {
+      "name": "read claims with writable primary grant",
+      "verify_at": 2000000001,
+      "claims": {
+        "iss": "https://hoglake.contract.test",
+        "aud": [
+          "trino-session",
+          "hoglake-session",
+          "hoglite-session"
+        ],
+        "sub": "example.alice",
+        "usr": "example.alice",
+        "jti": "token-a",
+        "profile": "example.aws-session",
+        "version": 1,
+        "purpose": "user-session",
+        "ten": "scoped",
+        "org": "example-org",
+        "primary_catalog": "example-catalog",
+        "sid": "session-a",
+        "generation": 1,
+        "session_deadline": 2000000120,
+        "iat": 2000000000,
+        "nbf": 2000000000,
+        "exp": 2000000060,
+        "cat": {
+          "example-catalog": [
+            "read"
+          ]
+        },
+        "prd": {
+          "team_id": {
+            "42": "read"
+          }
+        },
+        "rtg": {
+          "b": "hoglite",
+          "be": "11111111-1111-4111-8111-111111111111",
+          "t": "fixture_3"
+        },
+        "remote_schemas": {
+          "team": [
+            "read"
+          ]
+        },
+        "aws": {
+          "access_key_id": "fictional-key",
+          "secret_access_key": "fictional-secret",
+          "session_token": "fictional-session",
+          "region": "us-east-1",
+          "expires_at": 2000000060
+        },
+        "grants": [
+          {
+            "catalog": "example-catalog",
+            "target": "example-catalog",
+            "bucket": "example-customer",
+            "region": "us-east-1",
+            "actions": [
+              "s3:AbortMultipartUpload",
+              "s3:GetObject",
+              "s3:ListMultipartUploadParts",
+              "s3:PutObject"
+            ],
+            "prefix": "data/team_42/"
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "11111111-1111-4111-8111-111111111111",
+            "bucket": "example-owner",
+            "object_key": "root/2c/t/fixture_3/manifest",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "remote:events",
+            "bucket": "example-remote",
+            "prefix": "events/team_id=42/",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "remote:imports",
+            "bucket": "example-remote",
+            "prefix": "imports/team_id=42/",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          }
+        ]
+      },
+      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImNjMTBiNWFiNjQ5YzM0YTQiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2hvZ2xha2UuY29udHJhY3QudGVzdCIsImF1ZCI6WyJ0cmluby1zZXNzaW9uIiwiaG9nbGFrZS1zZXNzaW9uIiwiaG9nbGl0ZS1zZXNzaW9uIl0sInN1YiI6ImV4YW1wbGUuYWxpY2UiLCJ1c3IiOiJleGFtcGxlLmFsaWNlIiwianRpIjoidG9rZW4tYSIsInByb2ZpbGUiOiJleGFtcGxlLmF3cy1zZXNzaW9uIiwidmVyc2lvbiI6MSwicHVycG9zZSI6InVzZXItc2Vzc2lvbiIsInRlbiI6InNjb3BlZCIsIm9yZyI6ImV4YW1wbGUtb3JnIiwicHJpbWFyeV9jYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwic2lkIjoic2Vzc2lvbi1hIiwiZ2VuZXJhdGlvbiI6MSwic2Vzc2lvbl9kZWFkbGluZSI6MjAwMDAwMDEyMCwiaWF0IjoyMDAwMDAwMDAwLCJuYmYiOjIwMDAwMDAwMDAsImV4cCI6MjAwMDAwMDA2MCwiY2F0Ijp7ImV4YW1wbGUtY2F0YWxvZyI6WyJyZWFkIl19LCJwcmQiOnsidGVhbV9pZCI6eyI0MiI6InJlYWQifX0sInJ0ZyI6eyJiIjoiaG9nbGl0ZSIsImJlIjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwidCI6ImZpeHR1cmVfMyJ9LCJyZW1vdGVfc2NoZW1hcyI6eyJ0ZWFtIjpbInJlYWQiXX0sImF3cyI6eyJhY2Nlc3Nfa2V5X2lkIjoiZmljdGlvbmFsLWtleSIsInNlY3JldF9hY2Nlc3Nfa2V5IjoiZmljdGlvbmFsLXNlY3JldCIsInNlc3Npb25fdG9rZW4iOiJmaWN0aW9uYWwtc2Vzc2lvbiIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImV4cGlyZXNfYXQiOjIwMDAwMDAwNjB9LCJncmFudHMiOlt7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJleGFtcGxlLWNhdGFsb2ciLCJidWNrZXQiOiJleGFtcGxlLWN1c3RvbWVyIiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpBYm9ydE11bHRpcGFydFVwbG9hZCIsInMzOkdldE9iamVjdCIsInMzOkxpc3RNdWx0aXBhcnRVcGxvYWRQYXJ0cyIsInMzOlB1dE9iamVjdCJdLCJwcmVmaXgiOiJkYXRhL3RlYW1fNDIvIn0seyJjYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwidGFyZ2V0IjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwiYnVja2V0IjoiZXhhbXBsZS1vd25lciIsIm9iamVjdF9rZXkiOiJyb290LzJjL3QvZml4dHVyZV8zL21hbmlmZXN0IiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXX0seyJjYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwidGFyZ2V0IjoicmVtb3RlOmV2ZW50cyIsImJ1Y2tldCI6ImV4YW1wbGUtcmVtb3RlIiwicHJlZml4IjoiZXZlbnRzL3RlYW1faWQ9NDIvIiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXX0seyJjYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwidGFyZ2V0IjoicmVtb3RlOmltcG9ydHMiLCJidWNrZXQiOiJleGFtcGxlLXJlbW90ZSIsInByZWZpeCI6ImltcG9ydHMvdGVhbV9pZD00Mi8iLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfV19.TLCIyRCuFs8WA13I1BFsz3o0DmW1-EaLtu5D8CUEGkdvd3RZDM9mNt1TgFXLqg2RGDuLC_r9zJuthgbeBVxoRA",
+      "expect": {
+        "read": "invalid_token",
+        "ordinary": "invalid_audience"
+      }
+    },
+    {
+      "name": "writable cat missing read scope",
+      "verify_at": 2000000001,
+      "claims": {
+        "iss": "https://hoglake.contract.test",
+        "aud": [
+          "trino-session",
+          "hoglake-session",
+          "hoglite-session"
+        ],
+        "sub": "example.alice",
+        "usr": "example.alice",
+        "jti": "token-a",
+        "profile": "example.aws-session",
+        "version": 1,
+        "purpose": "user-session",
+        "ten": "scoped",
+        "org": "example-org",
+        "primary_catalog": "example-catalog",
+        "sid": "session-a",
+        "generation": 1,
+        "session_deadline": 2000000120,
+        "iat": 2000000000,
+        "nbf": 2000000000,
+        "exp": 2000000060,
+        "cat": {
+          "example-catalog": [
+            "write"
+          ]
+        },
+        "prd": {
+          "team_id": {
+            "42": "write"
+          }
+        },
+        "rtg": {
+          "b": "hoglite",
+          "be": "11111111-1111-4111-8111-111111111111",
+          "t": "fixture_3"
+        },
+        "remote_schemas": {
+          "team": [
+            "read"
+          ]
+        },
+        "aws": {
+          "access_key_id": "fictional-key",
+          "secret_access_key": "fictional-secret",
+          "session_token": "fictional-session",
+          "region": "us-east-1",
+          "expires_at": 2000000060
+        },
+        "grants": [
+          {
+            "catalog": "example-catalog",
+            "target": "example-catalog",
+            "bucket": "example-customer",
+            "region": "us-east-1",
+            "actions": [
+              "s3:AbortMultipartUpload",
+              "s3:GetObject",
+              "s3:ListMultipartUploadParts",
+              "s3:PutObject"
+            ],
+            "prefix": "data/team_42/"
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "11111111-1111-4111-8111-111111111111",
+            "bucket": "example-owner",
+            "object_key": "root/2c/t/fixture_3/manifest",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "remote:events",
+            "bucket": "example-remote",
+            "prefix": "events/team_id=42/",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "remote:imports",
+            "bucket": "example-remote",
+            "prefix": "imports/team_id=42/",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          }
+        ]
+      },
+      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImNjMTBiNWFiNjQ5YzM0YTQiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2hvZ2xha2UuY29udHJhY3QudGVzdCIsImF1ZCI6WyJ0cmluby1zZXNzaW9uIiwiaG9nbGFrZS1zZXNzaW9uIiwiaG9nbGl0ZS1zZXNzaW9uIl0sInN1YiI6ImV4YW1wbGUuYWxpY2UiLCJ1c3IiOiJleGFtcGxlLmFsaWNlIiwianRpIjoidG9rZW4tYSIsInByb2ZpbGUiOiJleGFtcGxlLmF3cy1zZXNzaW9uIiwidmVyc2lvbiI6MSwicHVycG9zZSI6InVzZXItc2Vzc2lvbiIsInRlbiI6InNjb3BlZCIsIm9yZyI6ImV4YW1wbGUtb3JnIiwicHJpbWFyeV9jYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwic2lkIjoic2Vzc2lvbi1hIiwiZ2VuZXJhdGlvbiI6MSwic2Vzc2lvbl9kZWFkbGluZSI6MjAwMDAwMDEyMCwiaWF0IjoyMDAwMDAwMDAwLCJuYmYiOjIwMDAwMDAwMDAsImV4cCI6MjAwMDAwMDA2MCwiY2F0Ijp7ImV4YW1wbGUtY2F0YWxvZyI6WyJ3cml0ZSJdfSwicHJkIjp7InRlYW1faWQiOnsiNDIiOiJ3cml0ZSJ9fSwicnRnIjp7ImIiOiJob2dsaXRlIiwiYmUiOiIxMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEiLCJ0IjoiZml4dHVyZV8zIn0sInJlbW90ZV9zY2hlbWFzIjp7InRlYW0iOlsicmVhZCJdfSwiYXdzIjp7ImFjY2Vzc19rZXlfaWQiOiJmaWN0aW9uYWwta2V5Iiwic2VjcmV0X2FjY2Vzc19rZXkiOiJmaWN0aW9uYWwtc2VjcmV0Iiwic2Vzc2lvbl90b2tlbiI6ImZpY3Rpb25hbC1zZXNzaW9uIiwicmVnaW9uIjoidXMtZWFzdC0xIiwiZXhwaXJlc19hdCI6MjAwMDAwMDA2MH0sImdyYW50cyI6W3siY2F0YWxvZyI6ImV4YW1wbGUtY2F0YWxvZyIsInRhcmdldCI6ImV4YW1wbGUtY2F0YWxvZyIsImJ1Y2tldCI6ImV4YW1wbGUtY3VzdG9tZXIiLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkFib3J0TXVsdGlwYXJ0VXBsb2FkIiwiczM6R2V0T2JqZWN0IiwiczM6TGlzdE11bHRpcGFydFVwbG9hZFBhcnRzIiwiczM6UHV0T2JqZWN0Il0sInByZWZpeCI6ImRhdGEvdGVhbV80Mi8ifSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiIxMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEiLCJidWNrZXQiOiJleGFtcGxlLW93bmVyIiwib2JqZWN0X2tleSI6InJvb3QvMmMvdC9maXh0dXJlXzMvbWFuaWZlc3QiLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJyZW1vdGU6ZXZlbnRzIiwiYnVja2V0IjoiZXhhbXBsZS1yZW1vdGUiLCJwcmVmaXgiOiJldmVudHMvdGVhbV9pZD00Mi8iLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJyZW1vdGU6aW1wb3J0cyIsImJ1Y2tldCI6ImV4YW1wbGUtcmVtb3RlIiwicHJlZml4IjoiaW1wb3J0cy90ZWFtX2lkPTQyLyIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImFjdGlvbnMiOlsiczM6R2V0T2JqZWN0Il19XX0.8bGzOL1wLO7bAvpQj3eCSZzdgOPsMvIF6GSFgBO2XCoEzJMq34xP5Nz4UielXjFgpzegUeB-Zn56XRyyIy89Lg",
+      "expect": {
+        "read": "invalid_token",
+        "ordinary": "invalid_audience"
+      }
+    },
+    {
+      "name": "writable primary grant with object_key",
+      "verify_at": 2000000001,
+      "claims": {
+        "iss": "https://hoglake.contract.test",
+        "aud": [
+          "trino-session",
+          "hoglake-session",
+          "hoglite-session"
+        ],
+        "sub": "example.alice",
+        "usr": "example.alice",
+        "jti": "token-a",
+        "profile": "example.aws-session",
+        "version": 1,
+        "purpose": "user-session",
+        "ten": "scoped",
+        "org": "example-org",
+        "primary_catalog": "example-catalog",
+        "sid": "session-a",
+        "generation": 1,
+        "session_deadline": 2000000120,
+        "iat": 2000000000,
+        "nbf": 2000000000,
+        "exp": 2000000060,
+        "cat": {
+          "example-catalog": [
+            "read",
+            "write"
+          ]
+        },
+        "prd": {
+          "team_id": {
+            "42": "write"
+          }
+        },
+        "rtg": {
+          "b": "hoglite",
+          "be": "11111111-1111-4111-8111-111111111111",
+          "t": "fixture_3"
+        },
+        "remote_schemas": {
+          "team": [
+            "read"
+          ]
+        },
+        "aws": {
+          "access_key_id": "fictional-key",
+          "secret_access_key": "fictional-secret",
+          "session_token": "fictional-session",
+          "region": "us-east-1",
+          "expires_at": 2000000060
+        },
+        "grants": [
+          {
+            "catalog": "example-catalog",
+            "target": "example-catalog",
+            "bucket": "example-customer",
+            "region": "us-east-1",
+            "actions": [
+              "s3:AbortMultipartUpload",
+              "s3:GetObject",
+              "s3:ListMultipartUploadParts",
+              "s3:PutObject"
+            ],
+            "object_key": "data/team_42/file.parquet"
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "11111111-1111-4111-8111-111111111111",
+            "bucket": "example-owner",
+            "object_key": "root/2c/t/fixture_3/manifest",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "remote:events",
+            "bucket": "example-remote",
+            "prefix": "events/team_id=42/",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "remote:imports",
+            "bucket": "example-remote",
+            "prefix": "imports/team_id=42/",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          }
+        ]
+      },
+      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImNjMTBiNWFiNjQ5YzM0YTQiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2hvZ2xha2UuY29udHJhY3QudGVzdCIsImF1ZCI6WyJ0cmluby1zZXNzaW9uIiwiaG9nbGFrZS1zZXNzaW9uIiwiaG9nbGl0ZS1zZXNzaW9uIl0sInN1YiI6ImV4YW1wbGUuYWxpY2UiLCJ1c3IiOiJleGFtcGxlLmFsaWNlIiwianRpIjoidG9rZW4tYSIsInByb2ZpbGUiOiJleGFtcGxlLmF3cy1zZXNzaW9uIiwidmVyc2lvbiI6MSwicHVycG9zZSI6InVzZXItc2Vzc2lvbiIsInRlbiI6InNjb3BlZCIsIm9yZyI6ImV4YW1wbGUtb3JnIiwicHJpbWFyeV9jYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwic2lkIjoic2Vzc2lvbi1hIiwiZ2VuZXJhdGlvbiI6MSwic2Vzc2lvbl9kZWFkbGluZSI6MjAwMDAwMDEyMCwiaWF0IjoyMDAwMDAwMDAwLCJuYmYiOjIwMDAwMDAwMDAsImV4cCI6MjAwMDAwMDA2MCwiY2F0Ijp7ImV4YW1wbGUtY2F0YWxvZyI6WyJyZWFkIiwid3JpdGUiXX0sInByZCI6eyJ0ZWFtX2lkIjp7IjQyIjoid3JpdGUifX0sInJ0ZyI6eyJiIjoiaG9nbGl0ZSIsImJlIjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwidCI6ImZpeHR1cmVfMyJ9LCJyZW1vdGVfc2NoZW1hcyI6eyJ0ZWFtIjpbInJlYWQiXX0sImF3cyI6eyJhY2Nlc3Nfa2V5X2lkIjoiZmljdGlvbmFsLWtleSIsInNlY3JldF9hY2Nlc3Nfa2V5IjoiZmljdGlvbmFsLXNlY3JldCIsInNlc3Npb25fdG9rZW4iOiJmaWN0aW9uYWwtc2Vzc2lvbiIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImV4cGlyZXNfYXQiOjIwMDAwMDAwNjB9LCJncmFudHMiOlt7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJleGFtcGxlLWNhdGFsb2ciLCJidWNrZXQiOiJleGFtcGxlLWN1c3RvbWVyIiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpBYm9ydE11bHRpcGFydFVwbG9hZCIsInMzOkdldE9iamVjdCIsInMzOkxpc3RNdWx0aXBhcnRVcGxvYWRQYXJ0cyIsInMzOlB1dE9iamVjdCJdLCJvYmplY3Rfa2V5IjoiZGF0YS90ZWFtXzQyL2ZpbGUucGFycXVldCJ9LHsiY2F0YWxvZyI6ImV4YW1wbGUtY2F0YWxvZyIsInRhcmdldCI6IjExMTExMTExLTExMTEtNDExMS04MTExLTExMTExMTExMTExMSIsImJ1Y2tldCI6ImV4YW1wbGUtb3duZXIiLCJvYmplY3Rfa2V5Ijoicm9vdC8yYy90L2ZpeHR1cmVfMy9tYW5pZmVzdCIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImFjdGlvbnMiOlsiczM6R2V0T2JqZWN0Il19LHsiY2F0YWxvZyI6ImV4YW1wbGUtY2F0YWxvZyIsInRhcmdldCI6InJlbW90ZTpldmVudHMiLCJidWNrZXQiOiJleGFtcGxlLXJlbW90ZSIsInByZWZpeCI6ImV2ZW50cy90ZWFtX2lkPTQyLyIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImFjdGlvbnMiOlsiczM6R2V0T2JqZWN0Il19LHsiY2F0YWxvZyI6ImV4YW1wbGUtY2F0YWxvZyIsInRhcmdldCI6InJlbW90ZTppbXBvcnRzIiwiYnVja2V0IjoiZXhhbXBsZS1yZW1vdGUiLCJwcmVmaXgiOiJpbXBvcnRzL3RlYW1faWQ9NDIvIiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXX1dfQ.5NXENTEyT6KHZbga29fcsT-eLIKuwmBgCYGxZpN-HaOzsboYRbEItP7JJj-cGs-vW2ypi50h4bfxPnWKSIooFA",
+      "expect": {
+        "read": "invalid_token",
+        "ordinary": "invalid_audience"
+      }
+    },
+    {
+      "name": "writable primary grant with DeleteObject",
+      "verify_at": 2000000001,
+      "claims": {
+        "iss": "https://hoglake.contract.test",
+        "aud": [
+          "trino-session",
+          "hoglake-session",
+          "hoglite-session"
+        ],
+        "sub": "example.alice",
+        "usr": "example.alice",
+        "jti": "token-a",
+        "profile": "example.aws-session",
+        "version": 1,
+        "purpose": "user-session",
+        "ten": "scoped",
+        "org": "example-org",
+        "primary_catalog": "example-catalog",
+        "sid": "session-a",
+        "generation": 1,
+        "session_deadline": 2000000120,
+        "iat": 2000000000,
+        "nbf": 2000000000,
+        "exp": 2000000060,
+        "cat": {
+          "example-catalog": [
+            "read",
+            "write"
+          ]
+        },
+        "prd": {
+          "team_id": {
+            "42": "write"
+          }
+        },
+        "rtg": {
+          "b": "hoglite",
+          "be": "11111111-1111-4111-8111-111111111111",
+          "t": "fixture_3"
+        },
+        "remote_schemas": {
+          "team": [
+            "read"
+          ]
+        },
+        "aws": {
+          "access_key_id": "fictional-key",
+          "secret_access_key": "fictional-secret",
+          "session_token": "fictional-session",
+          "region": "us-east-1",
+          "expires_at": 2000000060
+        },
+        "grants": [
+          {
+            "catalog": "example-catalog",
+            "target": "example-catalog",
+            "bucket": "example-customer",
+            "region": "us-east-1",
+            "actions": [
+              "s3:AbortMultipartUpload",
+              "s3:GetObject",
+              "s3:ListMultipartUploadParts",
+              "s3:PutObject",
+              "s3:DeleteObject"
+            ],
+            "prefix": "data/team_42/"
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "11111111-1111-4111-8111-111111111111",
+            "bucket": "example-owner",
+            "object_key": "root/2c/t/fixture_3/manifest",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "remote:events",
+            "bucket": "example-remote",
+            "prefix": "events/team_id=42/",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "remote:imports",
+            "bucket": "example-remote",
+            "prefix": "imports/team_id=42/",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          }
+        ]
+      },
+      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImNjMTBiNWFiNjQ5YzM0YTQiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2hvZ2xha2UuY29udHJhY3QudGVzdCIsImF1ZCI6WyJ0cmluby1zZXNzaW9uIiwiaG9nbGFrZS1zZXNzaW9uIiwiaG9nbGl0ZS1zZXNzaW9uIl0sInN1YiI6ImV4YW1wbGUuYWxpY2UiLCJ1c3IiOiJleGFtcGxlLmFsaWNlIiwianRpIjoidG9rZW4tYSIsInByb2ZpbGUiOiJleGFtcGxlLmF3cy1zZXNzaW9uIiwidmVyc2lvbiI6MSwicHVycG9zZSI6InVzZXItc2Vzc2lvbiIsInRlbiI6InNjb3BlZCIsIm9yZyI6ImV4YW1wbGUtb3JnIiwicHJpbWFyeV9jYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwic2lkIjoic2Vzc2lvbi1hIiwiZ2VuZXJhdGlvbiI6MSwic2Vzc2lvbl9kZWFkbGluZSI6MjAwMDAwMDEyMCwiaWF0IjoyMDAwMDAwMDAwLCJuYmYiOjIwMDAwMDAwMDAsImV4cCI6MjAwMDAwMDA2MCwiY2F0Ijp7ImV4YW1wbGUtY2F0YWxvZyI6WyJyZWFkIiwid3JpdGUiXX0sInByZCI6eyJ0ZWFtX2lkIjp7IjQyIjoid3JpdGUifX0sInJ0ZyI6eyJiIjoiaG9nbGl0ZSIsImJlIjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwidCI6ImZpeHR1cmVfMyJ9LCJyZW1vdGVfc2NoZW1hcyI6eyJ0ZWFtIjpbInJlYWQiXX0sImF3cyI6eyJhY2Nlc3Nfa2V5X2lkIjoiZmljdGlvbmFsLWtleSIsInNlY3JldF9hY2Nlc3Nfa2V5IjoiZmljdGlvbmFsLXNlY3JldCIsInNlc3Npb25fdG9rZW4iOiJmaWN0aW9uYWwtc2Vzc2lvbiIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImV4cGlyZXNfYXQiOjIwMDAwMDAwNjB9LCJncmFudHMiOlt7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJleGFtcGxlLWNhdGFsb2ciLCJidWNrZXQiOiJleGFtcGxlLWN1c3RvbWVyIiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpBYm9ydE11bHRpcGFydFVwbG9hZCIsInMzOkdldE9iamVjdCIsInMzOkxpc3RNdWx0aXBhcnRVcGxvYWRQYXJ0cyIsInMzOlB1dE9iamVjdCIsInMzOkRlbGV0ZU9iamVjdCJdLCJwcmVmaXgiOiJkYXRhL3RlYW1fNDIvIn0seyJjYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwidGFyZ2V0IjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwiYnVja2V0IjoiZXhhbXBsZS1vd25lciIsIm9iamVjdF9rZXkiOiJyb290LzJjL3QvZml4dHVyZV8zL21hbmlmZXN0IiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXX0seyJjYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwidGFyZ2V0IjoicmVtb3RlOmV2ZW50cyIsImJ1Y2tldCI6ImV4YW1wbGUtcmVtb3RlIiwicHJlZml4IjoiZXZlbnRzL3RlYW1faWQ9NDIvIiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXX0seyJjYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwidGFyZ2V0IjoicmVtb3RlOmltcG9ydHMiLCJidWNrZXQiOiJleGFtcGxlLXJlbW90ZSIsInByZWZpeCI6ImltcG9ydHMvdGVhbV9pZD00Mi8iLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfV19.OqyaXRg_Cg_oKuDFgSRzHzhf2BDyDFu6TiBmvaTqfFIk-9CjsF4K-HZKJDnylQheIhHJOf6nT0ed16tVXsZ08A",
+      "expect": {
+        "read": "invalid_token",
+        "ordinary": "invalid_audience"
+      }
+    },
+    {
+      "name": "writable manifest grant",
+      "verify_at": 2000000001,
+      "claims": {
+        "iss": "https://hoglake.contract.test",
+        "aud": [
+          "trino-session",
+          "hoglake-session",
+          "hoglite-session"
+        ],
+        "sub": "example.alice",
+        "usr": "example.alice",
+        "jti": "token-a",
+        "profile": "example.aws-session",
+        "version": 1,
+        "purpose": "user-session",
+        "ten": "scoped",
+        "org": "example-org",
+        "primary_catalog": "example-catalog",
+        "sid": "session-a",
+        "generation": 1,
+        "session_deadline": 2000000120,
+        "iat": 2000000000,
+        "nbf": 2000000000,
+        "exp": 2000000060,
+        "cat": {
+          "example-catalog": [
+            "read",
+            "write"
+          ]
+        },
+        "prd": {
+          "team_id": {
+            "42": "write"
+          }
+        },
+        "rtg": {
+          "b": "hoglite",
+          "be": "11111111-1111-4111-8111-111111111111",
+          "t": "fixture_3"
+        },
+        "remote_schemas": {
+          "team": [
+            "read"
+          ]
+        },
+        "aws": {
+          "access_key_id": "fictional-key",
+          "secret_access_key": "fictional-secret",
+          "session_token": "fictional-session",
+          "region": "us-east-1",
+          "expires_at": 2000000060
+        },
+        "grants": [
+          {
+            "catalog": "example-catalog",
+            "target": "example-catalog",
+            "bucket": "example-customer",
+            "region": "us-east-1",
+            "actions": [
+              "s3:AbortMultipartUpload",
+              "s3:GetObject",
+              "s3:ListMultipartUploadParts",
+              "s3:PutObject"
+            ],
+            "prefix": "data/team_42/"
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "11111111-1111-4111-8111-111111111111",
+            "bucket": "example-owner",
+            "object_key": "root/2c/t/fixture_3/manifest",
+            "region": "us-east-1",
+            "actions": [
+              "s3:AbortMultipartUpload",
+              "s3:GetObject",
+              "s3:ListMultipartUploadParts",
+              "s3:PutObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "remote:events",
+            "bucket": "example-remote",
+            "prefix": "events/team_id=42/",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "remote:imports",
+            "bucket": "example-remote",
+            "prefix": "imports/team_id=42/",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          }
+        ]
+      },
+      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImNjMTBiNWFiNjQ5YzM0YTQiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2hvZ2xha2UuY29udHJhY3QudGVzdCIsImF1ZCI6WyJ0cmluby1zZXNzaW9uIiwiaG9nbGFrZS1zZXNzaW9uIiwiaG9nbGl0ZS1zZXNzaW9uIl0sInN1YiI6ImV4YW1wbGUuYWxpY2UiLCJ1c3IiOiJleGFtcGxlLmFsaWNlIiwianRpIjoidG9rZW4tYSIsInByb2ZpbGUiOiJleGFtcGxlLmF3cy1zZXNzaW9uIiwidmVyc2lvbiI6MSwicHVycG9zZSI6InVzZXItc2Vzc2lvbiIsInRlbiI6InNjb3BlZCIsIm9yZyI6ImV4YW1wbGUtb3JnIiwicHJpbWFyeV9jYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwic2lkIjoic2Vzc2lvbi1hIiwiZ2VuZXJhdGlvbiI6MSwic2Vzc2lvbl9kZWFkbGluZSI6MjAwMDAwMDEyMCwiaWF0IjoyMDAwMDAwMDAwLCJuYmYiOjIwMDAwMDAwMDAsImV4cCI6MjAwMDAwMDA2MCwiY2F0Ijp7ImV4YW1wbGUtY2F0YWxvZyI6WyJyZWFkIiwid3JpdGUiXX0sInByZCI6eyJ0ZWFtX2lkIjp7IjQyIjoid3JpdGUifX0sInJ0ZyI6eyJiIjoiaG9nbGl0ZSIsImJlIjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwidCI6ImZpeHR1cmVfMyJ9LCJyZW1vdGVfc2NoZW1hcyI6eyJ0ZWFtIjpbInJlYWQiXX0sImF3cyI6eyJhY2Nlc3Nfa2V5X2lkIjoiZmljdGlvbmFsLWtleSIsInNlY3JldF9hY2Nlc3Nfa2V5IjoiZmljdGlvbmFsLXNlY3JldCIsInNlc3Npb25fdG9rZW4iOiJmaWN0aW9uYWwtc2Vzc2lvbiIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImV4cGlyZXNfYXQiOjIwMDAwMDAwNjB9LCJncmFudHMiOlt7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJleGFtcGxlLWNhdGFsb2ciLCJidWNrZXQiOiJleGFtcGxlLWN1c3RvbWVyIiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpBYm9ydE11bHRpcGFydFVwbG9hZCIsInMzOkdldE9iamVjdCIsInMzOkxpc3RNdWx0aXBhcnRVcGxvYWRQYXJ0cyIsInMzOlB1dE9iamVjdCJdLCJwcmVmaXgiOiJkYXRhL3RlYW1fNDIvIn0seyJjYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwidGFyZ2V0IjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwiYnVja2V0IjoiZXhhbXBsZS1vd25lciIsIm9iamVjdF9rZXkiOiJyb290LzJjL3QvZml4dHVyZV8zL21hbmlmZXN0IiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpBYm9ydE11bHRpcGFydFVwbG9hZCIsInMzOkdldE9iamVjdCIsInMzOkxpc3RNdWx0aXBhcnRVcGxvYWRQYXJ0cyIsInMzOlB1dE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJyZW1vdGU6ZXZlbnRzIiwiYnVja2V0IjoiZXhhbXBsZS1yZW1vdGUiLCJwcmVmaXgiOiJldmVudHMvdGVhbV9pZD00Mi8iLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJyZW1vdGU6aW1wb3J0cyIsImJ1Y2tldCI6ImV4YW1wbGUtcmVtb3RlIiwicHJlZml4IjoiaW1wb3J0cy90ZWFtX2lkPTQyLyIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImFjdGlvbnMiOlsiczM6R2V0T2JqZWN0Il19XX0.xz0O-ygRc_OhAkuWr5QNOmlARP-M_R9YLrd0F5GFun8cX5q-FQvdvklXQJxHM3amx2HCKKWJRxMPMi6xR7rNlw",
+      "expect": {
+        "read": "invalid_token",
+        "ordinary": "invalid_audience"
+      }
+    },
+    {
+      "name": "writable remote grant",
+      "verify_at": 2000000001,
+      "claims": {
+        "iss": "https://hoglake.contract.test",
+        "aud": [
+          "trino-session",
+          "hoglake-session",
+          "hoglite-session"
+        ],
+        "sub": "example.alice",
+        "usr": "example.alice",
+        "jti": "token-a",
+        "profile": "example.aws-session",
+        "version": 1,
+        "purpose": "user-session",
+        "ten": "scoped",
+        "org": "example-org",
+        "primary_catalog": "example-catalog",
+        "sid": "session-a",
+        "generation": 1,
+        "session_deadline": 2000000120,
+        "iat": 2000000000,
+        "nbf": 2000000000,
+        "exp": 2000000060,
+        "cat": {
+          "example-catalog": [
+            "read",
+            "write"
+          ]
+        },
+        "prd": {
+          "team_id": {
+            "42": "write"
+          }
+        },
+        "rtg": {
+          "b": "hoglite",
+          "be": "11111111-1111-4111-8111-111111111111",
+          "t": "fixture_3"
+        },
+        "remote_schemas": {
+          "team": [
+            "read"
+          ]
+        },
+        "aws": {
+          "access_key_id": "fictional-key",
+          "secret_access_key": "fictional-secret",
+          "session_token": "fictional-session",
+          "region": "us-east-1",
+          "expires_at": 2000000060
+        },
+        "grants": [
+          {
+            "catalog": "example-catalog",
+            "target": "example-catalog",
+            "bucket": "example-customer",
+            "region": "us-east-1",
+            "actions": [
+              "s3:AbortMultipartUpload",
+              "s3:GetObject",
+              "s3:ListMultipartUploadParts",
+              "s3:PutObject"
+            ],
+            "prefix": "data/team_42/"
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "11111111-1111-4111-8111-111111111111",
+            "bucket": "example-owner",
+            "object_key": "root/2c/t/fixture_3/manifest",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "remote:events",
+            "bucket": "example-remote",
+            "prefix": "events/team_id=42/",
+            "region": "us-east-1",
+            "actions": [
+              "s3:AbortMultipartUpload",
+              "s3:GetObject",
+              "s3:ListMultipartUploadParts",
+              "s3:PutObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "remote:imports",
+            "bucket": "example-remote",
+            "prefix": "imports/team_id=42/",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          }
+        ]
+      },
+      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImNjMTBiNWFiNjQ5YzM0YTQiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2hvZ2xha2UuY29udHJhY3QudGVzdCIsImF1ZCI6WyJ0cmluby1zZXNzaW9uIiwiaG9nbGFrZS1zZXNzaW9uIiwiaG9nbGl0ZS1zZXNzaW9uIl0sInN1YiI6ImV4YW1wbGUuYWxpY2UiLCJ1c3IiOiJleGFtcGxlLmFsaWNlIiwianRpIjoidG9rZW4tYSIsInByb2ZpbGUiOiJleGFtcGxlLmF3cy1zZXNzaW9uIiwidmVyc2lvbiI6MSwicHVycG9zZSI6InVzZXItc2Vzc2lvbiIsInRlbiI6InNjb3BlZCIsIm9yZyI6ImV4YW1wbGUtb3JnIiwicHJpbWFyeV9jYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwic2lkIjoic2Vzc2lvbi1hIiwiZ2VuZXJhdGlvbiI6MSwic2Vzc2lvbl9kZWFkbGluZSI6MjAwMDAwMDEyMCwiaWF0IjoyMDAwMDAwMDAwLCJuYmYiOjIwMDAwMDAwMDAsImV4cCI6MjAwMDAwMDA2MCwiY2F0Ijp7ImV4YW1wbGUtY2F0YWxvZyI6WyJyZWFkIiwid3JpdGUiXX0sInByZCI6eyJ0ZWFtX2lkIjp7IjQyIjoid3JpdGUifX0sInJ0ZyI6eyJiIjoiaG9nbGl0ZSIsImJlIjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwidCI6ImZpeHR1cmVfMyJ9LCJyZW1vdGVfc2NoZW1hcyI6eyJ0ZWFtIjpbInJlYWQiXX0sImF3cyI6eyJhY2Nlc3Nfa2V5X2lkIjoiZmljdGlvbmFsLWtleSIsInNlY3JldF9hY2Nlc3Nfa2V5IjoiZmljdGlvbmFsLXNlY3JldCIsInNlc3Npb25fdG9rZW4iOiJmaWN0aW9uYWwtc2Vzc2lvbiIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImV4cGlyZXNfYXQiOjIwMDAwMDAwNjB9LCJncmFudHMiOlt7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJleGFtcGxlLWNhdGFsb2ciLCJidWNrZXQiOiJleGFtcGxlLWN1c3RvbWVyIiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpBYm9ydE11bHRpcGFydFVwbG9hZCIsInMzOkdldE9iamVjdCIsInMzOkxpc3RNdWx0aXBhcnRVcGxvYWRQYXJ0cyIsInMzOlB1dE9iamVjdCJdLCJwcmVmaXgiOiJkYXRhL3RlYW1fNDIvIn0seyJjYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwidGFyZ2V0IjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwiYnVja2V0IjoiZXhhbXBsZS1vd25lciIsIm9iamVjdF9rZXkiOiJyb290LzJjL3QvZml4dHVyZV8zL21hbmlmZXN0IiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXX0seyJjYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwidGFyZ2V0IjoicmVtb3RlOmV2ZW50cyIsImJ1Y2tldCI6ImV4YW1wbGUtcmVtb3RlIiwicHJlZml4IjoiZXZlbnRzL3RlYW1faWQ9NDIvIiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpBYm9ydE11bHRpcGFydFVwbG9hZCIsInMzOkdldE9iamVjdCIsInMzOkxpc3RNdWx0aXBhcnRVcGxvYWRQYXJ0cyIsInMzOlB1dE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJyZW1vdGU6aW1wb3J0cyIsImJ1Y2tldCI6ImV4YW1wbGUtcmVtb3RlIiwicHJlZml4IjoiaW1wb3J0cy90ZWFtX2lkPTQyLyIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImFjdGlvbnMiOlsiczM6R2V0T2JqZWN0Il19XX0.TC6gH83OfTYVYIrX-DL8F139ka400kMIB4kCPDOfxhyqLOCAiyeYcnnDhHDcUIKpqRlnrL70BdePbrMYz-M68g",
+      "expect": {
+        "read": "invalid_token",
+        "ordinary": "invalid_audience"
+      }
+    },
+    {
+      "name": "writable remote_schemas",
+      "verify_at": 2000000001,
+      "claims": {
+        "iss": "https://hoglake.contract.test",
+        "aud": [
+          "trino-session",
+          "hoglake-session",
+          "hoglite-session"
+        ],
+        "sub": "example.alice",
+        "usr": "example.alice",
+        "jti": "token-a",
+        "profile": "example.aws-session",
+        "version": 1,
+        "purpose": "user-session",
+        "ten": "scoped",
+        "org": "example-org",
+        "primary_catalog": "example-catalog",
+        "sid": "session-a",
+        "generation": 1,
+        "session_deadline": 2000000120,
+        "iat": 2000000000,
+        "nbf": 2000000000,
+        "exp": 2000000060,
+        "cat": {
+          "example-catalog": [
+            "read",
+            "write"
+          ]
+        },
+        "prd": {
+          "team_id": {
+            "42": "write"
+          }
+        },
+        "rtg": {
+          "b": "hoglite",
+          "be": "11111111-1111-4111-8111-111111111111",
+          "t": "fixture_3"
+        },
+        "remote_schemas": {
+          "team": [
+            "write"
+          ]
+        },
+        "aws": {
+          "access_key_id": "fictional-key",
+          "secret_access_key": "fictional-secret",
+          "session_token": "fictional-session",
+          "region": "us-east-1",
+          "expires_at": 2000000060
+        },
+        "grants": [
+          {
+            "catalog": "example-catalog",
+            "target": "example-catalog",
+            "bucket": "example-customer",
+            "region": "us-east-1",
+            "actions": [
+              "s3:AbortMultipartUpload",
+              "s3:GetObject",
+              "s3:ListMultipartUploadParts",
+              "s3:PutObject"
+            ],
+            "prefix": "data/team_42/"
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "11111111-1111-4111-8111-111111111111",
+            "bucket": "example-owner",
+            "object_key": "root/2c/t/fixture_3/manifest",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "remote:events",
+            "bucket": "example-remote",
+            "prefix": "events/team_id=42/",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "remote:imports",
+            "bucket": "example-remote",
+            "prefix": "imports/team_id=42/",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          }
+        ]
+      },
+      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImNjMTBiNWFiNjQ5YzM0YTQiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2hvZ2xha2UuY29udHJhY3QudGVzdCIsImF1ZCI6WyJ0cmluby1zZXNzaW9uIiwiaG9nbGFrZS1zZXNzaW9uIiwiaG9nbGl0ZS1zZXNzaW9uIl0sInN1YiI6ImV4YW1wbGUuYWxpY2UiLCJ1c3IiOiJleGFtcGxlLmFsaWNlIiwianRpIjoidG9rZW4tYSIsInByb2ZpbGUiOiJleGFtcGxlLmF3cy1zZXNzaW9uIiwidmVyc2lvbiI6MSwicHVycG9zZSI6InVzZXItc2Vzc2lvbiIsInRlbiI6InNjb3BlZCIsIm9yZyI6ImV4YW1wbGUtb3JnIiwicHJpbWFyeV9jYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwic2lkIjoic2Vzc2lvbi1hIiwiZ2VuZXJhdGlvbiI6MSwic2Vzc2lvbl9kZWFkbGluZSI6MjAwMDAwMDEyMCwiaWF0IjoyMDAwMDAwMDAwLCJuYmYiOjIwMDAwMDAwMDAsImV4cCI6MjAwMDAwMDA2MCwiY2F0Ijp7ImV4YW1wbGUtY2F0YWxvZyI6WyJyZWFkIiwid3JpdGUiXX0sInByZCI6eyJ0ZWFtX2lkIjp7IjQyIjoid3JpdGUifX0sInJ0ZyI6eyJiIjoiaG9nbGl0ZSIsImJlIjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwidCI6ImZpeHR1cmVfMyJ9LCJyZW1vdGVfc2NoZW1hcyI6eyJ0ZWFtIjpbIndyaXRlIl19LCJhd3MiOnsiYWNjZXNzX2tleV9pZCI6ImZpY3Rpb25hbC1rZXkiLCJzZWNyZXRfYWNjZXNzX2tleSI6ImZpY3Rpb25hbC1zZWNyZXQiLCJzZXNzaW9uX3Rva2VuIjoiZmljdGlvbmFsLXNlc3Npb24iLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJleHBpcmVzX2F0IjoyMDAwMDAwMDYwfSwiZ3JhbnRzIjpbeyJjYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwidGFyZ2V0IjoiZXhhbXBsZS1jYXRhbG9nIiwiYnVja2V0IjoiZXhhbXBsZS1jdXN0b21lciIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImFjdGlvbnMiOlsiczM6QWJvcnRNdWx0aXBhcnRVcGxvYWQiLCJzMzpHZXRPYmplY3QiLCJzMzpMaXN0TXVsdGlwYXJ0VXBsb2FkUGFydHMiLCJzMzpQdXRPYmplY3QiXSwicHJlZml4IjoiZGF0YS90ZWFtXzQyLyJ9LHsiY2F0YWxvZyI6ImV4YW1wbGUtY2F0YWxvZyIsInRhcmdldCI6IjExMTExMTExLTExMTEtNDExMS04MTExLTExMTExMTExMTExMSIsImJ1Y2tldCI6ImV4YW1wbGUtb3duZXIiLCJvYmplY3Rfa2V5Ijoicm9vdC8yYy90L2ZpeHR1cmVfMy9tYW5pZmVzdCIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImFjdGlvbnMiOlsiczM6R2V0T2JqZWN0Il19LHsiY2F0YWxvZyI6ImV4YW1wbGUtY2F0YWxvZyIsInRhcmdldCI6InJlbW90ZTpldmVudHMiLCJidWNrZXQiOiJleGFtcGxlLXJlbW90ZSIsInByZWZpeCI6ImV2ZW50cy90ZWFtX2lkPTQyLyIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImFjdGlvbnMiOlsiczM6R2V0T2JqZWN0Il19LHsiY2F0YWxvZyI6ImV4YW1wbGUtY2F0YWxvZyIsInRhcmdldCI6InJlbW90ZTppbXBvcnRzIiwiYnVja2V0IjoiZXhhbXBsZS1yZW1vdGUiLCJwcmVmaXgiOiJpbXBvcnRzL3RlYW1faWQ9NDIvIiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXX1dfQ.0X2n0H3PYVButxXQj72VnycU5H464ePsSAMFEYlvq2o6rEw7oZ3LCGbk61R3GuXpN2QivD1EX_cTGoBNB8wWag",
+      "expect": {
+        "read": "invalid_token",
         "ordinary": "invalid_audience"
       }
     },
@@ -222,7 +1380,7 @@
           }
         ]
       },
-      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImNjMTBiNWFiNjQ5YzM0YTQiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2hvZ2xha2UuY29udHJhY3QudGVzdCIsImF1ZCI6WyJ0cmluby1zZXNzaW9uIiwiaG9nbGFrZS1zZXNzaW9uIiwiaG9nbGl0ZS1zZXNzaW9uIiwiaG9nbGFrZSJdLCJzdWIiOiJleGFtcGxlLmFsaWNlIiwidXNyIjoiZXhhbXBsZS5hbGljZSIsImp0aSI6InRva2VuLWEiLCJwcm9maWxlIjoiZXhhbXBsZS5hd3Mtc2Vzc2lvbiIsInZlcnNpb24iOjEsInB1cnBvc2UiOiJ1c2VyLXNlc3Npb24iLCJ0ZW4iOiJzY29wZWQiLCJvcmciOiJleGFtcGxlLW9yZyIsInByaW1hcnlfY2F0YWxvZyI6ImV4YW1wbGUtY2F0YWxvZyIsInNpZCI6InNlc3Npb24tYSIsImdlbmVyYXRpb24iOjEsInNlc3Npb25fZGVhZGxpbmUiOjIwMDAwMDAxMjAsImlhdCI6MjAwMDAwMDAwMCwibmJmIjoyMDAwMDAwMDAwLCJleHAiOjIwMDAwMDAwNjAsImNhdCI6eyJleGFtcGxlLWNhdGFsb2ciOlsicmVhZCJdfSwicHJkIjp7InRlYW1faWQiOnsiNDIiOiJyZWFkIn19LCJydGciOnsiYiI6ImhvZ2xpdGUiLCJiZSI6IjExMTExMTExLTExMTEtNDExMS04MTExLTExMTExMTExMTExMSIsInQiOiJmaXh0dXJlXzMifSwicmVtb3RlX3NjaGVtYXMiOnsidGVhbSI6WyJyZWFkIl19LCJhd3MiOnsiYWNjZXNzX2tleV9pZCI6ImZpY3Rpb25hbC1rZXkiLCJzZWNyZXRfYWNjZXNzX2tleSI6ImZpY3Rpb25hbC1zZWNyZXQiLCJzZXNzaW9uX3Rva2VuIjoiZmljdGlvbmFsLXNlc3Npb24iLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJleHBpcmVzX2F0IjoyMDAwMDAwMDYwfSwiZ3JhbnRzIjpbeyJjYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwidGFyZ2V0IjoiZXhhbXBsZS1jYXRhbG9nIiwiYnVja2V0IjoiZXhhbXBsZS1jdXN0b21lciIsIm9iamVjdF9rZXkiOiJ0YWJsZXMvZGF0YS5wYXJxdWV0IiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXX0seyJjYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwidGFyZ2V0IjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwiYnVja2V0IjoiZXhhbXBsZS1vd25lciIsIm9iamVjdF9rZXkiOiJyb290LzJjL3QvZml4dHVyZV8zL21hbmlmZXN0IiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXX0seyJjYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwidGFyZ2V0IjoicmVtb3RlOmV2ZW50cyIsImJ1Y2tldCI6ImV4YW1wbGUtcmVtb3RlIiwicHJlZml4IjoiZXZlbnRzL3RlYW1faWQ9NDIvIiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXX0seyJjYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwidGFyZ2V0IjoicmVtb3RlOmltcG9ydHMiLCJidWNrZXQiOiJleGFtcGxlLXJlbW90ZSIsInByZWZpeCI6ImltcG9ydHMvdGVhbV9pZD00Mi8iLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfV19.Sjc6sLCNvEkEHDIS2Z-lhEHmuFnBPcUR6YJwcnxGusOoovZcrjwqRk40k1-euMs-dGJWaZlIwmTyL_jgF4T9RA",
+      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImNjMTBiNWFiNjQ5YzM0YTQiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2hvZ2xha2UuY29udHJhY3QudGVzdCIsImF1ZCI6WyJ0cmluby1zZXNzaW9uIiwiaG9nbGFrZS1zZXNzaW9uIiwiaG9nbGl0ZS1zZXNzaW9uIiwiaG9nbGFrZSJdLCJzdWIiOiJleGFtcGxlLmFsaWNlIiwidXNyIjoiZXhhbXBsZS5hbGljZSIsImp0aSI6InRva2VuLWEiLCJwcm9maWxlIjoiZXhhbXBsZS5hd3Mtc2Vzc2lvbiIsInZlcnNpb24iOjEsInB1cnBvc2UiOiJ1c2VyLXNlc3Npb24iLCJ0ZW4iOiJzY29wZWQiLCJvcmciOiJleGFtcGxlLW9yZyIsInByaW1hcnlfY2F0YWxvZyI6ImV4YW1wbGUtY2F0YWxvZyIsInNpZCI6InNlc3Npb24tYSIsImdlbmVyYXRpb24iOjEsInNlc3Npb25fZGVhZGxpbmUiOjIwMDAwMDAxMjAsImlhdCI6MjAwMDAwMDAwMCwibmJmIjoyMDAwMDAwMDAwLCJleHAiOjIwMDAwMDAwNjAsImNhdCI6eyJleGFtcGxlLWNhdGFsb2ciOlsicmVhZCJdfSwicHJkIjp7InRlYW1faWQiOnsiNDIiOiJyZWFkIn19LCJydGciOnsiYiI6ImhvZ2xpdGUiLCJiZSI6IjExMTExMTExLTExMTEtNDExMS04MTExLTExMTExMTExMTExMSIsInQiOiJmaXh0dXJlXzMifSwicmVtb3RlX3NjaGVtYXMiOnsidGVhbSI6WyJyZWFkIl19LCJhd3MiOnsiYWNjZXNzX2tleV9pZCI6ImZpY3Rpb25hbC1rZXkiLCJzZWNyZXRfYWNjZXNzX2tleSI6ImZpY3Rpb25hbC1zZWNyZXQiLCJzZXNzaW9uX3Rva2VuIjoiZmljdGlvbmFsLXNlc3Npb24iLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJleHBpcmVzX2F0IjoyMDAwMDAwMDYwfSwiZ3JhbnRzIjpbeyJjYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwidGFyZ2V0IjoiZXhhbXBsZS1jYXRhbG9nIiwiYnVja2V0IjoiZXhhbXBsZS1jdXN0b21lciIsIm9iamVjdF9rZXkiOiJ0YWJsZXMvZGF0YS5wYXJxdWV0IiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXX0seyJjYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwidGFyZ2V0IjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwiYnVja2V0IjoiZXhhbXBsZS1vd25lciIsIm9iamVjdF9rZXkiOiJyb290LzJjL3QvZml4dHVyZV8zL21hbmlmZXN0IiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXX0seyJjYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwidGFyZ2V0IjoicmVtb3RlOmV2ZW50cyIsImJ1Y2tldCI6ImV4YW1wbGUtcmVtb3RlIiwicHJlZml4IjoiZXZlbnRzL3RlYW1faWQ9NDIvIiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXX0seyJjYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwidGFyZ2V0IjoicmVtb3RlOmltcG9ydHMiLCJidWNrZXQiOiJleGFtcGxlLXJlbW90ZSIsInByZWZpeCI6ImltcG9ydHMvdGVhbV9pZD00Mi8iLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfV19.hFwIsKlO__qtBGt9S6H620diN8owAQS4SkGQBvNdbORpJEmzl6VdgRZ1Ea0iQGHaj7TGNGerkTL9xfUPJDgmww",
       "expect": {
         "read": "invalid_audience",
         "ordinary": "invalid_audience"
@@ -323,7 +1481,7 @@
           }
         ]
       },
-      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImNjMTBiNWFiNjQ5YzM0YTQiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2hvZ2xha2UuY29udHJhY3QudGVzdCIsImF1ZCI6WyJ0cmluby1zZXNzaW9uIiwidHJpbm8tc2Vzc2lvbiIsImhvZ2xpdGUtc2Vzc2lvbiJdLCJzdWIiOiJleGFtcGxlLmFsaWNlIiwidXNyIjoiZXhhbXBsZS5hbGljZSIsImp0aSI6InRva2VuLWEiLCJwcm9maWxlIjoiZXhhbXBsZS5hd3Mtc2Vzc2lvbiIsInZlcnNpb24iOjEsInB1cnBvc2UiOiJ1c2VyLXNlc3Npb24iLCJ0ZW4iOiJzY29wZWQiLCJvcmciOiJleGFtcGxlLW9yZyIsInByaW1hcnlfY2F0YWxvZyI6ImV4YW1wbGUtY2F0YWxvZyIsInNpZCI6InNlc3Npb24tYSIsImdlbmVyYXRpb24iOjEsInNlc3Npb25fZGVhZGxpbmUiOjIwMDAwMDAxMjAsImlhdCI6MjAwMDAwMDAwMCwibmJmIjoyMDAwMDAwMDAwLCJleHAiOjIwMDAwMDAwNjAsImNhdCI6eyJleGFtcGxlLWNhdGFsb2ciOlsicmVhZCJdfSwicHJkIjp7InRlYW1faWQiOnsiNDIiOiJyZWFkIn19LCJydGciOnsiYiI6ImhvZ2xpdGUiLCJiZSI6IjExMTExMTExLTExMTEtNDExMS04MTExLTExMTExMTExMTExMSIsInQiOiJmaXh0dXJlXzMifSwicmVtb3RlX3NjaGVtYXMiOnsidGVhbSI6WyJyZWFkIl19LCJhd3MiOnsiYWNjZXNzX2tleV9pZCI6ImZpY3Rpb25hbC1rZXkiLCJzZWNyZXRfYWNjZXNzX2tleSI6ImZpY3Rpb25hbC1zZWNyZXQiLCJzZXNzaW9uX3Rva2VuIjoiZmljdGlvbmFsLXNlc3Npb24iLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJleHBpcmVzX2F0IjoyMDAwMDAwMDYwfSwiZ3JhbnRzIjpbeyJjYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwidGFyZ2V0IjoiZXhhbXBsZS1jYXRhbG9nIiwiYnVja2V0IjoiZXhhbXBsZS1jdXN0b21lciIsIm9iamVjdF9rZXkiOiJ0YWJsZXMvZGF0YS5wYXJxdWV0IiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXX0seyJjYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwidGFyZ2V0IjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwiYnVja2V0IjoiZXhhbXBsZS1vd25lciIsIm9iamVjdF9rZXkiOiJyb290LzJjL3QvZml4dHVyZV8zL21hbmlmZXN0IiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXX0seyJjYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwidGFyZ2V0IjoicmVtb3RlOmV2ZW50cyIsImJ1Y2tldCI6ImV4YW1wbGUtcmVtb3RlIiwicHJlZml4IjoiZXZlbnRzL3RlYW1faWQ9NDIvIiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXX0seyJjYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwidGFyZ2V0IjoicmVtb3RlOmltcG9ydHMiLCJidWNrZXQiOiJleGFtcGxlLXJlbW90ZSIsInByZWZpeCI6ImltcG9ydHMvdGVhbV9pZD00Mi8iLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfV19.8y4k1_W_o_ERPvMqVpN7nsvKRe0TN5Jra320j60_5XzP6KJlI91FuUekJigihR8-0ISUBdjmve3RrKv0E4HbIg",
+      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImNjMTBiNWFiNjQ5YzM0YTQiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2hvZ2xha2UuY29udHJhY3QudGVzdCIsImF1ZCI6WyJ0cmluby1zZXNzaW9uIiwidHJpbm8tc2Vzc2lvbiIsImhvZ2xpdGUtc2Vzc2lvbiJdLCJzdWIiOiJleGFtcGxlLmFsaWNlIiwidXNyIjoiZXhhbXBsZS5hbGljZSIsImp0aSI6InRva2VuLWEiLCJwcm9maWxlIjoiZXhhbXBsZS5hd3Mtc2Vzc2lvbiIsInZlcnNpb24iOjEsInB1cnBvc2UiOiJ1c2VyLXNlc3Npb24iLCJ0ZW4iOiJzY29wZWQiLCJvcmciOiJleGFtcGxlLW9yZyIsInByaW1hcnlfY2F0YWxvZyI6ImV4YW1wbGUtY2F0YWxvZyIsInNpZCI6InNlc3Npb24tYSIsImdlbmVyYXRpb24iOjEsInNlc3Npb25fZGVhZGxpbmUiOjIwMDAwMDAxMjAsImlhdCI6MjAwMDAwMDAwMCwibmJmIjoyMDAwMDAwMDAwLCJleHAiOjIwMDAwMDAwNjAsImNhdCI6eyJleGFtcGxlLWNhdGFsb2ciOlsicmVhZCJdfSwicHJkIjp7InRlYW1faWQiOnsiNDIiOiJyZWFkIn19LCJydGciOnsiYiI6ImhvZ2xpdGUiLCJiZSI6IjExMTExMTExLTExMTEtNDExMS04MTExLTExMTExMTExMTExMSIsInQiOiJmaXh0dXJlXzMifSwicmVtb3RlX3NjaGVtYXMiOnsidGVhbSI6WyJyZWFkIl19LCJhd3MiOnsiYWNjZXNzX2tleV9pZCI6ImZpY3Rpb25hbC1rZXkiLCJzZWNyZXRfYWNjZXNzX2tleSI6ImZpY3Rpb25hbC1zZWNyZXQiLCJzZXNzaW9uX3Rva2VuIjoiZmljdGlvbmFsLXNlc3Npb24iLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJleHBpcmVzX2F0IjoyMDAwMDAwMDYwfSwiZ3JhbnRzIjpbeyJjYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwidGFyZ2V0IjoiZXhhbXBsZS1jYXRhbG9nIiwiYnVja2V0IjoiZXhhbXBsZS1jdXN0b21lciIsIm9iamVjdF9rZXkiOiJ0YWJsZXMvZGF0YS5wYXJxdWV0IiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXX0seyJjYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwidGFyZ2V0IjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwiYnVja2V0IjoiZXhhbXBsZS1vd25lciIsIm9iamVjdF9rZXkiOiJyb290LzJjL3QvZml4dHVyZV8zL21hbmlmZXN0IiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXX0seyJjYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwidGFyZ2V0IjoicmVtb3RlOmV2ZW50cyIsImJ1Y2tldCI6ImV4YW1wbGUtcmVtb3RlIiwicHJlZml4IjoiZXZlbnRzL3RlYW1faWQ9NDIvIiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXX0seyJjYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwidGFyZ2V0IjoicmVtb3RlOmltcG9ydHMiLCJidWNrZXQiOiJleGFtcGxlLXJlbW90ZSIsInByZWZpeCI6ImltcG9ydHMvdGVhbV9pZD00Mi8iLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfV19.MiJE8J_Ut_vQfZnlcT3vfcdNXGhB6uJrOyMToxPpAk34dsKYs55KL5dzwsC4hqOVzcfKOCjCkjxiusbNrRf4aA",
       "expect": {
         "read": "invalid_audience",
         "ordinary": "invalid_audience"
@@ -424,7 +1582,7 @@
           }
         ]
       },
-      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImNjMTBiNWFiNjQ5YzM0YTQiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2hvZ2xha2UuY29udHJhY3QudGVzdCIsImF1ZCI6WyJ0cmluby1zZXNzaW9uIiwiaG9nbGFrZS1zZXNzaW9uIiwiaG9nbGl0ZS1zZXNzaW9uIl0sInN1YiI6ImV4YW1wbGUuYWxpY2UiLCJ1c3IiOiJleGFtcGxlLmFsaWNlIiwianRpIjoidG9rZW4tYSIsInByb2ZpbGUiOiJleGFtcGxlLmF3cy1zZXNzaW9uIiwidmVyc2lvbiI6MSwicHVycG9zZSI6InVzZXItc2Vzc2lvbiIsInRlbiI6InNjb3BlZCIsIm9yZyI6ImV4YW1wbGUtb3JnIiwicHJpbWFyeV9jYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwic2lkIjoic2Vzc2lvbi1hIiwiZ2VuZXJhdGlvbiI6MSwic2Vzc2lvbl9kZWFkbGluZSI6MjAwMDAwMDEyMCwiaWF0IjoyMDAwMDAwMDAwLCJuYmYiOjIwMDAwMDAwMDAsImV4cCI6MjAwMDAwMDA2MCwiY2F0Ijp7ImV4YW1wbGUtY2F0YWxvZyI6WyJyZWFkIl19LCJwcmQiOnsidGVhbV9pZCI6eyI0MiI6InJlYWQifX0sInJ0ZyI6eyJiIjoiaG9nbGl0ZSIsImJlIjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwidCI6ImZpeHR1cmVfMyJ9LCJyZW1vdGVfc2NoZW1hcyI6eyJ0ZWFtIjpbInJlYWQiXX0sImF3cyI6eyJhY2Nlc3Nfa2V5X2lkIjoiZmljdGlvbmFsLWtleSIsInNlY3JldF9hY2Nlc3Nfa2V5IjoiZmljdGlvbmFsLXNlY3JldCIsInNlc3Npb25fdG9rZW4iOiJmaWN0aW9uYWwtc2Vzc2lvbiIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImV4cGlyZXNfYXQiOjIwMDAwMDAwNjB9LCJncmFudHMiOlt7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJleGFtcGxlLWNhdGFsb2ciLCJidWNrZXQiOiJleGFtcGxlLWN1c3RvbWVyIiwib2JqZWN0X2tleSI6InRhYmxlcy9kYXRhLnBhcnF1ZXQiLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiIxMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEiLCJidWNrZXQiOiJleGFtcGxlLW93bmVyIiwib2JqZWN0X2tleSI6InJvb3QvMmMvdC9maXh0dXJlXzMvbWFuaWZlc3QiLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJyZW1vdGU6ZXZlbnRzIiwiYnVja2V0IjoiZXhhbXBsZS1yZW1vdGUiLCJwcmVmaXgiOiJldmVudHMvdGVhbV9pZD00Mi8iLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJyZW1vdGU6aW1wb3J0cyIsImJ1Y2tldCI6ImV4YW1wbGUtcmVtb3RlIiwicHJlZml4IjoiaW1wb3J0cy90ZWFtX2lkPTQyLyIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImFjdGlvbnMiOlsiczM6R2V0T2JqZWN0Il19XX0.Aq7WHBQf8i7zhBTKJY_lJi-dOEpZ6eayddCSqDB1vPLDZfhuAv_BNdp2D6dWry5UN6lMa3aPq1bx4n5Vc4S-BA",
+      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImNjMTBiNWFiNjQ5YzM0YTQiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2hvZ2xha2UuY29udHJhY3QudGVzdCIsImF1ZCI6WyJ0cmluby1zZXNzaW9uIiwiaG9nbGFrZS1zZXNzaW9uIiwiaG9nbGl0ZS1zZXNzaW9uIl0sInN1YiI6ImV4YW1wbGUuYWxpY2UiLCJ1c3IiOiJleGFtcGxlLmFsaWNlIiwianRpIjoidG9rZW4tYSIsInByb2ZpbGUiOiJleGFtcGxlLmF3cy1zZXNzaW9uIiwidmVyc2lvbiI6MSwicHVycG9zZSI6InVzZXItc2Vzc2lvbiIsInRlbiI6InNjb3BlZCIsIm9yZyI6ImV4YW1wbGUtb3JnIiwicHJpbWFyeV9jYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwic2lkIjoic2Vzc2lvbi1hIiwiZ2VuZXJhdGlvbiI6MSwic2Vzc2lvbl9kZWFkbGluZSI6MjAwMDAwMDEyMCwiaWF0IjoyMDAwMDAwMDAwLCJuYmYiOjIwMDAwMDAwMDAsImV4cCI6MjAwMDAwMDA2MCwiY2F0Ijp7ImV4YW1wbGUtY2F0YWxvZyI6WyJyZWFkIl19LCJwcmQiOnsidGVhbV9pZCI6eyI0MiI6InJlYWQifX0sInJ0ZyI6eyJiIjoiaG9nbGl0ZSIsImJlIjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwidCI6ImZpeHR1cmVfMyJ9LCJyZW1vdGVfc2NoZW1hcyI6eyJ0ZWFtIjpbInJlYWQiXX0sImF3cyI6eyJhY2Nlc3Nfa2V5X2lkIjoiZmljdGlvbmFsLWtleSIsInNlY3JldF9hY2Nlc3Nfa2V5IjoiZmljdGlvbmFsLXNlY3JldCIsInNlc3Npb25fdG9rZW4iOiJmaWN0aW9uYWwtc2Vzc2lvbiIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImV4cGlyZXNfYXQiOjIwMDAwMDAwNjB9LCJncmFudHMiOlt7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJleGFtcGxlLWNhdGFsb2ciLCJidWNrZXQiOiJleGFtcGxlLWN1c3RvbWVyIiwib2JqZWN0X2tleSI6InRhYmxlcy9kYXRhLnBhcnF1ZXQiLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiIxMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEiLCJidWNrZXQiOiJleGFtcGxlLW93bmVyIiwib2JqZWN0X2tleSI6InJvb3QvMmMvdC9maXh0dXJlXzMvbWFuaWZlc3QiLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJyZW1vdGU6ZXZlbnRzIiwiYnVja2V0IjoiZXhhbXBsZS1yZW1vdGUiLCJwcmVmaXgiOiJldmVudHMvdGVhbV9pZD00Mi8iLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJyZW1vdGU6aW1wb3J0cyIsImJ1Y2tldCI6ImV4YW1wbGUtcmVtb3RlIiwicHJlZml4IjoiaW1wb3J0cy90ZWFtX2lkPTQyLyIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImFjdGlvbnMiOlsiczM6R2V0T2JqZWN0Il19XX0.PpzfrwuEnMwl1OCYBgX1I8aWXsiM2kUlaGeUdjUMd2RxxTmp_rwOrOq4DHZPwacEE05vXgK2vas4eNyTgKgv4Q",
       "expect": {
         "read": "token_expired",
         "ordinary": "invalid_audience"
@@ -524,7 +1682,7 @@
           }
         ]
       },
-      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImNjMTBiNWFiNjQ5YzM0YTQiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2hvZ2xha2UuY29udHJhY3QudGVzdCIsImF1ZCI6WyJ0cmluby1zZXNzaW9uIiwiaG9nbGFrZS1zZXNzaW9uIiwiaG9nbGl0ZS1zZXNzaW9uIl0sInN1YiI6ImV4YW1wbGUuYWxpY2UiLCJ1c3IiOiJleGFtcGxlLmFsaWNlIiwianRpIjoidG9rZW4tYSIsInZlcnNpb24iOjEsInB1cnBvc2UiOiJ1c2VyLXNlc3Npb24iLCJ0ZW4iOiJzY29wZWQiLCJvcmciOiJleGFtcGxlLW9yZyIsInByaW1hcnlfY2F0YWxvZyI6ImV4YW1wbGUtY2F0YWxvZyIsInNpZCI6InNlc3Npb24tYSIsImdlbmVyYXRpb24iOjEsInNlc3Npb25fZGVhZGxpbmUiOjIwMDAwMDAxMjAsImlhdCI6MjAwMDAwMDAwMCwibmJmIjoyMDAwMDAwMDAwLCJleHAiOjIwMDAwMDAwNjAsImNhdCI6eyJleGFtcGxlLWNhdGFsb2ciOlsicmVhZCJdfSwicHJkIjp7InRlYW1faWQiOnsiNDIiOiJyZWFkIn19LCJydGciOnsiYiI6ImhvZ2xpdGUiLCJiZSI6IjExMTExMTExLTExMTEtNDExMS04MTExLTExMTExMTExMTExMSIsInQiOiJmaXh0dXJlXzMifSwicmVtb3RlX3NjaGVtYXMiOnsidGVhbSI6WyJyZWFkIl19LCJhd3MiOnsiYWNjZXNzX2tleV9pZCI6ImZpY3Rpb25hbC1rZXkiLCJzZWNyZXRfYWNjZXNzX2tleSI6ImZpY3Rpb25hbC1zZWNyZXQiLCJzZXNzaW9uX3Rva2VuIjoiZmljdGlvbmFsLXNlc3Npb24iLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJleHBpcmVzX2F0IjoyMDAwMDAwMDYwfSwiZ3JhbnRzIjpbeyJjYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwidGFyZ2V0IjoiZXhhbXBsZS1jYXRhbG9nIiwiYnVja2V0IjoiZXhhbXBsZS1jdXN0b21lciIsIm9iamVjdF9rZXkiOiJ0YWJsZXMvZGF0YS5wYXJxdWV0IiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXX0seyJjYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwidGFyZ2V0IjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwiYnVja2V0IjoiZXhhbXBsZS1vd25lciIsIm9iamVjdF9rZXkiOiJyb290LzJjL3QvZml4dHVyZV8zL21hbmlmZXN0IiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXX0seyJjYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwidGFyZ2V0IjoicmVtb3RlOmV2ZW50cyIsImJ1Y2tldCI6ImV4YW1wbGUtcmVtb3RlIiwicHJlZml4IjoiZXZlbnRzL3RlYW1faWQ9NDIvIiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXX0seyJjYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwidGFyZ2V0IjoicmVtb3RlOmltcG9ydHMiLCJidWNrZXQiOiJleGFtcGxlLXJlbW90ZSIsInByZWZpeCI6ImltcG9ydHMvdGVhbV9pZD00Mi8iLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfV19.x4whIRPMcqzoEy8xrbZ3QHt9brfPCc9kxBIbwcIB2VJKDEtbzyax0F9fRGrrvkwHJ9lRfvLIh7b60rHhuGaOCQ",
+      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImNjMTBiNWFiNjQ5YzM0YTQiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2hvZ2xha2UuY29udHJhY3QudGVzdCIsImF1ZCI6WyJ0cmluby1zZXNzaW9uIiwiaG9nbGFrZS1zZXNzaW9uIiwiaG9nbGl0ZS1zZXNzaW9uIl0sInN1YiI6ImV4YW1wbGUuYWxpY2UiLCJ1c3IiOiJleGFtcGxlLmFsaWNlIiwianRpIjoidG9rZW4tYSIsInZlcnNpb24iOjEsInB1cnBvc2UiOiJ1c2VyLXNlc3Npb24iLCJ0ZW4iOiJzY29wZWQiLCJvcmciOiJleGFtcGxlLW9yZyIsInByaW1hcnlfY2F0YWxvZyI6ImV4YW1wbGUtY2F0YWxvZyIsInNpZCI6InNlc3Npb24tYSIsImdlbmVyYXRpb24iOjEsInNlc3Npb25fZGVhZGxpbmUiOjIwMDAwMDAxMjAsImlhdCI6MjAwMDAwMDAwMCwibmJmIjoyMDAwMDAwMDAwLCJleHAiOjIwMDAwMDAwNjAsImNhdCI6eyJleGFtcGxlLWNhdGFsb2ciOlsicmVhZCJdfSwicHJkIjp7InRlYW1faWQiOnsiNDIiOiJyZWFkIn19LCJydGciOnsiYiI6ImhvZ2xpdGUiLCJiZSI6IjExMTExMTExLTExMTEtNDExMS04MTExLTExMTExMTExMTExMSIsInQiOiJmaXh0dXJlXzMifSwicmVtb3RlX3NjaGVtYXMiOnsidGVhbSI6WyJyZWFkIl19LCJhd3MiOnsiYWNjZXNzX2tleV9pZCI6ImZpY3Rpb25hbC1rZXkiLCJzZWNyZXRfYWNjZXNzX2tleSI6ImZpY3Rpb25hbC1zZWNyZXQiLCJzZXNzaW9uX3Rva2VuIjoiZmljdGlvbmFsLXNlc3Npb24iLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJleHBpcmVzX2F0IjoyMDAwMDAwMDYwfSwiZ3JhbnRzIjpbeyJjYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwidGFyZ2V0IjoiZXhhbXBsZS1jYXRhbG9nIiwiYnVja2V0IjoiZXhhbXBsZS1jdXN0b21lciIsIm9iamVjdF9rZXkiOiJ0YWJsZXMvZGF0YS5wYXJxdWV0IiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXX0seyJjYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwidGFyZ2V0IjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwiYnVja2V0IjoiZXhhbXBsZS1vd25lciIsIm9iamVjdF9rZXkiOiJyb290LzJjL3QvZml4dHVyZV8zL21hbmlmZXN0IiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXX0seyJjYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwidGFyZ2V0IjoicmVtb3RlOmV2ZW50cyIsImJ1Y2tldCI6ImV4YW1wbGUtcmVtb3RlIiwicHJlZml4IjoiZXZlbnRzL3RlYW1faWQ9NDIvIiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXX0seyJjYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwidGFyZ2V0IjoicmVtb3RlOmltcG9ydHMiLCJidWNrZXQiOiJleGFtcGxlLXJlbW90ZSIsInByZWZpeCI6ImltcG9ydHMvdGVhbV9pZD00Mi8iLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfV19.k95hTH2wE2FmvnfuI7Gfpl2RoM_fHLO92BnaKosooeRK0en7mhMIq5MxI1vHWBnOAGbAbTqpW1P-xRAQ1kz9bA",
       "expect": {
         "read": "invalid_token",
         "ordinary": "invalid_audience"
@@ -625,7 +1783,7 @@
           }
         ]
       },
-      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImNjMTBiNWFiNjQ5YzM0YTQiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2hvZ2xha2UuY29udHJhY3QudGVzdCIsImF1ZCI6WyJ0cmluby1zZXNzaW9uIiwiaG9nbGFrZS1zZXNzaW9uIiwiaG9nbGl0ZS1zZXNzaW9uIl0sInN1YiI6ImV4YW1wbGUuYWxpY2UiLCJ1c3IiOiJleGFtcGxlLmFsaWNlIiwianRpIjoidG9rZW4tYSIsInByb2ZpbGUiOiJzdG9yYWdlLXNlc3Npb24iLCJ2ZXJzaW9uIjoxLCJwdXJwb3NlIjoidXNlci1zZXNzaW9uIiwidGVuIjoic2NvcGVkIiwib3JnIjoiZXhhbXBsZS1vcmciLCJwcmltYXJ5X2NhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJzaWQiOiJzZXNzaW9uLWEiLCJnZW5lcmF0aW9uIjoxLCJzZXNzaW9uX2RlYWRsaW5lIjoyMDAwMDAwMTIwLCJpYXQiOjIwMDAwMDAwMDAsIm5iZiI6MjAwMDAwMDAwMCwiZXhwIjoyMDAwMDAwMDYwLCJjYXQiOnsiZXhhbXBsZS1jYXRhbG9nIjpbInJlYWQiXX0sInByZCI6eyJ0ZWFtX2lkIjp7IjQyIjoicmVhZCJ9fSwicnRnIjp7ImIiOiJob2dsaXRlIiwiYmUiOiIxMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEiLCJ0IjoiZml4dHVyZV8zIn0sInJlbW90ZV9zY2hlbWFzIjp7InRlYW0iOlsicmVhZCJdfSwiYXdzIjp7ImFjY2Vzc19rZXlfaWQiOiJmaWN0aW9uYWwta2V5Iiwic2VjcmV0X2FjY2Vzc19rZXkiOiJmaWN0aW9uYWwtc2VjcmV0Iiwic2Vzc2lvbl90b2tlbiI6ImZpY3Rpb25hbC1zZXNzaW9uIiwicmVnaW9uIjoidXMtZWFzdC0xIiwiZXhwaXJlc19hdCI6MjAwMDAwMDA2MH0sImdyYW50cyI6W3siY2F0YWxvZyI6ImV4YW1wbGUtY2F0YWxvZyIsInRhcmdldCI6ImV4YW1wbGUtY2F0YWxvZyIsImJ1Y2tldCI6ImV4YW1wbGUtY3VzdG9tZXIiLCJvYmplY3Rfa2V5IjoidGFibGVzL2RhdGEucGFycXVldCIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImFjdGlvbnMiOlsiczM6R2V0T2JqZWN0Il19LHsiY2F0YWxvZyI6ImV4YW1wbGUtY2F0YWxvZyIsInRhcmdldCI6IjExMTExMTExLTExMTEtNDExMS04MTExLTExMTExMTExMTExMSIsImJ1Y2tldCI6ImV4YW1wbGUtb3duZXIiLCJvYmplY3Rfa2V5Ijoicm9vdC8yYy90L2ZpeHR1cmVfMy9tYW5pZmVzdCIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImFjdGlvbnMiOlsiczM6R2V0T2JqZWN0Il19LHsiY2F0YWxvZyI6ImV4YW1wbGUtY2F0YWxvZyIsInRhcmdldCI6InJlbW90ZTpldmVudHMiLCJidWNrZXQiOiJleGFtcGxlLXJlbW90ZSIsInByZWZpeCI6ImV2ZW50cy90ZWFtX2lkPTQyLyIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImFjdGlvbnMiOlsiczM6R2V0T2JqZWN0Il19LHsiY2F0YWxvZyI6ImV4YW1wbGUtY2F0YWxvZyIsInRhcmdldCI6InJlbW90ZTppbXBvcnRzIiwiYnVja2V0IjoiZXhhbXBsZS1yZW1vdGUiLCJwcmVmaXgiOiJpbXBvcnRzL3RlYW1faWQ9NDIvIiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXX1dfQ.iMdSXHRw1WY7nzYN30NdYdHGS_w4ZCO8B3x_vcSfAN7r7Q1PNaB5YyATdASsnlRUrVtfkDT6KhrvzeQdjQuqWg",
+      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImNjMTBiNWFiNjQ5YzM0YTQiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2hvZ2xha2UuY29udHJhY3QudGVzdCIsImF1ZCI6WyJ0cmluby1zZXNzaW9uIiwiaG9nbGFrZS1zZXNzaW9uIiwiaG9nbGl0ZS1zZXNzaW9uIl0sInN1YiI6ImV4YW1wbGUuYWxpY2UiLCJ1c3IiOiJleGFtcGxlLmFsaWNlIiwianRpIjoidG9rZW4tYSIsInByb2ZpbGUiOiJzdG9yYWdlLXNlc3Npb24iLCJ2ZXJzaW9uIjoxLCJwdXJwb3NlIjoidXNlci1zZXNzaW9uIiwidGVuIjoic2NvcGVkIiwib3JnIjoiZXhhbXBsZS1vcmciLCJwcmltYXJ5X2NhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJzaWQiOiJzZXNzaW9uLWEiLCJnZW5lcmF0aW9uIjoxLCJzZXNzaW9uX2RlYWRsaW5lIjoyMDAwMDAwMTIwLCJpYXQiOjIwMDAwMDAwMDAsIm5iZiI6MjAwMDAwMDAwMCwiZXhwIjoyMDAwMDAwMDYwLCJjYXQiOnsiZXhhbXBsZS1jYXRhbG9nIjpbInJlYWQiXX0sInByZCI6eyJ0ZWFtX2lkIjp7IjQyIjoicmVhZCJ9fSwicnRnIjp7ImIiOiJob2dsaXRlIiwiYmUiOiIxMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEiLCJ0IjoiZml4dHVyZV8zIn0sInJlbW90ZV9zY2hlbWFzIjp7InRlYW0iOlsicmVhZCJdfSwiYXdzIjp7ImFjY2Vzc19rZXlfaWQiOiJmaWN0aW9uYWwta2V5Iiwic2VjcmV0X2FjY2Vzc19rZXkiOiJmaWN0aW9uYWwtc2VjcmV0Iiwic2Vzc2lvbl90b2tlbiI6ImZpY3Rpb25hbC1zZXNzaW9uIiwicmVnaW9uIjoidXMtZWFzdC0xIiwiZXhwaXJlc19hdCI6MjAwMDAwMDA2MH0sImdyYW50cyI6W3siY2F0YWxvZyI6ImV4YW1wbGUtY2F0YWxvZyIsInRhcmdldCI6ImV4YW1wbGUtY2F0YWxvZyIsImJ1Y2tldCI6ImV4YW1wbGUtY3VzdG9tZXIiLCJvYmplY3Rfa2V5IjoidGFibGVzL2RhdGEucGFycXVldCIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImFjdGlvbnMiOlsiczM6R2V0T2JqZWN0Il19LHsiY2F0YWxvZyI6ImV4YW1wbGUtY2F0YWxvZyIsInRhcmdldCI6IjExMTExMTExLTExMTEtNDExMS04MTExLTExMTExMTExMTExMSIsImJ1Y2tldCI6ImV4YW1wbGUtb3duZXIiLCJvYmplY3Rfa2V5Ijoicm9vdC8yYy90L2ZpeHR1cmVfMy9tYW5pZmVzdCIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImFjdGlvbnMiOlsiczM6R2V0T2JqZWN0Il19LHsiY2F0YWxvZyI6ImV4YW1wbGUtY2F0YWxvZyIsInRhcmdldCI6InJlbW90ZTpldmVudHMiLCJidWNrZXQiOiJleGFtcGxlLXJlbW90ZSIsInByZWZpeCI6ImV2ZW50cy90ZWFtX2lkPTQyLyIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImFjdGlvbnMiOlsiczM6R2V0T2JqZWN0Il19LHsiY2F0YWxvZyI6ImV4YW1wbGUtY2F0YWxvZyIsInRhcmdldCI6InJlbW90ZTppbXBvcnRzIiwiYnVja2V0IjoiZXhhbXBsZS1yZW1vdGUiLCJwcmVmaXgiOiJpbXBvcnRzL3RlYW1faWQ9NDIvIiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXX1dfQ.cSecmUAxHuEUECH2lje3TaWT_tEZw464qrxDZABNHnvQqatG9VJ83FImYWn528xTjU71ejylKXVvI9k6yP3jQg",
       "expect": {
         "read": "invalid_token",
         "ordinary": "invalid_audience"
@@ -725,7 +1883,7 @@
           }
         ]
       },
-      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImNjMTBiNWFiNjQ5YzM0YTQiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2hvZ2xha2UuY29udHJhY3QudGVzdCIsImF1ZCI6WyJ0cmluby1zZXNzaW9uIiwiaG9nbGFrZS1zZXNzaW9uIiwiaG9nbGl0ZS1zZXNzaW9uIl0sInN1YiI6ImV4YW1wbGUuYWxpY2UiLCJ1c3IiOiJleGFtcGxlLmFsaWNlIiwianRpIjoidG9rZW4tYSIsInByb2ZpbGUiOiJleGFtcGxlLmF3cy1zZXNzaW9uIiwidmVyc2lvbiI6MSwicHVycG9zZSI6InVzZXItc2Vzc2lvbiIsInRlbiI6InNjb3BlZCIsIm9yZyI6ImV4YW1wbGUtb3JnIiwicHJpbWFyeV9jYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwic2lkIjoic2Vzc2lvbi1hIiwiZ2VuZXJhdGlvbiI6MSwic2Vzc2lvbl9kZWFkbGluZSI6MjAwMDAwMDEyMCwiaWF0IjoyMDAwMDAwMDAwLCJuYmYiOjIwMDAwMDAwMDAsImV4cCI6MjAwMDAwMDA2MCwiY2F0Ijp7ImV4YW1wbGUtY2F0YWxvZyI6WyJyZWFkIl19LCJwcmQiOnsidGVhbV9pZCI6eyI0MiI6InJlYWQifX0sInJ0ZyI6eyJiIjoiaG9nbGl0ZSIsImJlIjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwidCI6ImZpeHR1cmVfMyJ9LCJyZW1vdGVfc2NoZW1hcyI6eyJ0ZWFtIjpbInJlYWQiXX0sImF3cyI6eyJhY2Nlc3Nfa2V5X2lkIjoiZmljdGlvbmFsLWtleSIsInNlY3JldF9hY2Nlc3Nfa2V5IjoiZmljdGlvbmFsLXNlY3JldCIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImV4cGlyZXNfYXQiOjIwMDAwMDAwNjB9LCJncmFudHMiOlt7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJleGFtcGxlLWNhdGFsb2ciLCJidWNrZXQiOiJleGFtcGxlLWN1c3RvbWVyIiwib2JqZWN0X2tleSI6InRhYmxlcy9kYXRhLnBhcnF1ZXQiLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiIxMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEiLCJidWNrZXQiOiJleGFtcGxlLW93bmVyIiwib2JqZWN0X2tleSI6InJvb3QvMmMvdC9maXh0dXJlXzMvbWFuaWZlc3QiLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJyZW1vdGU6ZXZlbnRzIiwiYnVja2V0IjoiZXhhbXBsZS1yZW1vdGUiLCJwcmVmaXgiOiJldmVudHMvdGVhbV9pZD00Mi8iLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJyZW1vdGU6aW1wb3J0cyIsImJ1Y2tldCI6ImV4YW1wbGUtcmVtb3RlIiwicHJlZml4IjoiaW1wb3J0cy90ZWFtX2lkPTQyLyIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImFjdGlvbnMiOlsiczM6R2V0T2JqZWN0Il19XX0.ASciF8zEz5_4DpPnEeICIURtkaQwbiqXrhnFsCLsLiKiHEYL1LS1PAgWuzs3CWX9gNznYqalud_bYa-A86XmXQ",
+      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImNjMTBiNWFiNjQ5YzM0YTQiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2hvZ2xha2UuY29udHJhY3QudGVzdCIsImF1ZCI6WyJ0cmluby1zZXNzaW9uIiwiaG9nbGFrZS1zZXNzaW9uIiwiaG9nbGl0ZS1zZXNzaW9uIl0sInN1YiI6ImV4YW1wbGUuYWxpY2UiLCJ1c3IiOiJleGFtcGxlLmFsaWNlIiwianRpIjoidG9rZW4tYSIsInByb2ZpbGUiOiJleGFtcGxlLmF3cy1zZXNzaW9uIiwidmVyc2lvbiI6MSwicHVycG9zZSI6InVzZXItc2Vzc2lvbiIsInRlbiI6InNjb3BlZCIsIm9yZyI6ImV4YW1wbGUtb3JnIiwicHJpbWFyeV9jYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwic2lkIjoic2Vzc2lvbi1hIiwiZ2VuZXJhdGlvbiI6MSwic2Vzc2lvbl9kZWFkbGluZSI6MjAwMDAwMDEyMCwiaWF0IjoyMDAwMDAwMDAwLCJuYmYiOjIwMDAwMDAwMDAsImV4cCI6MjAwMDAwMDA2MCwiY2F0Ijp7ImV4YW1wbGUtY2F0YWxvZyI6WyJyZWFkIl19LCJwcmQiOnsidGVhbV9pZCI6eyI0MiI6InJlYWQifX0sInJ0ZyI6eyJiIjoiaG9nbGl0ZSIsImJlIjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwidCI6ImZpeHR1cmVfMyJ9LCJyZW1vdGVfc2NoZW1hcyI6eyJ0ZWFtIjpbInJlYWQiXX0sImF3cyI6eyJhY2Nlc3Nfa2V5X2lkIjoiZmljdGlvbmFsLWtleSIsInNlY3JldF9hY2Nlc3Nfa2V5IjoiZmljdGlvbmFsLXNlY3JldCIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImV4cGlyZXNfYXQiOjIwMDAwMDAwNjB9LCJncmFudHMiOlt7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJleGFtcGxlLWNhdGFsb2ciLCJidWNrZXQiOiJleGFtcGxlLWN1c3RvbWVyIiwib2JqZWN0X2tleSI6InRhYmxlcy9kYXRhLnBhcnF1ZXQiLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiIxMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEiLCJidWNrZXQiOiJleGFtcGxlLW93bmVyIiwib2JqZWN0X2tleSI6InJvb3QvMmMvdC9maXh0dXJlXzMvbWFuaWZlc3QiLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJyZW1vdGU6ZXZlbnRzIiwiYnVja2V0IjoiZXhhbXBsZS1yZW1vdGUiLCJwcmVmaXgiOiJldmVudHMvdGVhbV9pZD00Mi8iLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJyZW1vdGU6aW1wb3J0cyIsImJ1Y2tldCI6ImV4YW1wbGUtcmVtb3RlIiwicHJlZml4IjoiaW1wb3J0cy90ZWFtX2lkPTQyLyIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImFjdGlvbnMiOlsiczM6R2V0T2JqZWN0Il19XX0.-OGMmjHpSqPhITkczx6b2LXWZ5Ynnz6_emwmSHGbgLiOxVbnWYfBK4R3QciYBJICQlJEZdfB4K4BvczarsroDQ",
       "expect": {
         "read": "invalid_token",
         "ordinary": "invalid_audience"
@@ -826,7 +1984,7 @@
           }
         ]
       },
-      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImNjMTBiNWFiNjQ5YzM0YTQiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2hvZ2xha2UuY29udHJhY3QudGVzdCIsImF1ZCI6WyJ0cmluby1zZXNzaW9uIiwiaG9nbGFrZS1zZXNzaW9uIiwiaG9nbGl0ZS1zZXNzaW9uIl0sInN1YiI6ImV4YW1wbGUuYWxpY2UiLCJ1c3IiOiJleGFtcGxlLmFsaWNlIiwianRpIjoidG9rZW4tYSIsInByb2ZpbGUiOiJleGFtcGxlLmF3cy1zZXNzaW9uIiwidmVyc2lvbiI6MSwicHVycG9zZSI6InVzZXItc2Vzc2lvbiIsInRlbiI6InNjb3BlZCIsIm9yZyI6ImV4YW1wbGUtb3JnIiwicHJpbWFyeV9jYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwic2lkIjoic2Vzc2lvbi1hIiwiZ2VuZXJhdGlvbiI6MSwic2Vzc2lvbl9kZWFkbGluZSI6MjAwMDAwMDEyMCwiaWF0IjoyMDAwMDAwMDAwLCJuYmYiOjIwMDAwMDAwMDAsImV4cCI6MjAwMDAwMDA2MCwiY2F0Ijp7ImV4YW1wbGUtY2F0YWxvZyI6WyJyZWFkIl19LCJwcmQiOnsidGVhbV9pZCI6eyI0MiI6InJlYWQifX0sInJ0ZyI6eyJiIjoiaG9nbGl0ZSIsImJlIjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwidCI6ImZpeHR1cmVfMDMifSwicmVtb3RlX3NjaGVtYXMiOnsidGVhbSI6WyJyZWFkIl19LCJhd3MiOnsiYWNjZXNzX2tleV9pZCI6ImZpY3Rpb25hbC1rZXkiLCJzZWNyZXRfYWNjZXNzX2tleSI6ImZpY3Rpb25hbC1zZWNyZXQiLCJzZXNzaW9uX3Rva2VuIjoiZmljdGlvbmFsLXNlc3Npb24iLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJleHBpcmVzX2F0IjoyMDAwMDAwMDYwfSwiZ3JhbnRzIjpbeyJjYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwidGFyZ2V0IjoiZXhhbXBsZS1jYXRhbG9nIiwiYnVja2V0IjoiZXhhbXBsZS1jdXN0b21lciIsIm9iamVjdF9rZXkiOiJ0YWJsZXMvZGF0YS5wYXJxdWV0IiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXX0seyJjYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwidGFyZ2V0IjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwiYnVja2V0IjoiZXhhbXBsZS1vd25lciIsIm9iamVjdF9rZXkiOiJyb290LzJjL3QvZml4dHVyZV8zL21hbmlmZXN0IiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXX0seyJjYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwidGFyZ2V0IjoicmVtb3RlOmV2ZW50cyIsImJ1Y2tldCI6ImV4YW1wbGUtcmVtb3RlIiwicHJlZml4IjoiZXZlbnRzL3RlYW1faWQ9NDIvIiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXX0seyJjYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwidGFyZ2V0IjoicmVtb3RlOmltcG9ydHMiLCJidWNrZXQiOiJleGFtcGxlLXJlbW90ZSIsInByZWZpeCI6ImltcG9ydHMvdGVhbV9pZD00Mi8iLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfV19.maT9zJ479J_BVz4ZRZxoEmzbPzls0iZiBXO9CiQ5b6fLUgfM8sB00gEJRF2sI8IkvocmU8ngqgq3xMTGccy3_A",
+      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImNjMTBiNWFiNjQ5YzM0YTQiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2hvZ2xha2UuY29udHJhY3QudGVzdCIsImF1ZCI6WyJ0cmluby1zZXNzaW9uIiwiaG9nbGFrZS1zZXNzaW9uIiwiaG9nbGl0ZS1zZXNzaW9uIl0sInN1YiI6ImV4YW1wbGUuYWxpY2UiLCJ1c3IiOiJleGFtcGxlLmFsaWNlIiwianRpIjoidG9rZW4tYSIsInByb2ZpbGUiOiJleGFtcGxlLmF3cy1zZXNzaW9uIiwidmVyc2lvbiI6MSwicHVycG9zZSI6InVzZXItc2Vzc2lvbiIsInRlbiI6InNjb3BlZCIsIm9yZyI6ImV4YW1wbGUtb3JnIiwicHJpbWFyeV9jYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwic2lkIjoic2Vzc2lvbi1hIiwiZ2VuZXJhdGlvbiI6MSwic2Vzc2lvbl9kZWFkbGluZSI6MjAwMDAwMDEyMCwiaWF0IjoyMDAwMDAwMDAwLCJuYmYiOjIwMDAwMDAwMDAsImV4cCI6MjAwMDAwMDA2MCwiY2F0Ijp7ImV4YW1wbGUtY2F0YWxvZyI6WyJyZWFkIl19LCJwcmQiOnsidGVhbV9pZCI6eyI0MiI6InJlYWQifX0sInJ0ZyI6eyJiIjoiaG9nbGl0ZSIsImJlIjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwidCI6ImZpeHR1cmVfMDMifSwicmVtb3RlX3NjaGVtYXMiOnsidGVhbSI6WyJyZWFkIl19LCJhd3MiOnsiYWNjZXNzX2tleV9pZCI6ImZpY3Rpb25hbC1rZXkiLCJzZWNyZXRfYWNjZXNzX2tleSI6ImZpY3Rpb25hbC1zZWNyZXQiLCJzZXNzaW9uX3Rva2VuIjoiZmljdGlvbmFsLXNlc3Npb24iLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJleHBpcmVzX2F0IjoyMDAwMDAwMDYwfSwiZ3JhbnRzIjpbeyJjYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwidGFyZ2V0IjoiZXhhbXBsZS1jYXRhbG9nIiwiYnVja2V0IjoiZXhhbXBsZS1jdXN0b21lciIsIm9iamVjdF9rZXkiOiJ0YWJsZXMvZGF0YS5wYXJxdWV0IiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXX0seyJjYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwidGFyZ2V0IjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwiYnVja2V0IjoiZXhhbXBsZS1vd25lciIsIm9iamVjdF9rZXkiOiJyb290LzJjL3QvZml4dHVyZV8zL21hbmlmZXN0IiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXX0seyJjYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwidGFyZ2V0IjoicmVtb3RlOmV2ZW50cyIsImJ1Y2tldCI6ImV4YW1wbGUtcmVtb3RlIiwicHJlZml4IjoiZXZlbnRzL3RlYW1faWQ9NDIvIiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXX0seyJjYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwidGFyZ2V0IjoicmVtb3RlOmltcG9ydHMiLCJidWNrZXQiOiJleGFtcGxlLXJlbW90ZSIsInByZWZpeCI6ImltcG9ydHMvdGVhbV9pZD00Mi8iLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfV19.fuuwLEQxhnY9d5ROdCGmowBMe7nLNlNXfCZqg4if9WyKL8W-0Uy3hHsiCHryVYbvTQjetVpkc9NMUJkWZYMMTw",
       "expect": {
         "read": "invalid_token",
         "ordinary": "invalid_audience"
@@ -927,7 +2085,7 @@
           }
         ]
       },
-      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImNjMTBiNWFiNjQ5YzM0YTQiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2hvZ2xha2UuY29udHJhY3QudGVzdCIsImF1ZCI6WyJ0cmluby1zZXNzaW9uIiwiaG9nbGFrZS1zZXNzaW9uIiwiaG9nbGl0ZS1zZXNzaW9uIl0sInN1YiI6ImV4YW1wbGUuYWxpY2UiLCJ1c3IiOiJleGFtcGxlLmFsaWNlIiwianRpIjoidG9rZW4tYSIsInByb2ZpbGUiOiJleGFtcGxlLmF3cy1zZXNzaW9uIiwidmVyc2lvbiI6MSwicHVycG9zZSI6InVzZXItc2Vzc2lvbiIsInRlbiI6InNjb3BlZCIsIm9yZyI6ImV4YW1wbGUtb3JnIiwicHJpbWFyeV9jYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwic2lkIjoic2Vzc2lvbi1hIiwiZ2VuZXJhdGlvbiI6MSwic2Vzc2lvbl9kZWFkbGluZSI6MjAwMDAwMDEyMCwiaWF0IjoyMDAwMDAwMDAwLCJuYmYiOjIwMDAwMDAwMDAsImV4cCI6MjAwMDAwMDA2MCwiY2F0Ijp7ImV4YW1wbGUtY2F0YWxvZyI6WyJyZWFkIl19LCJwcmQiOnsidGVhbV9pZCI6eyI0MiI6InJlYWQifX0sInJ0ZyI6eyJiIjoiaG9nbGl0ZSIsImJlIjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwidCI6ImZpeHR1cmVfMyJ9LCJyZW1vdGVfc2NoZW1hcyI6eyJ0ZWFtIjpbInJlYWQiXX0sImF3cyI6eyJhY2Nlc3Nfa2V5X2lkIjoiZmljdGlvbmFsLWtleSIsInNlY3JldF9hY2Nlc3Nfa2V5IjoiZmljdGlvbmFsLXNlY3JldCIsInNlc3Npb25fdG9rZW4iOiJmaWN0aW9uYWwtc2Vzc2lvbiIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImV4cGlyZXNfYXQiOjIwMDAwMDAwNjB9LCJncmFudHMiOlt7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJleGFtcGxlLWNhdGFsb2ciLCJidWNrZXQiOiJleGFtcGxlLWN1c3RvbWVyIiwib2JqZWN0X2tleSI6InRhYmxlcy9kYXRhLnBhcnF1ZXQiLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiIxMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEiLCJidWNrZXQiOiJleGFtcGxlLW93bmVyIiwib2JqZWN0X2tleSI6InJvb3QvMmMvdC9maXh0dXJlXzMvbWFuaWZlc3QuanNvbiIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImFjdGlvbnMiOlsiczM6R2V0T2JqZWN0Il19LHsiY2F0YWxvZyI6ImV4YW1wbGUtY2F0YWxvZyIsInRhcmdldCI6InJlbW90ZTpldmVudHMiLCJidWNrZXQiOiJleGFtcGxlLXJlbW90ZSIsInByZWZpeCI6ImV2ZW50cy90ZWFtX2lkPTQyLyIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImFjdGlvbnMiOlsiczM6R2V0T2JqZWN0Il19LHsiY2F0YWxvZyI6ImV4YW1wbGUtY2F0YWxvZyIsInRhcmdldCI6InJlbW90ZTppbXBvcnRzIiwiYnVja2V0IjoiZXhhbXBsZS1yZW1vdGUiLCJwcmVmaXgiOiJpbXBvcnRzL3RlYW1faWQ9NDIvIiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXX1dfQ.9rK4xqwirMOPjz8fN2qyOTN06b6AcEj5MSD6CbjHgznAN0fRGmOExg-wWlTLOlKVfVkWASFMJo-85-lTekPErQ",
+      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImNjMTBiNWFiNjQ5YzM0YTQiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2hvZ2xha2UuY29udHJhY3QudGVzdCIsImF1ZCI6WyJ0cmluby1zZXNzaW9uIiwiaG9nbGFrZS1zZXNzaW9uIiwiaG9nbGl0ZS1zZXNzaW9uIl0sInN1YiI6ImV4YW1wbGUuYWxpY2UiLCJ1c3IiOiJleGFtcGxlLmFsaWNlIiwianRpIjoidG9rZW4tYSIsInByb2ZpbGUiOiJleGFtcGxlLmF3cy1zZXNzaW9uIiwidmVyc2lvbiI6MSwicHVycG9zZSI6InVzZXItc2Vzc2lvbiIsInRlbiI6InNjb3BlZCIsIm9yZyI6ImV4YW1wbGUtb3JnIiwicHJpbWFyeV9jYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwic2lkIjoic2Vzc2lvbi1hIiwiZ2VuZXJhdGlvbiI6MSwic2Vzc2lvbl9kZWFkbGluZSI6MjAwMDAwMDEyMCwiaWF0IjoyMDAwMDAwMDAwLCJuYmYiOjIwMDAwMDAwMDAsImV4cCI6MjAwMDAwMDA2MCwiY2F0Ijp7ImV4YW1wbGUtY2F0YWxvZyI6WyJyZWFkIl19LCJwcmQiOnsidGVhbV9pZCI6eyI0MiI6InJlYWQifX0sInJ0ZyI6eyJiIjoiaG9nbGl0ZSIsImJlIjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwidCI6ImZpeHR1cmVfMyJ9LCJyZW1vdGVfc2NoZW1hcyI6eyJ0ZWFtIjpbInJlYWQiXX0sImF3cyI6eyJhY2Nlc3Nfa2V5X2lkIjoiZmljdGlvbmFsLWtleSIsInNlY3JldF9hY2Nlc3Nfa2V5IjoiZmljdGlvbmFsLXNlY3JldCIsInNlc3Npb25fdG9rZW4iOiJmaWN0aW9uYWwtc2Vzc2lvbiIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImV4cGlyZXNfYXQiOjIwMDAwMDAwNjB9LCJncmFudHMiOlt7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJleGFtcGxlLWNhdGFsb2ciLCJidWNrZXQiOiJleGFtcGxlLWN1c3RvbWVyIiwib2JqZWN0X2tleSI6InRhYmxlcy9kYXRhLnBhcnF1ZXQiLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiIxMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEiLCJidWNrZXQiOiJleGFtcGxlLW93bmVyIiwib2JqZWN0X2tleSI6InJvb3QvMmMvdC9maXh0dXJlXzMvbWFuaWZlc3QuanNvbiIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImFjdGlvbnMiOlsiczM6R2V0T2JqZWN0Il19LHsiY2F0YWxvZyI6ImV4YW1wbGUtY2F0YWxvZyIsInRhcmdldCI6InJlbW90ZTpldmVudHMiLCJidWNrZXQiOiJleGFtcGxlLXJlbW90ZSIsInByZWZpeCI6ImV2ZW50cy90ZWFtX2lkPTQyLyIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImFjdGlvbnMiOlsiczM6R2V0T2JqZWN0Il19LHsiY2F0YWxvZyI6ImV4YW1wbGUtY2F0YWxvZyIsInRhcmdldCI6InJlbW90ZTppbXBvcnRzIiwiYnVja2V0IjoiZXhhbXBsZS1yZW1vdGUiLCJwcmVmaXgiOiJpbXBvcnRzL3RlYW1faWQ9NDIvIiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXX1dfQ.jBvj3BvYg3o8-rPtEaOK1-5N9HDc31BuW0U0cspDYTyi5r6k80uoB0f3rFcsNoaLqPhQ1sueWIpv-H42LBngyg",
       "expect": {
         "read": "invalid_token",
         "ordinary": "invalid_audience"
@@ -1028,7 +2186,7 @@
           }
         ]
       },
-      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImNjMTBiNWFiNjQ5YzM0YTQiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2hvZ2xha2UuY29udHJhY3QudGVzdCIsImF1ZCI6WyJ0cmluby1zZXNzaW9uIiwiaG9nbGFrZS1zZXNzaW9uIiwiaG9nbGl0ZS1zZXNzaW9uIl0sInN1YiI6ImV4YW1wbGUuYWxpY2UiLCJ1c3IiOiJleGFtcGxlLmFsaWNlIiwianRpIjoidG9rZW4tYSIsInByb2ZpbGUiOiJleGFtcGxlLmF3cy1zZXNzaW9uIiwidmVyc2lvbiI6MSwicHVycG9zZSI6InVzZXItc2Vzc2lvbiIsInRlbiI6InNjb3BlZCIsIm9yZyI6ImV4YW1wbGUtb3JnIiwicHJpbWFyeV9jYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwic2lkIjoic2Vzc2lvbi1hIiwiZ2VuZXJhdGlvbiI6MSwic2Vzc2lvbl9kZWFkbGluZSI6MjAwMDAwMDEyMCwiaWF0IjoyMDAwMDAwMDAwLCJuYmYiOjIwMDAwMDAwMDAsImV4cCI6MjAwMDAwMDA2MCwiY2F0Ijp7ImV4YW1wbGUtY2F0YWxvZyI6WyJyZWFkIl19LCJwcmQiOnsidGVhbV9pZCI6eyI0MiI6InJlYWQifX0sInJ0ZyI6eyJiIjoiaG9nbGl0ZSIsImJlIjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwidCI6ImZpeHR1cmVfMyJ9LCJyZW1vdGVfc2NoZW1hcyI6eyJ0ZWFtIjpbInJlYWQiXX0sImF3cyI6eyJhY2Nlc3Nfa2V5X2lkIjoiZmljdGlvbmFsLWtleSIsInNlY3JldF9hY2Nlc3Nfa2V5IjoiZmljdGlvbmFsLXNlY3JldCIsInNlc3Npb25fdG9rZW4iOiJmaWN0aW9uYWwtc2Vzc2lvbiIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImV4cGlyZXNfYXQiOjIwMDAwMDAwNjB9LCJncmFudHMiOlt7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJleGFtcGxlLWNhdGFsb2ciLCJidWNrZXQiOiJleGFtcGxlLWN1c3RvbWVyIiwib2JqZWN0X2tleSI6InRhYmxlcy9kYXRhLnBhcnF1ZXQiLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiIxMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEiLCJidWNrZXQiOiJleGFtcGxlLW93bmVyIiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXSwicHJlZml4Ijoicm9vdC8yYy90L2ZpeHR1cmVfMy8ifSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJyZW1vdGU6ZXZlbnRzIiwiYnVja2V0IjoiZXhhbXBsZS1yZW1vdGUiLCJwcmVmaXgiOiJldmVudHMvdGVhbV9pZD00Mi8iLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJyZW1vdGU6aW1wb3J0cyIsImJ1Y2tldCI6ImV4YW1wbGUtcmVtb3RlIiwicHJlZml4IjoiaW1wb3J0cy90ZWFtX2lkPTQyLyIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImFjdGlvbnMiOlsiczM6R2V0T2JqZWN0Il19XX0.vjSTIXdnwYPsbYcv699MIec2wxvi7gXKV11z851fEJ_hdJJyxicl9YCcLOQiahJ8nNSVnd7_S-r0lx4QgKBujA",
+      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImNjMTBiNWFiNjQ5YzM0YTQiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2hvZ2xha2UuY29udHJhY3QudGVzdCIsImF1ZCI6WyJ0cmluby1zZXNzaW9uIiwiaG9nbGFrZS1zZXNzaW9uIiwiaG9nbGl0ZS1zZXNzaW9uIl0sInN1YiI6ImV4YW1wbGUuYWxpY2UiLCJ1c3IiOiJleGFtcGxlLmFsaWNlIiwianRpIjoidG9rZW4tYSIsInByb2ZpbGUiOiJleGFtcGxlLmF3cy1zZXNzaW9uIiwidmVyc2lvbiI6MSwicHVycG9zZSI6InVzZXItc2Vzc2lvbiIsInRlbiI6InNjb3BlZCIsIm9yZyI6ImV4YW1wbGUtb3JnIiwicHJpbWFyeV9jYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwic2lkIjoic2Vzc2lvbi1hIiwiZ2VuZXJhdGlvbiI6MSwic2Vzc2lvbl9kZWFkbGluZSI6MjAwMDAwMDEyMCwiaWF0IjoyMDAwMDAwMDAwLCJuYmYiOjIwMDAwMDAwMDAsImV4cCI6MjAwMDAwMDA2MCwiY2F0Ijp7ImV4YW1wbGUtY2F0YWxvZyI6WyJyZWFkIl19LCJwcmQiOnsidGVhbV9pZCI6eyI0MiI6InJlYWQifX0sInJ0ZyI6eyJiIjoiaG9nbGl0ZSIsImJlIjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwidCI6ImZpeHR1cmVfMyJ9LCJyZW1vdGVfc2NoZW1hcyI6eyJ0ZWFtIjpbInJlYWQiXX0sImF3cyI6eyJhY2Nlc3Nfa2V5X2lkIjoiZmljdGlvbmFsLWtleSIsInNlY3JldF9hY2Nlc3Nfa2V5IjoiZmljdGlvbmFsLXNlY3JldCIsInNlc3Npb25fdG9rZW4iOiJmaWN0aW9uYWwtc2Vzc2lvbiIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImV4cGlyZXNfYXQiOjIwMDAwMDAwNjB9LCJncmFudHMiOlt7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJleGFtcGxlLWNhdGFsb2ciLCJidWNrZXQiOiJleGFtcGxlLWN1c3RvbWVyIiwib2JqZWN0X2tleSI6InRhYmxlcy9kYXRhLnBhcnF1ZXQiLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiIxMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEiLCJidWNrZXQiOiJleGFtcGxlLW93bmVyIiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXSwicHJlZml4Ijoicm9vdC8yYy90L2ZpeHR1cmVfMy8ifSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJyZW1vdGU6ZXZlbnRzIiwiYnVja2V0IjoiZXhhbXBsZS1yZW1vdGUiLCJwcmVmaXgiOiJldmVudHMvdGVhbV9pZD00Mi8iLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJyZW1vdGU6aW1wb3J0cyIsImJ1Y2tldCI6ImV4YW1wbGUtcmVtb3RlIiwicHJlZml4IjoiaW1wb3J0cy90ZWFtX2lkPTQyLyIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImFjdGlvbnMiOlsiczM6R2V0T2JqZWN0Il19XX0.btT9QpKNLOTVUY3XJNtx2pkkHTdU_u_qFAZKmMvUVCoxFJzAIvRA76GG1HgdrGeXObSxhhaEpVW_g_57QUsOxw",
       "expect": {
         "read": "invalid_token",
         "ordinary": "invalid_audience"
@@ -1129,7 +2287,7 @@
           }
         ]
       },
-      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImNjMTBiNWFiNjQ5YzM0YTQiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2hvZ2xha2UuY29udHJhY3QudGVzdCIsImF1ZCI6WyJ0cmluby1zZXNzaW9uIiwiaG9nbGFrZS1zZXNzaW9uIiwiaG9nbGl0ZS1zZXNzaW9uIl0sInN1YiI6ImV4YW1wbGUuYWxpY2UiLCJ1c3IiOiJleGFtcGxlLmFsaWNlIiwianRpIjoidG9rZW4tYSIsInByb2ZpbGUiOiJleGFtcGxlLmF3cy1zZXNzaW9uIiwidmVyc2lvbiI6MSwicHVycG9zZSI6InVzZXItc2Vzc2lvbiIsInRlbiI6InNjb3BlZCIsIm9yZyI6ImV4YW1wbGUtb3JnIiwicHJpbWFyeV9jYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwic2lkIjoic2Vzc2lvbi1hIiwiZ2VuZXJhdGlvbiI6MSwic2Vzc2lvbl9kZWFkbGluZSI6MjAwMDAwMDEyMCwiaWF0IjoyMDAwMDAwMDAwLCJuYmYiOjIwMDAwMDAwMDAsImV4cCI6MjAwMDAwMDA2MCwiY2F0Ijp7ImV4YW1wbGUtY2F0YWxvZyI6WyJyZWFkIl19LCJwcmQiOnsidGVhbV9pZCI6eyI0MiI6InJlYWQifX0sInJ0ZyI6eyJiIjoiaG9nbGl0ZSIsImJlIjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwidCI6ImZpeHR1cmVfMyJ9LCJyZW1vdGVfc2NoZW1hcyI6eyJ0ZWFtIjpbInJlYWQiXX0sImF3cyI6eyJhY2Nlc3Nfa2V5X2lkIjoiZmljdGlvbmFsLWtleSIsInNlY3JldF9hY2Nlc3Nfa2V5IjoiZmljdGlvbmFsLXNlY3JldCIsInNlc3Npb25fdG9rZW4iOiJmaWN0aW9uYWwtc2Vzc2lvbiIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImV4cGlyZXNfYXQiOjIwMDAwMDAwNjB9LCJncmFudHMiOlt7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJleGFtcGxlLWNhdGFsb2ciLCJidWNrZXQiOiJleGFtcGxlLWN1c3RvbWVyIiwib2JqZWN0X2tleSI6InRhYmxlcy9kYXRhLnBhcnF1ZXQiLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiIxMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEiLCJidWNrZXQiOiJleGFtcGxlLW93bmVyIiwib2JqZWN0X2tleSI6InJvb3QvMmMvdC9maXh0dXJlXzMvbWFuaWZlc3QiLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJyZW1vdGU6ZXZlbnRzIiwiYnVja2V0IjoiZXhhbXBsZS1yZW1vdGUiLCJwcmVmaXgiOiJldmVudHMvdGVhbV9pZD00Mi8iLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJyZW1vdGU6aW1wb3J0cyIsImJ1Y2tldCI6ImV4YW1wbGUtcmVtb3RlIiwicHJlZml4IjoiZXZlbnRzL3RlYW1faWQ9NDIvIiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXX1dfQ.dDogFoNti1EM9hjuU7IRWDfhOa5sDUKuKxfEsJYjBHqsLSysxFwqNxpGldWztieIRsBc0sYIzoNDUtNPX7lgbQ",
+      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImNjMTBiNWFiNjQ5YzM0YTQiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2hvZ2xha2UuY29udHJhY3QudGVzdCIsImF1ZCI6WyJ0cmluby1zZXNzaW9uIiwiaG9nbGFrZS1zZXNzaW9uIiwiaG9nbGl0ZS1zZXNzaW9uIl0sInN1YiI6ImV4YW1wbGUuYWxpY2UiLCJ1c3IiOiJleGFtcGxlLmFsaWNlIiwianRpIjoidG9rZW4tYSIsInByb2ZpbGUiOiJleGFtcGxlLmF3cy1zZXNzaW9uIiwidmVyc2lvbiI6MSwicHVycG9zZSI6InVzZXItc2Vzc2lvbiIsInRlbiI6InNjb3BlZCIsIm9yZyI6ImV4YW1wbGUtb3JnIiwicHJpbWFyeV9jYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwic2lkIjoic2Vzc2lvbi1hIiwiZ2VuZXJhdGlvbiI6MSwic2Vzc2lvbl9kZWFkbGluZSI6MjAwMDAwMDEyMCwiaWF0IjoyMDAwMDAwMDAwLCJuYmYiOjIwMDAwMDAwMDAsImV4cCI6MjAwMDAwMDA2MCwiY2F0Ijp7ImV4YW1wbGUtY2F0YWxvZyI6WyJyZWFkIl19LCJwcmQiOnsidGVhbV9pZCI6eyI0MiI6InJlYWQifX0sInJ0ZyI6eyJiIjoiaG9nbGl0ZSIsImJlIjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwidCI6ImZpeHR1cmVfMyJ9LCJyZW1vdGVfc2NoZW1hcyI6eyJ0ZWFtIjpbInJlYWQiXX0sImF3cyI6eyJhY2Nlc3Nfa2V5X2lkIjoiZmljdGlvbmFsLWtleSIsInNlY3JldF9hY2Nlc3Nfa2V5IjoiZmljdGlvbmFsLXNlY3JldCIsInNlc3Npb25fdG9rZW4iOiJmaWN0aW9uYWwtc2Vzc2lvbiIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImV4cGlyZXNfYXQiOjIwMDAwMDAwNjB9LCJncmFudHMiOlt7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJleGFtcGxlLWNhdGFsb2ciLCJidWNrZXQiOiJleGFtcGxlLWN1c3RvbWVyIiwib2JqZWN0X2tleSI6InRhYmxlcy9kYXRhLnBhcnF1ZXQiLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiIxMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEiLCJidWNrZXQiOiJleGFtcGxlLW93bmVyIiwib2JqZWN0X2tleSI6InJvb3QvMmMvdC9maXh0dXJlXzMvbWFuaWZlc3QiLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJyZW1vdGU6ZXZlbnRzIiwiYnVja2V0IjoiZXhhbXBsZS1yZW1vdGUiLCJwcmVmaXgiOiJldmVudHMvdGVhbV9pZD00Mi8iLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJyZW1vdGU6aW1wb3J0cyIsImJ1Y2tldCI6ImV4YW1wbGUtcmVtb3RlIiwicHJlZml4IjoiZXZlbnRzL3RlYW1faWQ9NDIvIiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXX1dfQ.DMUsGdQ92pASBp500UQR8tiIDkrr4IxvTlcXS4guV78mo7qkpuJGUtvYujce4POTTutm3oODW7GJHKYzZcOL2w",
       "expect": {
         "read": "invalid_token",
         "ordinary": "invalid_audience"
@@ -1230,7 +2388,7 @@
           }
         ]
       },
-      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImNjMTBiNWFiNjQ5YzM0YTQiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2hvZ2xha2UuY29udHJhY3QudGVzdCIsImF1ZCI6WyJ0cmluby1zZXNzaW9uIiwiaG9nbGFrZS1zZXNzaW9uIiwiaG9nbGl0ZS1zZXNzaW9uIl0sInN1YiI6ImV4YW1wbGUuYWxpY2UiLCJ1c3IiOiJleGFtcGxlLmFsaWNlIiwianRpIjoidG9rZW4tYSIsInByb2ZpbGUiOiJleGFtcGxlLmF3cy1zZXNzaW9uIiwidmVyc2lvbiI6MSwicHVycG9zZSI6InVzZXItc2Vzc2lvbiIsInRlbiI6InNjb3BlZCIsIm9yZyI6ImV4YW1wbGUtb3JnIiwicHJpbWFyeV9jYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwic2lkIjoic2Vzc2lvbi1hIiwiZ2VuZXJhdGlvbiI6MSwic2Vzc2lvbl9kZWFkbGluZSI6MjAwMDAwMDEyMCwiaWF0IjoyMDAwMDAwMDAwLCJuYmYiOjIwMDAwMDAwMDAsImV4cCI6MjAwMDAwMDA2MCwiY2F0Ijp7ImV4YW1wbGUtY2F0YWxvZyI6WyJyZWFkIl19LCJwcmQiOnsidGVhbV9pZCI6eyI0MiI6InJlYWQifX0sInJ0ZyI6eyJiIjoiaG9nbGl0ZSIsImJlIjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwidCI6ImZpeHR1cmVfMyJ9LCJyZW1vdGVfc2NoZW1hcyI6eyJ0ZWFtIjpbInJlYWQiXX0sImF3cyI6eyJhY2Nlc3Nfa2V5X2lkIjoiZmljdGlvbmFsLWtleSIsInNlY3JldF9hY2Nlc3Nfa2V5IjoiZmljdGlvbmFsLXNlY3JldCIsInNlc3Npb25fdG9rZW4iOiJmaWN0aW9uYWwtc2Vzc2lvbiIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImV4cGlyZXNfYXQiOjIwMDAwMDAwNjB9LCJncmFudHMiOlt7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJleGFtcGxlLWNhdGFsb2ciLCJidWNrZXQiOiJleGFtcGxlLWN1c3RvbWVyIiwib2JqZWN0X2tleSI6InRhYmxlcy9kYXRhLnBhcnF1ZXQiLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiIxMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEiLCJidWNrZXQiOiJleGFtcGxlLW93bmVyIiwib2JqZWN0X2tleSI6InJvb3QvMmMvdC9maXh0dXJlXzMvbWFuaWZlc3QiLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJyZW1vdGU6ZXZlbnRzIiwiYnVja2V0IjoiZXhhbXBsZS1yZW1vdGUiLCJwcmVmaXgiOiJldmVudHMvdGVhbV9pZD00Mi8iLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJyZW1vdGU6aW1wb3J0cyIsImJ1Y2tldCI6ImV4YW1wbGUtcmVtb3RlIiwicHJlZml4IjoiZXZlbnRzL3RlYW1faWQ9NDIvY2hpbGQvIiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXX1dfQ.mA172jXZBBLtOw9SiF3un9SMwxLEgEfQjW8B0Nk2ZI2pePKUhY810AH0_Np2VL2-nTAXhXqrfuDFA_vkloIFfA",
+      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImNjMTBiNWFiNjQ5YzM0YTQiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2hvZ2xha2UuY29udHJhY3QudGVzdCIsImF1ZCI6WyJ0cmluby1zZXNzaW9uIiwiaG9nbGFrZS1zZXNzaW9uIiwiaG9nbGl0ZS1zZXNzaW9uIl0sInN1YiI6ImV4YW1wbGUuYWxpY2UiLCJ1c3IiOiJleGFtcGxlLmFsaWNlIiwianRpIjoidG9rZW4tYSIsInByb2ZpbGUiOiJleGFtcGxlLmF3cy1zZXNzaW9uIiwidmVyc2lvbiI6MSwicHVycG9zZSI6InVzZXItc2Vzc2lvbiIsInRlbiI6InNjb3BlZCIsIm9yZyI6ImV4YW1wbGUtb3JnIiwicHJpbWFyeV9jYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwic2lkIjoic2Vzc2lvbi1hIiwiZ2VuZXJhdGlvbiI6MSwic2Vzc2lvbl9kZWFkbGluZSI6MjAwMDAwMDEyMCwiaWF0IjoyMDAwMDAwMDAwLCJuYmYiOjIwMDAwMDAwMDAsImV4cCI6MjAwMDAwMDA2MCwiY2F0Ijp7ImV4YW1wbGUtY2F0YWxvZyI6WyJyZWFkIl19LCJwcmQiOnsidGVhbV9pZCI6eyI0MiI6InJlYWQifX0sInJ0ZyI6eyJiIjoiaG9nbGl0ZSIsImJlIjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwidCI6ImZpeHR1cmVfMyJ9LCJyZW1vdGVfc2NoZW1hcyI6eyJ0ZWFtIjpbInJlYWQiXX0sImF3cyI6eyJhY2Nlc3Nfa2V5X2lkIjoiZmljdGlvbmFsLWtleSIsInNlY3JldF9hY2Nlc3Nfa2V5IjoiZmljdGlvbmFsLXNlY3JldCIsInNlc3Npb25fdG9rZW4iOiJmaWN0aW9uYWwtc2Vzc2lvbiIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImV4cGlyZXNfYXQiOjIwMDAwMDAwNjB9LCJncmFudHMiOlt7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJleGFtcGxlLWNhdGFsb2ciLCJidWNrZXQiOiJleGFtcGxlLWN1c3RvbWVyIiwib2JqZWN0X2tleSI6InRhYmxlcy9kYXRhLnBhcnF1ZXQiLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiIxMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEiLCJidWNrZXQiOiJleGFtcGxlLW93bmVyIiwib2JqZWN0X2tleSI6InJvb3QvMmMvdC9maXh0dXJlXzMvbWFuaWZlc3QiLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJyZW1vdGU6ZXZlbnRzIiwiYnVja2V0IjoiZXhhbXBsZS1yZW1vdGUiLCJwcmVmaXgiOiJldmVudHMvdGVhbV9pZD00Mi8iLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJyZW1vdGU6aW1wb3J0cyIsImJ1Y2tldCI6ImV4YW1wbGUtcmVtb3RlIiwicHJlZml4IjoiZXZlbnRzL3RlYW1faWQ9NDIvY2hpbGQvIiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXX1dfQ.xnhN75nTl2QNX_2NsqLuzhFGUdTUCPqEBhRIC6ojsgw0lBgiSJgk-pAok-s6QxM28wBf85uDK_BTzunXQVJnMw",
       "expect": {
         "read": "invalid_token",
         "ordinary": "invalid_audience"
@@ -1331,7 +2489,7 @@
           }
         ]
       },
-      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImNjMTBiNWFiNjQ5YzM0YTQiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2hvZ2xha2UuY29udHJhY3QudGVzdCIsImF1ZCI6WyJ0cmluby1zZXNzaW9uIiwiaG9nbGFrZS1zZXNzaW9uIiwiaG9nbGl0ZS1zZXNzaW9uIl0sInN1YiI6ImV4YW1wbGUuYWxpY2UiLCJ1c3IiOiJleGFtcGxlLmFsaWNlIiwianRpIjoidG9rZW4tYSIsInByb2ZpbGUiOiJleGFtcGxlLmF3cy1zZXNzaW9uIiwidmVyc2lvbiI6MSwicHVycG9zZSI6InVzZXItc2Vzc2lvbiIsInRlbiI6InNjb3BlZCIsIm9yZyI6ImV4YW1wbGUtb3JnIiwicHJpbWFyeV9jYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwic2lkIjoic2Vzc2lvbi1hIiwiZ2VuZXJhdGlvbiI6MSwic2Vzc2lvbl9kZWFkbGluZSI6MjAwMDAwMDEyMCwiaWF0IjoyMDAwMDAwMDAwLCJuYmYiOjIwMDAwMDAwMDAsImV4cCI6MjAwMDAwMDA2MCwiY2F0Ijp7ImV4YW1wbGUtY2F0YWxvZyI6WyJyZWFkIl19LCJwcmQiOnsidGVhbV9pZCI6eyI0MiI6InJlYWQifX0sInJ0ZyI6eyJiIjoiaG9nbGl0ZSIsImJlIjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwidCI6ImZpeHR1cmVfMyJ9LCJyZW1vdGVfc2NoZW1hcyI6eyJ0ZWFtIjpbInJlYWQiXX0sImF3cyI6eyJhY2Nlc3Nfa2V5X2lkIjoiZmljdGlvbmFsLWtleSIsInNlY3JldF9hY2Nlc3Nfa2V5IjoiZmljdGlvbmFsLXNlY3JldCIsInNlc3Npb25fdG9rZW4iOiJmaWN0aW9uYWwtc2Vzc2lvbiIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImV4cGlyZXNfYXQiOjIwMDAwMDAwNjB9LCJncmFudHMiOlt7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJleGFtcGxlLWNhdGFsb2ciLCJidWNrZXQiOiJleGFtcGxlLWN1c3RvbWVyIiwib2JqZWN0X2tleSI6InRhYmxlcy9kYXRhLnBhcnF1ZXQiLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiIxMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEiLCJidWNrZXQiOiJleGFtcGxlLW93bmVyIiwib2JqZWN0X2tleSI6InJvb3QvMmMvdC9maXh0dXJlXzMvbWFuaWZlc3QiLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJyZW1vdGU6ZXZlbnRzIiwiYnVja2V0IjoiZXhhbXBsZS1yZW1vdGUiLCJwcmVmaXgiOiJldmVudHMvdGVhbV9pZD00Mi8iLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJvdGhlciIsInRhcmdldCI6InJlbW90ZTppbXBvcnRzIiwiYnVja2V0IjoiZXhhbXBsZS1yZW1vdGUiLCJwcmVmaXgiOiJpbXBvcnRzL3RlYW1faWQ9NDIvIiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXX1dfQ.-VGg8jDvE3jeN4Dhuo8XeLUYAbwVArDtNl-ymzX1HIDRdYNhOj7sj0XgATuTm8Cu7-KJAHN9gk-9GvF1MOqu3g",
+      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImNjMTBiNWFiNjQ5YzM0YTQiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2hvZ2xha2UuY29udHJhY3QudGVzdCIsImF1ZCI6WyJ0cmluby1zZXNzaW9uIiwiaG9nbGFrZS1zZXNzaW9uIiwiaG9nbGl0ZS1zZXNzaW9uIl0sInN1YiI6ImV4YW1wbGUuYWxpY2UiLCJ1c3IiOiJleGFtcGxlLmFsaWNlIiwianRpIjoidG9rZW4tYSIsInByb2ZpbGUiOiJleGFtcGxlLmF3cy1zZXNzaW9uIiwidmVyc2lvbiI6MSwicHVycG9zZSI6InVzZXItc2Vzc2lvbiIsInRlbiI6InNjb3BlZCIsIm9yZyI6ImV4YW1wbGUtb3JnIiwicHJpbWFyeV9jYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwic2lkIjoic2Vzc2lvbi1hIiwiZ2VuZXJhdGlvbiI6MSwic2Vzc2lvbl9kZWFkbGluZSI6MjAwMDAwMDEyMCwiaWF0IjoyMDAwMDAwMDAwLCJuYmYiOjIwMDAwMDAwMDAsImV4cCI6MjAwMDAwMDA2MCwiY2F0Ijp7ImV4YW1wbGUtY2F0YWxvZyI6WyJyZWFkIl19LCJwcmQiOnsidGVhbV9pZCI6eyI0MiI6InJlYWQifX0sInJ0ZyI6eyJiIjoiaG9nbGl0ZSIsImJlIjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwidCI6ImZpeHR1cmVfMyJ9LCJyZW1vdGVfc2NoZW1hcyI6eyJ0ZWFtIjpbInJlYWQiXX0sImF3cyI6eyJhY2Nlc3Nfa2V5X2lkIjoiZmljdGlvbmFsLWtleSIsInNlY3JldF9hY2Nlc3Nfa2V5IjoiZmljdGlvbmFsLXNlY3JldCIsInNlc3Npb25fdG9rZW4iOiJmaWN0aW9uYWwtc2Vzc2lvbiIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImV4cGlyZXNfYXQiOjIwMDAwMDAwNjB9LCJncmFudHMiOlt7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJleGFtcGxlLWNhdGFsb2ciLCJidWNrZXQiOiJleGFtcGxlLWN1c3RvbWVyIiwib2JqZWN0X2tleSI6InRhYmxlcy9kYXRhLnBhcnF1ZXQiLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiIxMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEiLCJidWNrZXQiOiJleGFtcGxlLW93bmVyIiwib2JqZWN0X2tleSI6InJvb3QvMmMvdC9maXh0dXJlXzMvbWFuaWZlc3QiLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJyZW1vdGU6ZXZlbnRzIiwiYnVja2V0IjoiZXhhbXBsZS1yZW1vdGUiLCJwcmVmaXgiOiJldmVudHMvdGVhbV9pZD00Mi8iLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJvdGhlciIsInRhcmdldCI6InJlbW90ZTppbXBvcnRzIiwiYnVja2V0IjoiZXhhbXBsZS1yZW1vdGUiLCJwcmVmaXgiOiJpbXBvcnRzL3RlYW1faWQ9NDIvIiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXX1dfQ.7xoobbeJrPdT7WO27t8WDUrEdNUcWh_xOVXiBK9aAGq2y7wUVfbaav8GJuGi3-x5aIUMd0_zJEnAx089-6surQ",
       "expect": {
         "read": "invalid_token",
         "ordinary": "invalid_audience"
@@ -1432,10 +2590,965 @@
           }
         ]
       },
-      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImNjMTBiNWFiNjQ5YzM0YTQiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2hvZ2xha2UuY29udHJhY3QudGVzdCIsImF1ZCI6WyJ0cmluby1zZXNzaW9uIiwiaG9nbGFrZS1zZXNzaW9uIiwiaG9nbGl0ZS1zZXNzaW9uIl0sInN1YiI6ImV4YW1wbGUuYWxpY2UiLCJ1c3IiOiJleGFtcGxlLmFsaWNlIiwianRpIjoidG9rZW4tYSIsInByb2ZpbGUiOiJleGFtcGxlLmF3cy1zZXNzaW9uIiwidmVyc2lvbiI6MSwicHVycG9zZSI6InVzZXItc2Vzc2lvbiIsInRlbiI6InNjb3BlZCIsIm9yZyI6ImV4YW1wbGUtb3JnIiwicHJpbWFyeV9jYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwic2lkIjoic2Vzc2lvbi1hIiwiZ2VuZXJhdGlvbiI6MSwic2Vzc2lvbl9kZWFkbGluZSI6MjAwMDAwMDEyMCwiaWF0IjoyMDAwMDAwMDAwLCJuYmYiOjIwMDAwMDAwMDAsImV4cCI6MjAwMDAwMDA2MCwiY2F0Ijp7ImV4YW1wbGUtY2F0YWxvZyI6WyJyZWFkIl19LCJwcmQiOnsidGVhbV9pZCI6eyI0MiI6InJlYWQifX0sInJ0ZyI6eyJiIjoiaG9nbGl0ZSIsImJlIjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwidCI6ImZpeHR1cmVfMyJ9LCJyZW1vdGVfc2NoZW1hcyI6eyJ0ZWFtIjpbInJlYWQiXX0sImF3cyI6eyJhY2Nlc3Nfa2V5X2lkIjoiZmljdGlvbmFsLWtleSIsInNlY3JldF9hY2Nlc3Nfa2V5IjoiZmljdGlvbmFsLXNlY3JldCIsInNlc3Npb25fdG9rZW4iOiJmaWN0aW9uYWwtc2Vzc2lvbiIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImV4cGlyZXNfYXQiOjIwMDAwMDAwNjB9LCJncmFudHMiOlt7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJleGFtcGxlLWNhdGFsb2ciLCJidWNrZXQiOiJleGFtcGxlLWN1c3RvbWVyIiwib2JqZWN0X2tleSI6InRhYmxlcy9kYXRhLnBhcnF1ZXQiLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiIxMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEiLCJidWNrZXQiOiJleGFtcGxlLW93bmVyIiwib2JqZWN0X2tleSI6InJvb3QvMmMvdC9maXh0dXJlXzMvbWFuaWZlc3QiLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJyZW1vdGU6ZXZlbnRzIiwiYnVja2V0IjoiZXhhbXBsZS1yZW1vdGUiLCJwcmVmaXgiOiJldmVudHMvdGVhbV9pZD00Mi8iLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOlB1dE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJyZW1vdGU6aW1wb3J0cyIsImJ1Y2tldCI6ImV4YW1wbGUtcmVtb3RlIiwicHJlZml4IjoiaW1wb3J0cy90ZWFtX2lkPTQyLyIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImFjdGlvbnMiOlsiczM6R2V0T2JqZWN0Il19XX0.zm8FPYYAK5qx7g7Ut_rStg4LCoJob027QsxDpSz5WKdS2TiZt7802OSfRSVoEMgwNe8A3bfNS-3NwWt-MLfVnQ",
+      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImNjMTBiNWFiNjQ5YzM0YTQiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2hvZ2xha2UuY29udHJhY3QudGVzdCIsImF1ZCI6WyJ0cmluby1zZXNzaW9uIiwiaG9nbGFrZS1zZXNzaW9uIiwiaG9nbGl0ZS1zZXNzaW9uIl0sInN1YiI6ImV4YW1wbGUuYWxpY2UiLCJ1c3IiOiJleGFtcGxlLmFsaWNlIiwianRpIjoidG9rZW4tYSIsInByb2ZpbGUiOiJleGFtcGxlLmF3cy1zZXNzaW9uIiwidmVyc2lvbiI6MSwicHVycG9zZSI6InVzZXItc2Vzc2lvbiIsInRlbiI6InNjb3BlZCIsIm9yZyI6ImV4YW1wbGUtb3JnIiwicHJpbWFyeV9jYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwic2lkIjoic2Vzc2lvbi1hIiwiZ2VuZXJhdGlvbiI6MSwic2Vzc2lvbl9kZWFkbGluZSI6MjAwMDAwMDEyMCwiaWF0IjoyMDAwMDAwMDAwLCJuYmYiOjIwMDAwMDAwMDAsImV4cCI6MjAwMDAwMDA2MCwiY2F0Ijp7ImV4YW1wbGUtY2F0YWxvZyI6WyJyZWFkIl19LCJwcmQiOnsidGVhbV9pZCI6eyI0MiI6InJlYWQifX0sInJ0ZyI6eyJiIjoiaG9nbGl0ZSIsImJlIjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwidCI6ImZpeHR1cmVfMyJ9LCJyZW1vdGVfc2NoZW1hcyI6eyJ0ZWFtIjpbInJlYWQiXX0sImF3cyI6eyJhY2Nlc3Nfa2V5X2lkIjoiZmljdGlvbmFsLWtleSIsInNlY3JldF9hY2Nlc3Nfa2V5IjoiZmljdGlvbmFsLXNlY3JldCIsInNlc3Npb25fdG9rZW4iOiJmaWN0aW9uYWwtc2Vzc2lvbiIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImV4cGlyZXNfYXQiOjIwMDAwMDAwNjB9LCJncmFudHMiOlt7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJleGFtcGxlLWNhdGFsb2ciLCJidWNrZXQiOiJleGFtcGxlLWN1c3RvbWVyIiwib2JqZWN0X2tleSI6InRhYmxlcy9kYXRhLnBhcnF1ZXQiLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiIxMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEiLCJidWNrZXQiOiJleGFtcGxlLW93bmVyIiwib2JqZWN0X2tleSI6InJvb3QvMmMvdC9maXh0dXJlXzMvbWFuaWZlc3QiLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJyZW1vdGU6ZXZlbnRzIiwiYnVja2V0IjoiZXhhbXBsZS1yZW1vdGUiLCJwcmVmaXgiOiJldmVudHMvdGVhbV9pZD00Mi8iLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOlB1dE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJyZW1vdGU6aW1wb3J0cyIsImJ1Y2tldCI6ImV4YW1wbGUtcmVtb3RlIiwicHJlZml4IjoiaW1wb3J0cy90ZWFtX2lkPTQyLyIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImFjdGlvbnMiOlsiczM6R2V0T2JqZWN0Il19XX0.IyFlkTAz23KPXJSHLuAZT2KV3XCSAgwkn2WpiV7pcOh22SAvkLjq1s-VZu6hCrdyseBkDwNb1R0sdQAE95pyWg",
       "expect": {
         "read": "invalid_token",
         "ordinary": "invalid_audience"
+      }
+    }
+  ],
+  "relay": [
+    {
+      "name": "the team the session holds",
+      "verify_at": 2000000001,
+      "claims": {
+        "iss": "https://hoglake.contract.test",
+        "aud": [
+          "trino-session",
+          "hoglake-session",
+          "hoglite-session"
+        ],
+        "sub": "example.alice",
+        "usr": "example.alice",
+        "jti": "token-a",
+        "profile": "example.aws-session",
+        "version": 1,
+        "purpose": "user-session",
+        "ten": "scoped",
+        "org": "example-org",
+        "primary_catalog": "example-catalog",
+        "sid": "session-a",
+        "generation": 1,
+        "session_deadline": 2000000120,
+        "iat": 2000000000,
+        "nbf": 2000000000,
+        "exp": 2000000060,
+        "cat": {
+          "example-catalog": [
+            "read"
+          ]
+        },
+        "prd": {
+          "team_id": {
+            "42": "read"
+          }
+        },
+        "rtg": {
+          "b": "hoglite",
+          "be": "11111111-1111-4111-8111-111111111111",
+          "t": "fixture_3"
+        },
+        "remote_schemas": {
+          "team": [
+            "read"
+          ]
+        },
+        "aws": {
+          "access_key_id": "fictional-key",
+          "secret_access_key": "fictional-secret",
+          "session_token": "fictional-session",
+          "region": "us-east-1",
+          "expires_at": 2000000060
+        },
+        "grants": [
+          {
+            "catalog": "example-catalog",
+            "target": "example-catalog",
+            "bucket": "example-customer",
+            "object_key": "tables/data.parquet",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "11111111-1111-4111-8111-111111111111",
+            "bucket": "example-owner",
+            "object_key": "root/2c/t/fixture_3/manifest",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "remote:events",
+            "bucket": "example-remote",
+            "prefix": "events/team_id=42/",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "remote:imports",
+            "bucket": "example-remote",
+            "prefix": "imports/team_id=42/",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          }
+        ]
+      },
+      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImNjMTBiNWFiNjQ5YzM0YTQiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2hvZ2xha2UuY29udHJhY3QudGVzdCIsImF1ZCI6WyJ0cmluby1zZXNzaW9uIiwiaG9nbGFrZS1zZXNzaW9uIiwiaG9nbGl0ZS1zZXNzaW9uIl0sInN1YiI6ImV4YW1wbGUuYWxpY2UiLCJ1c3IiOiJleGFtcGxlLmFsaWNlIiwianRpIjoidG9rZW4tYSIsInByb2ZpbGUiOiJleGFtcGxlLmF3cy1zZXNzaW9uIiwidmVyc2lvbiI6MSwicHVycG9zZSI6InVzZXItc2Vzc2lvbiIsInRlbiI6InNjb3BlZCIsIm9yZyI6ImV4YW1wbGUtb3JnIiwicHJpbWFyeV9jYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwic2lkIjoic2Vzc2lvbi1hIiwiZ2VuZXJhdGlvbiI6MSwic2Vzc2lvbl9kZWFkbGluZSI6MjAwMDAwMDEyMCwiaWF0IjoyMDAwMDAwMDAwLCJuYmYiOjIwMDAwMDAwMDAsImV4cCI6MjAwMDAwMDA2MCwiY2F0Ijp7ImV4YW1wbGUtY2F0YWxvZyI6WyJyZWFkIl19LCJwcmQiOnsidGVhbV9pZCI6eyI0MiI6InJlYWQifX0sInJ0ZyI6eyJiIjoiaG9nbGl0ZSIsImJlIjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwidCI6ImZpeHR1cmVfMyJ9LCJyZW1vdGVfc2NoZW1hcyI6eyJ0ZWFtIjpbInJlYWQiXX0sImF3cyI6eyJhY2Nlc3Nfa2V5X2lkIjoiZmljdGlvbmFsLWtleSIsInNlY3JldF9hY2Nlc3Nfa2V5IjoiZmljdGlvbmFsLXNlY3JldCIsInNlc3Npb25fdG9rZW4iOiJmaWN0aW9uYWwtc2Vzc2lvbiIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImV4cGlyZXNfYXQiOjIwMDAwMDAwNjB9LCJncmFudHMiOlt7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJleGFtcGxlLWNhdGFsb2ciLCJidWNrZXQiOiJleGFtcGxlLWN1c3RvbWVyIiwib2JqZWN0X2tleSI6InRhYmxlcy9kYXRhLnBhcnF1ZXQiLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiIxMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEiLCJidWNrZXQiOiJleGFtcGxlLW93bmVyIiwib2JqZWN0X2tleSI6InJvb3QvMmMvdC9maXh0dXJlXzMvbWFuaWZlc3QiLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJyZW1vdGU6ZXZlbnRzIiwiYnVja2V0IjoiZXhhbXBsZS1yZW1vdGUiLCJwcmVmaXgiOiJldmVudHMvdGVhbV9pZD00Mi8iLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJyZW1vdGU6aW1wb3J0cyIsImJ1Y2tldCI6ImV4YW1wbGUtcmVtb3RlIiwicHJlZml4IjoiaW1wb3J0cy90ZWFtX2lkPTQyLyIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImFjdGlvbnMiOlsiczM6R2V0T2JqZWN0Il19XX0.DsvHVqUsLzHfB7EVCTHyHIwLqePRe41oA0-zUe74ZZwerdF0UOrZ3guJuAvQfp6ALrF_z5QnOJMpqtH14RKFkQ",
+      "request": {
+        "catalog": "example-catalog",
+        "namespace": "team_42"
+      },
+      "expect": {
+        "read": "accept",
+        "relay": "relay"
+      }
+    },
+    {
+      "name": "another team",
+      "verify_at": 2000000001,
+      "claims": {
+        "iss": "https://hoglake.contract.test",
+        "aud": [
+          "trino-session",
+          "hoglake-session",
+          "hoglite-session"
+        ],
+        "sub": "example.alice",
+        "usr": "example.alice",
+        "jti": "token-a",
+        "profile": "example.aws-session",
+        "version": 1,
+        "purpose": "user-session",
+        "ten": "scoped",
+        "org": "example-org",
+        "primary_catalog": "example-catalog",
+        "sid": "session-a",
+        "generation": 1,
+        "session_deadline": 2000000120,
+        "iat": 2000000000,
+        "nbf": 2000000000,
+        "exp": 2000000060,
+        "cat": {
+          "example-catalog": [
+            "read"
+          ]
+        },
+        "prd": {
+          "team_id": {
+            "42": "read"
+          }
+        },
+        "rtg": {
+          "b": "hoglite",
+          "be": "11111111-1111-4111-8111-111111111111",
+          "t": "fixture_3"
+        },
+        "remote_schemas": {
+          "team": [
+            "read"
+          ]
+        },
+        "aws": {
+          "access_key_id": "fictional-key",
+          "secret_access_key": "fictional-secret",
+          "session_token": "fictional-session",
+          "region": "us-east-1",
+          "expires_at": 2000000060
+        },
+        "grants": [
+          {
+            "catalog": "example-catalog",
+            "target": "example-catalog",
+            "bucket": "example-customer",
+            "object_key": "tables/data.parquet",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "11111111-1111-4111-8111-111111111111",
+            "bucket": "example-owner",
+            "object_key": "root/2c/t/fixture_3/manifest",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "remote:events",
+            "bucket": "example-remote",
+            "prefix": "events/team_id=42/",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "remote:imports",
+            "bucket": "example-remote",
+            "prefix": "imports/team_id=42/",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          }
+        ]
+      },
+      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImNjMTBiNWFiNjQ5YzM0YTQiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2hvZ2xha2UuY29udHJhY3QudGVzdCIsImF1ZCI6WyJ0cmluby1zZXNzaW9uIiwiaG9nbGFrZS1zZXNzaW9uIiwiaG9nbGl0ZS1zZXNzaW9uIl0sInN1YiI6ImV4YW1wbGUuYWxpY2UiLCJ1c3IiOiJleGFtcGxlLmFsaWNlIiwianRpIjoidG9rZW4tYSIsInByb2ZpbGUiOiJleGFtcGxlLmF3cy1zZXNzaW9uIiwidmVyc2lvbiI6MSwicHVycG9zZSI6InVzZXItc2Vzc2lvbiIsInRlbiI6InNjb3BlZCIsIm9yZyI6ImV4YW1wbGUtb3JnIiwicHJpbWFyeV9jYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwic2lkIjoic2Vzc2lvbi1hIiwiZ2VuZXJhdGlvbiI6MSwic2Vzc2lvbl9kZWFkbGluZSI6MjAwMDAwMDEyMCwiaWF0IjoyMDAwMDAwMDAwLCJuYmYiOjIwMDAwMDAwMDAsImV4cCI6MjAwMDAwMDA2MCwiY2F0Ijp7ImV4YW1wbGUtY2F0YWxvZyI6WyJyZWFkIl19LCJwcmQiOnsidGVhbV9pZCI6eyI0MiI6InJlYWQifX0sInJ0ZyI6eyJiIjoiaG9nbGl0ZSIsImJlIjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwidCI6ImZpeHR1cmVfMyJ9LCJyZW1vdGVfc2NoZW1hcyI6eyJ0ZWFtIjpbInJlYWQiXX0sImF3cyI6eyJhY2Nlc3Nfa2V5X2lkIjoiZmljdGlvbmFsLWtleSIsInNlY3JldF9hY2Nlc3Nfa2V5IjoiZmljdGlvbmFsLXNlY3JldCIsInNlc3Npb25fdG9rZW4iOiJmaWN0aW9uYWwtc2Vzc2lvbiIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImV4cGlyZXNfYXQiOjIwMDAwMDAwNjB9LCJncmFudHMiOlt7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJleGFtcGxlLWNhdGFsb2ciLCJidWNrZXQiOiJleGFtcGxlLWN1c3RvbWVyIiwib2JqZWN0X2tleSI6InRhYmxlcy9kYXRhLnBhcnF1ZXQiLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiIxMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEiLCJidWNrZXQiOiJleGFtcGxlLW93bmVyIiwib2JqZWN0X2tleSI6InJvb3QvMmMvdC9maXh0dXJlXzMvbWFuaWZlc3QiLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJyZW1vdGU6ZXZlbnRzIiwiYnVja2V0IjoiZXhhbXBsZS1yZW1vdGUiLCJwcmVmaXgiOiJldmVudHMvdGVhbV9pZD00Mi8iLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJyZW1vdGU6aW1wb3J0cyIsImJ1Y2tldCI6ImV4YW1wbGUtcmVtb3RlIiwicHJlZml4IjoiaW1wb3J0cy90ZWFtX2lkPTQyLyIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImFjdGlvbnMiOlsiczM6R2V0T2JqZWN0Il19XX0.njhlGfuKeHuNAmGFuX-U0icaKqBrbVJpmUrtXYQ80is-A5nJ98PP75B8CSmwJC2eemppw5LeJduQ9EhIUjRX0w",
+      "request": {
+        "catalog": "example-catalog",
+        "namespace": "team_43"
+      },
+      "expect": {
+        "read": "accept",
+        "relay": "not_found"
+      }
+    },
+    {
+      "name": "another catalog, same organization and team",
+      "verify_at": 2000000001,
+      "claims": {
+        "iss": "https://hoglake.contract.test",
+        "aud": [
+          "trino-session",
+          "hoglake-session",
+          "hoglite-session"
+        ],
+        "sub": "example.alice",
+        "usr": "example.alice",
+        "jti": "token-a",
+        "profile": "example.aws-session",
+        "version": 1,
+        "purpose": "user-session",
+        "ten": "scoped",
+        "org": "example-org",
+        "primary_catalog": "example-catalog",
+        "sid": "session-a",
+        "generation": 1,
+        "session_deadline": 2000000120,
+        "iat": 2000000000,
+        "nbf": 2000000000,
+        "exp": 2000000060,
+        "cat": {
+          "example-catalog": [
+            "read"
+          ]
+        },
+        "prd": {
+          "team_id": {
+            "42": "read"
+          }
+        },
+        "rtg": {
+          "b": "hoglite",
+          "be": "11111111-1111-4111-8111-111111111111",
+          "t": "fixture_3"
+        },
+        "remote_schemas": {
+          "team": [
+            "read"
+          ]
+        },
+        "aws": {
+          "access_key_id": "fictional-key",
+          "secret_access_key": "fictional-secret",
+          "session_token": "fictional-session",
+          "region": "us-east-1",
+          "expires_at": 2000000060
+        },
+        "grants": [
+          {
+            "catalog": "example-catalog",
+            "target": "example-catalog",
+            "bucket": "example-customer",
+            "object_key": "tables/data.parquet",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "11111111-1111-4111-8111-111111111111",
+            "bucket": "example-owner",
+            "object_key": "root/2c/t/fixture_3/manifest",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "remote:events",
+            "bucket": "example-remote",
+            "prefix": "events/team_id=42/",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "remote:imports",
+            "bucket": "example-remote",
+            "prefix": "imports/team_id=42/",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          }
+        ]
+      },
+      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImNjMTBiNWFiNjQ5YzM0YTQiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2hvZ2xha2UuY29udHJhY3QudGVzdCIsImF1ZCI6WyJ0cmluby1zZXNzaW9uIiwiaG9nbGFrZS1zZXNzaW9uIiwiaG9nbGl0ZS1zZXNzaW9uIl0sInN1YiI6ImV4YW1wbGUuYWxpY2UiLCJ1c3IiOiJleGFtcGxlLmFsaWNlIiwianRpIjoidG9rZW4tYSIsInByb2ZpbGUiOiJleGFtcGxlLmF3cy1zZXNzaW9uIiwidmVyc2lvbiI6MSwicHVycG9zZSI6InVzZXItc2Vzc2lvbiIsInRlbiI6InNjb3BlZCIsIm9yZyI6ImV4YW1wbGUtb3JnIiwicHJpbWFyeV9jYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwic2lkIjoic2Vzc2lvbi1hIiwiZ2VuZXJhdGlvbiI6MSwic2Vzc2lvbl9kZWFkbGluZSI6MjAwMDAwMDEyMCwiaWF0IjoyMDAwMDAwMDAwLCJuYmYiOjIwMDAwMDAwMDAsImV4cCI6MjAwMDAwMDA2MCwiY2F0Ijp7ImV4YW1wbGUtY2F0YWxvZyI6WyJyZWFkIl19LCJwcmQiOnsidGVhbV9pZCI6eyI0MiI6InJlYWQifX0sInJ0ZyI6eyJiIjoiaG9nbGl0ZSIsImJlIjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwidCI6ImZpeHR1cmVfMyJ9LCJyZW1vdGVfc2NoZW1hcyI6eyJ0ZWFtIjpbInJlYWQiXX0sImF3cyI6eyJhY2Nlc3Nfa2V5X2lkIjoiZmljdGlvbmFsLWtleSIsInNlY3JldF9hY2Nlc3Nfa2V5IjoiZmljdGlvbmFsLXNlY3JldCIsInNlc3Npb25fdG9rZW4iOiJmaWN0aW9uYWwtc2Vzc2lvbiIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImV4cGlyZXNfYXQiOjIwMDAwMDAwNjB9LCJncmFudHMiOlt7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJleGFtcGxlLWNhdGFsb2ciLCJidWNrZXQiOiJleGFtcGxlLWN1c3RvbWVyIiwib2JqZWN0X2tleSI6InRhYmxlcy9kYXRhLnBhcnF1ZXQiLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiIxMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEiLCJidWNrZXQiOiJleGFtcGxlLW93bmVyIiwib2JqZWN0X2tleSI6InJvb3QvMmMvdC9maXh0dXJlXzMvbWFuaWZlc3QiLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJyZW1vdGU6ZXZlbnRzIiwiYnVja2V0IjoiZXhhbXBsZS1yZW1vdGUiLCJwcmVmaXgiOiJldmVudHMvdGVhbV9pZD00Mi8iLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJyZW1vdGU6aW1wb3J0cyIsImJ1Y2tldCI6ImV4YW1wbGUtcmVtb3RlIiwicHJlZml4IjoiaW1wb3J0cy90ZWFtX2lkPTQyLyIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImFjdGlvbnMiOlsiczM6R2V0T2JqZWN0Il19XX0.HQEAIBYsRTojMr0oO-W-uJfHXvFnCBqk_0DR0pgKwSsK8WWLb5k47KP--2BVLddRblkTONKKctYaiRZOBFhmHQ",
+      "request": {
+        "catalog": "other-catalog",
+        "namespace": "team_42"
+      },
+      "expect": {
+        "read": "accept",
+        "relay": "not_found"
+      }
+    },
+    {
+      "name": "a leading zero",
+      "verify_at": 2000000001,
+      "claims": {
+        "iss": "https://hoglake.contract.test",
+        "aud": [
+          "trino-session",
+          "hoglake-session",
+          "hoglite-session"
+        ],
+        "sub": "example.alice",
+        "usr": "example.alice",
+        "jti": "token-a",
+        "profile": "example.aws-session",
+        "version": 1,
+        "purpose": "user-session",
+        "ten": "scoped",
+        "org": "example-org",
+        "primary_catalog": "example-catalog",
+        "sid": "session-a",
+        "generation": 1,
+        "session_deadline": 2000000120,
+        "iat": 2000000000,
+        "nbf": 2000000000,
+        "exp": 2000000060,
+        "cat": {
+          "example-catalog": [
+            "read"
+          ]
+        },
+        "prd": {
+          "team_id": {
+            "42": "read"
+          }
+        },
+        "rtg": {
+          "b": "hoglite",
+          "be": "11111111-1111-4111-8111-111111111111",
+          "t": "fixture_3"
+        },
+        "remote_schemas": {
+          "team": [
+            "read"
+          ]
+        },
+        "aws": {
+          "access_key_id": "fictional-key",
+          "secret_access_key": "fictional-secret",
+          "session_token": "fictional-session",
+          "region": "us-east-1",
+          "expires_at": 2000000060
+        },
+        "grants": [
+          {
+            "catalog": "example-catalog",
+            "target": "example-catalog",
+            "bucket": "example-customer",
+            "object_key": "tables/data.parquet",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "11111111-1111-4111-8111-111111111111",
+            "bucket": "example-owner",
+            "object_key": "root/2c/t/fixture_3/manifest",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "remote:events",
+            "bucket": "example-remote",
+            "prefix": "events/team_id=42/",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "remote:imports",
+            "bucket": "example-remote",
+            "prefix": "imports/team_id=42/",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          }
+        ]
+      },
+      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImNjMTBiNWFiNjQ5YzM0YTQiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2hvZ2xha2UuY29udHJhY3QudGVzdCIsImF1ZCI6WyJ0cmluby1zZXNzaW9uIiwiaG9nbGFrZS1zZXNzaW9uIiwiaG9nbGl0ZS1zZXNzaW9uIl0sInN1YiI6ImV4YW1wbGUuYWxpY2UiLCJ1c3IiOiJleGFtcGxlLmFsaWNlIiwianRpIjoidG9rZW4tYSIsInByb2ZpbGUiOiJleGFtcGxlLmF3cy1zZXNzaW9uIiwidmVyc2lvbiI6MSwicHVycG9zZSI6InVzZXItc2Vzc2lvbiIsInRlbiI6InNjb3BlZCIsIm9yZyI6ImV4YW1wbGUtb3JnIiwicHJpbWFyeV9jYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwic2lkIjoic2Vzc2lvbi1hIiwiZ2VuZXJhdGlvbiI6MSwic2Vzc2lvbl9kZWFkbGluZSI6MjAwMDAwMDEyMCwiaWF0IjoyMDAwMDAwMDAwLCJuYmYiOjIwMDAwMDAwMDAsImV4cCI6MjAwMDAwMDA2MCwiY2F0Ijp7ImV4YW1wbGUtY2F0YWxvZyI6WyJyZWFkIl19LCJwcmQiOnsidGVhbV9pZCI6eyI0MiI6InJlYWQifX0sInJ0ZyI6eyJiIjoiaG9nbGl0ZSIsImJlIjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwidCI6ImZpeHR1cmVfMyJ9LCJyZW1vdGVfc2NoZW1hcyI6eyJ0ZWFtIjpbInJlYWQiXX0sImF3cyI6eyJhY2Nlc3Nfa2V5X2lkIjoiZmljdGlvbmFsLWtleSIsInNlY3JldF9hY2Nlc3Nfa2V5IjoiZmljdGlvbmFsLXNlY3JldCIsInNlc3Npb25fdG9rZW4iOiJmaWN0aW9uYWwtc2Vzc2lvbiIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImV4cGlyZXNfYXQiOjIwMDAwMDAwNjB9LCJncmFudHMiOlt7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJleGFtcGxlLWNhdGFsb2ciLCJidWNrZXQiOiJleGFtcGxlLWN1c3RvbWVyIiwib2JqZWN0X2tleSI6InRhYmxlcy9kYXRhLnBhcnF1ZXQiLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiIxMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEiLCJidWNrZXQiOiJleGFtcGxlLW93bmVyIiwib2JqZWN0X2tleSI6InJvb3QvMmMvdC9maXh0dXJlXzMvbWFuaWZlc3QiLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJyZW1vdGU6ZXZlbnRzIiwiYnVja2V0IjoiZXhhbXBsZS1yZW1vdGUiLCJwcmVmaXgiOiJldmVudHMvdGVhbV9pZD00Mi8iLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJyZW1vdGU6aW1wb3J0cyIsImJ1Y2tldCI6ImV4YW1wbGUtcmVtb3RlIiwicHJlZml4IjoiaW1wb3J0cy90ZWFtX2lkPTQyLyIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImFjdGlvbnMiOlsiczM6R2V0T2JqZWN0Il19XX0.kwu_8kPBf9ENuiCT68ztI67RZ_mpV7cc4JGBv0kuXSzOd2i1No_wq-KzEsSq-RrAH8YmPXbZtDBAa4E_oehnTA",
+      "request": {
+        "catalog": "example-catalog",
+        "namespace": "team_042"
+      },
+      "expect": {
+        "read": "accept",
+        "relay": "not_found"
+      }
+    },
+    {
+      "name": "another letter case",
+      "verify_at": 2000000001,
+      "claims": {
+        "iss": "https://hoglake.contract.test",
+        "aud": [
+          "trino-session",
+          "hoglake-session",
+          "hoglite-session"
+        ],
+        "sub": "example.alice",
+        "usr": "example.alice",
+        "jti": "token-a",
+        "profile": "example.aws-session",
+        "version": 1,
+        "purpose": "user-session",
+        "ten": "scoped",
+        "org": "example-org",
+        "primary_catalog": "example-catalog",
+        "sid": "session-a",
+        "generation": 1,
+        "session_deadline": 2000000120,
+        "iat": 2000000000,
+        "nbf": 2000000000,
+        "exp": 2000000060,
+        "cat": {
+          "example-catalog": [
+            "read"
+          ]
+        },
+        "prd": {
+          "team_id": {
+            "42": "read"
+          }
+        },
+        "rtg": {
+          "b": "hoglite",
+          "be": "11111111-1111-4111-8111-111111111111",
+          "t": "fixture_3"
+        },
+        "remote_schemas": {
+          "team": [
+            "read"
+          ]
+        },
+        "aws": {
+          "access_key_id": "fictional-key",
+          "secret_access_key": "fictional-secret",
+          "session_token": "fictional-session",
+          "region": "us-east-1",
+          "expires_at": 2000000060
+        },
+        "grants": [
+          {
+            "catalog": "example-catalog",
+            "target": "example-catalog",
+            "bucket": "example-customer",
+            "object_key": "tables/data.parquet",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "11111111-1111-4111-8111-111111111111",
+            "bucket": "example-owner",
+            "object_key": "root/2c/t/fixture_3/manifest",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "remote:events",
+            "bucket": "example-remote",
+            "prefix": "events/team_id=42/",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "remote:imports",
+            "bucket": "example-remote",
+            "prefix": "imports/team_id=42/",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          }
+        ]
+      },
+      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImNjMTBiNWFiNjQ5YzM0YTQiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2hvZ2xha2UuY29udHJhY3QudGVzdCIsImF1ZCI6WyJ0cmluby1zZXNzaW9uIiwiaG9nbGFrZS1zZXNzaW9uIiwiaG9nbGl0ZS1zZXNzaW9uIl0sInN1YiI6ImV4YW1wbGUuYWxpY2UiLCJ1c3IiOiJleGFtcGxlLmFsaWNlIiwianRpIjoidG9rZW4tYSIsInByb2ZpbGUiOiJleGFtcGxlLmF3cy1zZXNzaW9uIiwidmVyc2lvbiI6MSwicHVycG9zZSI6InVzZXItc2Vzc2lvbiIsInRlbiI6InNjb3BlZCIsIm9yZyI6ImV4YW1wbGUtb3JnIiwicHJpbWFyeV9jYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwic2lkIjoic2Vzc2lvbi1hIiwiZ2VuZXJhdGlvbiI6MSwic2Vzc2lvbl9kZWFkbGluZSI6MjAwMDAwMDEyMCwiaWF0IjoyMDAwMDAwMDAwLCJuYmYiOjIwMDAwMDAwMDAsImV4cCI6MjAwMDAwMDA2MCwiY2F0Ijp7ImV4YW1wbGUtY2F0YWxvZyI6WyJyZWFkIl19LCJwcmQiOnsidGVhbV9pZCI6eyI0MiI6InJlYWQifX0sInJ0ZyI6eyJiIjoiaG9nbGl0ZSIsImJlIjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwidCI6ImZpeHR1cmVfMyJ9LCJyZW1vdGVfc2NoZW1hcyI6eyJ0ZWFtIjpbInJlYWQiXX0sImF3cyI6eyJhY2Nlc3Nfa2V5X2lkIjoiZmljdGlvbmFsLWtleSIsInNlY3JldF9hY2Nlc3Nfa2V5IjoiZmljdGlvbmFsLXNlY3JldCIsInNlc3Npb25fdG9rZW4iOiJmaWN0aW9uYWwtc2Vzc2lvbiIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImV4cGlyZXNfYXQiOjIwMDAwMDAwNjB9LCJncmFudHMiOlt7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJleGFtcGxlLWNhdGFsb2ciLCJidWNrZXQiOiJleGFtcGxlLWN1c3RvbWVyIiwib2JqZWN0X2tleSI6InRhYmxlcy9kYXRhLnBhcnF1ZXQiLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiIxMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEiLCJidWNrZXQiOiJleGFtcGxlLW93bmVyIiwib2JqZWN0X2tleSI6InJvb3QvMmMvdC9maXh0dXJlXzMvbWFuaWZlc3QiLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJyZW1vdGU6ZXZlbnRzIiwiYnVja2V0IjoiZXhhbXBsZS1yZW1vdGUiLCJwcmVmaXgiOiJldmVudHMvdGVhbV9pZD00Mi8iLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJyZW1vdGU6aW1wb3J0cyIsImJ1Y2tldCI6ImV4YW1wbGUtcmVtb3RlIiwicHJlZml4IjoiaW1wb3J0cy90ZWFtX2lkPTQyLyIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImFjdGlvbnMiOlsiczM6R2V0T2JqZWN0Il19XX0.mCkznOwGMOIt3Tey0g0ZieC9ka9vtmwdri14eYstS10mXETit3ZOu3-JYFlK3F_hmT7ki46Dvm7pO76nrChFzA",
+      "request": {
+        "catalog": "example-catalog",
+        "namespace": "TEAM_42"
+      },
+      "expect": {
+        "read": "accept",
+        "relay": "not_found"
+      }
+    },
+    {
+      "name": "a name outside the family",
+      "verify_at": 2000000001,
+      "claims": {
+        "iss": "https://hoglake.contract.test",
+        "aud": [
+          "trino-session",
+          "hoglake-session",
+          "hoglite-session"
+        ],
+        "sub": "example.alice",
+        "usr": "example.alice",
+        "jti": "token-a",
+        "profile": "example.aws-session",
+        "version": 1,
+        "purpose": "user-session",
+        "ten": "scoped",
+        "org": "example-org",
+        "primary_catalog": "example-catalog",
+        "sid": "session-a",
+        "generation": 1,
+        "session_deadline": 2000000120,
+        "iat": 2000000000,
+        "nbf": 2000000000,
+        "exp": 2000000060,
+        "cat": {
+          "example-catalog": [
+            "read"
+          ]
+        },
+        "prd": {
+          "team_id": {
+            "42": "read"
+          }
+        },
+        "rtg": {
+          "b": "hoglite",
+          "be": "11111111-1111-4111-8111-111111111111",
+          "t": "fixture_3"
+        },
+        "remote_schemas": {
+          "team": [
+            "read"
+          ]
+        },
+        "aws": {
+          "access_key_id": "fictional-key",
+          "secret_access_key": "fictional-secret",
+          "session_token": "fictional-session",
+          "region": "us-east-1",
+          "expires_at": 2000000060
+        },
+        "grants": [
+          {
+            "catalog": "example-catalog",
+            "target": "example-catalog",
+            "bucket": "example-customer",
+            "object_key": "tables/data.parquet",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "11111111-1111-4111-8111-111111111111",
+            "bucket": "example-owner",
+            "object_key": "root/2c/t/fixture_3/manifest",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "remote:events",
+            "bucket": "example-remote",
+            "prefix": "events/team_id=42/",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "remote:imports",
+            "bucket": "example-remote",
+            "prefix": "imports/team_id=42/",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          }
+        ]
+      },
+      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImNjMTBiNWFiNjQ5YzM0YTQiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2hvZ2xha2UuY29udHJhY3QudGVzdCIsImF1ZCI6WyJ0cmluby1zZXNzaW9uIiwiaG9nbGFrZS1zZXNzaW9uIiwiaG9nbGl0ZS1zZXNzaW9uIl0sInN1YiI6ImV4YW1wbGUuYWxpY2UiLCJ1c3IiOiJleGFtcGxlLmFsaWNlIiwianRpIjoidG9rZW4tYSIsInByb2ZpbGUiOiJleGFtcGxlLmF3cy1zZXNzaW9uIiwidmVyc2lvbiI6MSwicHVycG9zZSI6InVzZXItc2Vzc2lvbiIsInRlbiI6InNjb3BlZCIsIm9yZyI6ImV4YW1wbGUtb3JnIiwicHJpbWFyeV9jYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwic2lkIjoic2Vzc2lvbi1hIiwiZ2VuZXJhdGlvbiI6MSwic2Vzc2lvbl9kZWFkbGluZSI6MjAwMDAwMDEyMCwiaWF0IjoyMDAwMDAwMDAwLCJuYmYiOjIwMDAwMDAwMDAsImV4cCI6MjAwMDAwMDA2MCwiY2F0Ijp7ImV4YW1wbGUtY2F0YWxvZyI6WyJyZWFkIl19LCJwcmQiOnsidGVhbV9pZCI6eyI0MiI6InJlYWQifX0sInJ0ZyI6eyJiIjoiaG9nbGl0ZSIsImJlIjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwidCI6ImZpeHR1cmVfMyJ9LCJyZW1vdGVfc2NoZW1hcyI6eyJ0ZWFtIjpbInJlYWQiXX0sImF3cyI6eyJhY2Nlc3Nfa2V5X2lkIjoiZmljdGlvbmFsLWtleSIsInNlY3JldF9hY2Nlc3Nfa2V5IjoiZmljdGlvbmFsLXNlY3JldCIsInNlc3Npb25fdG9rZW4iOiJmaWN0aW9uYWwtc2Vzc2lvbiIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImV4cGlyZXNfYXQiOjIwMDAwMDAwNjB9LCJncmFudHMiOlt7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJleGFtcGxlLWNhdGFsb2ciLCJidWNrZXQiOiJleGFtcGxlLWN1c3RvbWVyIiwib2JqZWN0X2tleSI6InRhYmxlcy9kYXRhLnBhcnF1ZXQiLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiIxMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEiLCJidWNrZXQiOiJleGFtcGxlLW93bmVyIiwib2JqZWN0X2tleSI6InJvb3QvMmMvdC9maXh0dXJlXzMvbWFuaWZlc3QiLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJyZW1vdGU6ZXZlbnRzIiwiYnVja2V0IjoiZXhhbXBsZS1yZW1vdGUiLCJwcmVmaXgiOiJldmVudHMvdGVhbV9pZD00Mi8iLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJyZW1vdGU6aW1wb3J0cyIsImJ1Y2tldCI6ImV4YW1wbGUtcmVtb3RlIiwicHJlZml4IjoiaW1wb3J0cy90ZWFtX2lkPTQyLyIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImFjdGlvbnMiOlsiczM6R2V0T2JqZWN0Il19XX0.u3sJwJiYQjElhNl35eiJ0-yBGSYZl6IPQPcXfxymjsYfY7PEBdBF-HCK-yIomRJjFiTk7d-gAsicgIMJxhziNQ",
+      "request": {
+        "catalog": "example-catalog",
+        "namespace": "reports"
+      },
+      "expect": {
+        "read": "accept",
+        "relay": "not_found"
+      }
+    },
+    {
+      "name": "the family label itself",
+      "verify_at": 2000000001,
+      "claims": {
+        "iss": "https://hoglake.contract.test",
+        "aud": [
+          "trino-session",
+          "hoglake-session",
+          "hoglite-session"
+        ],
+        "sub": "example.alice",
+        "usr": "example.alice",
+        "jti": "token-a",
+        "profile": "example.aws-session",
+        "version": 1,
+        "purpose": "user-session",
+        "ten": "scoped",
+        "org": "example-org",
+        "primary_catalog": "example-catalog",
+        "sid": "session-a",
+        "generation": 1,
+        "session_deadline": 2000000120,
+        "iat": 2000000000,
+        "nbf": 2000000000,
+        "exp": 2000000060,
+        "cat": {
+          "example-catalog": [
+            "read"
+          ]
+        },
+        "prd": {
+          "team_id": {
+            "42": "read"
+          }
+        },
+        "rtg": {
+          "b": "hoglite",
+          "be": "11111111-1111-4111-8111-111111111111",
+          "t": "fixture_3"
+        },
+        "remote_schemas": {
+          "team": [
+            "read"
+          ]
+        },
+        "aws": {
+          "access_key_id": "fictional-key",
+          "secret_access_key": "fictional-secret",
+          "session_token": "fictional-session",
+          "region": "us-east-1",
+          "expires_at": 2000000060
+        },
+        "grants": [
+          {
+            "catalog": "example-catalog",
+            "target": "example-catalog",
+            "bucket": "example-customer",
+            "object_key": "tables/data.parquet",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "11111111-1111-4111-8111-111111111111",
+            "bucket": "example-owner",
+            "object_key": "root/2c/t/fixture_3/manifest",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "remote:events",
+            "bucket": "example-remote",
+            "prefix": "events/team_id=42/",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "remote:imports",
+            "bucket": "example-remote",
+            "prefix": "imports/team_id=42/",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          }
+        ]
+      },
+      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImNjMTBiNWFiNjQ5YzM0YTQiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2hvZ2xha2UuY29udHJhY3QudGVzdCIsImF1ZCI6WyJ0cmluby1zZXNzaW9uIiwiaG9nbGFrZS1zZXNzaW9uIiwiaG9nbGl0ZS1zZXNzaW9uIl0sInN1YiI6ImV4YW1wbGUuYWxpY2UiLCJ1c3IiOiJleGFtcGxlLmFsaWNlIiwianRpIjoidG9rZW4tYSIsInByb2ZpbGUiOiJleGFtcGxlLmF3cy1zZXNzaW9uIiwidmVyc2lvbiI6MSwicHVycG9zZSI6InVzZXItc2Vzc2lvbiIsInRlbiI6InNjb3BlZCIsIm9yZyI6ImV4YW1wbGUtb3JnIiwicHJpbWFyeV9jYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwic2lkIjoic2Vzc2lvbi1hIiwiZ2VuZXJhdGlvbiI6MSwic2Vzc2lvbl9kZWFkbGluZSI6MjAwMDAwMDEyMCwiaWF0IjoyMDAwMDAwMDAwLCJuYmYiOjIwMDAwMDAwMDAsImV4cCI6MjAwMDAwMDA2MCwiY2F0Ijp7ImV4YW1wbGUtY2F0YWxvZyI6WyJyZWFkIl19LCJwcmQiOnsidGVhbV9pZCI6eyI0MiI6InJlYWQifX0sInJ0ZyI6eyJiIjoiaG9nbGl0ZSIsImJlIjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwidCI6ImZpeHR1cmVfMyJ9LCJyZW1vdGVfc2NoZW1hcyI6eyJ0ZWFtIjpbInJlYWQiXX0sImF3cyI6eyJhY2Nlc3Nfa2V5X2lkIjoiZmljdGlvbmFsLWtleSIsInNlY3JldF9hY2Nlc3Nfa2V5IjoiZmljdGlvbmFsLXNlY3JldCIsInNlc3Npb25fdG9rZW4iOiJmaWN0aW9uYWwtc2Vzc2lvbiIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImV4cGlyZXNfYXQiOjIwMDAwMDAwNjB9LCJncmFudHMiOlt7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJleGFtcGxlLWNhdGFsb2ciLCJidWNrZXQiOiJleGFtcGxlLWN1c3RvbWVyIiwib2JqZWN0X2tleSI6InRhYmxlcy9kYXRhLnBhcnF1ZXQiLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiIxMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEiLCJidWNrZXQiOiJleGFtcGxlLW93bmVyIiwib2JqZWN0X2tleSI6InJvb3QvMmMvdC9maXh0dXJlXzMvbWFuaWZlc3QiLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJyZW1vdGU6ZXZlbnRzIiwiYnVja2V0IjoiZXhhbXBsZS1yZW1vdGUiLCJwcmVmaXgiOiJldmVudHMvdGVhbV9pZD00Mi8iLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfSx7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJyZW1vdGU6aW1wb3J0cyIsImJ1Y2tldCI6ImV4YW1wbGUtcmVtb3RlIiwicHJlZml4IjoiaW1wb3J0cy90ZWFtX2lkPTQyLyIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImFjdGlvbnMiOlsiczM6R2V0T2JqZWN0Il19XX0.c6vaUO69LTW2enX1ItGs_54WGxctQ7bTyQfHLkq_arHBGYGqqrUu1Cs4OJ9kdHAL0AwCqpKjFWOZtK8FTXH5LQ",
+      "request": {
+        "catalog": "example-catalog",
+        "namespace": "team"
+      },
+      "expect": {
+        "read": "accept",
+        "relay": "not_found"
+      }
+    },
+    {
+      "name": "writable session on the team it holds",
+      "verify_at": 2000000001,
+      "claims": {
+        "iss": "https://hoglake.contract.test",
+        "aud": [
+          "trino-session",
+          "hoglake-session",
+          "hoglite-session"
+        ],
+        "sub": "example.alice",
+        "usr": "example.alice",
+        "jti": "token-a",
+        "profile": "example.aws-session",
+        "version": 1,
+        "purpose": "user-session",
+        "ten": "scoped",
+        "org": "example-org",
+        "primary_catalog": "example-catalog",
+        "sid": "session-a",
+        "generation": 1,
+        "session_deadline": 2000000120,
+        "iat": 2000000000,
+        "nbf": 2000000000,
+        "exp": 2000000060,
+        "cat": {
+          "example-catalog": [
+            "read",
+            "write"
+          ]
+        },
+        "prd": {
+          "team_id": {
+            "42": "write"
+          }
+        },
+        "rtg": {
+          "b": "hoglite",
+          "be": "11111111-1111-4111-8111-111111111111",
+          "t": "fixture_3"
+        },
+        "remote_schemas": {
+          "team": [
+            "read"
+          ]
+        },
+        "aws": {
+          "access_key_id": "fictional-key",
+          "secret_access_key": "fictional-secret",
+          "session_token": "fictional-session",
+          "region": "us-east-1",
+          "expires_at": 2000000060
+        },
+        "grants": [
+          {
+            "catalog": "example-catalog",
+            "target": "example-catalog",
+            "bucket": "example-customer",
+            "region": "us-east-1",
+            "actions": [
+              "s3:AbortMultipartUpload",
+              "s3:GetObject",
+              "s3:ListMultipartUploadParts",
+              "s3:PutObject"
+            ],
+            "prefix": "data/team_42/"
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "11111111-1111-4111-8111-111111111111",
+            "bucket": "example-owner",
+            "object_key": "root/2c/t/fixture_3/manifest",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "remote:events",
+            "bucket": "example-remote",
+            "prefix": "events/team_id=42/",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "remote:imports",
+            "bucket": "example-remote",
+            "prefix": "imports/team_id=42/",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          }
+        ]
+      },
+      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImNjMTBiNWFiNjQ5YzM0YTQiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2hvZ2xha2UuY29udHJhY3QudGVzdCIsImF1ZCI6WyJ0cmluby1zZXNzaW9uIiwiaG9nbGFrZS1zZXNzaW9uIiwiaG9nbGl0ZS1zZXNzaW9uIl0sInN1YiI6ImV4YW1wbGUuYWxpY2UiLCJ1c3IiOiJleGFtcGxlLmFsaWNlIiwianRpIjoidG9rZW4tYSIsInByb2ZpbGUiOiJleGFtcGxlLmF3cy1zZXNzaW9uIiwidmVyc2lvbiI6MSwicHVycG9zZSI6InVzZXItc2Vzc2lvbiIsInRlbiI6InNjb3BlZCIsIm9yZyI6ImV4YW1wbGUtb3JnIiwicHJpbWFyeV9jYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwic2lkIjoic2Vzc2lvbi1hIiwiZ2VuZXJhdGlvbiI6MSwic2Vzc2lvbl9kZWFkbGluZSI6MjAwMDAwMDEyMCwiaWF0IjoyMDAwMDAwMDAwLCJuYmYiOjIwMDAwMDAwMDAsImV4cCI6MjAwMDAwMDA2MCwiY2F0Ijp7ImV4YW1wbGUtY2F0YWxvZyI6WyJyZWFkIiwid3JpdGUiXX0sInByZCI6eyJ0ZWFtX2lkIjp7IjQyIjoid3JpdGUifX0sInJ0ZyI6eyJiIjoiaG9nbGl0ZSIsImJlIjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwidCI6ImZpeHR1cmVfMyJ9LCJyZW1vdGVfc2NoZW1hcyI6eyJ0ZWFtIjpbInJlYWQiXX0sImF3cyI6eyJhY2Nlc3Nfa2V5X2lkIjoiZmljdGlvbmFsLWtleSIsInNlY3JldF9hY2Nlc3Nfa2V5IjoiZmljdGlvbmFsLXNlY3JldCIsInNlc3Npb25fdG9rZW4iOiJmaWN0aW9uYWwtc2Vzc2lvbiIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImV4cGlyZXNfYXQiOjIwMDAwMDAwNjB9LCJncmFudHMiOlt7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJleGFtcGxlLWNhdGFsb2ciLCJidWNrZXQiOiJleGFtcGxlLWN1c3RvbWVyIiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpBYm9ydE11bHRpcGFydFVwbG9hZCIsInMzOkdldE9iamVjdCIsInMzOkxpc3RNdWx0aXBhcnRVcGxvYWRQYXJ0cyIsInMzOlB1dE9iamVjdCJdLCJwcmVmaXgiOiJkYXRhL3RlYW1fNDIvIn0seyJjYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwidGFyZ2V0IjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwiYnVja2V0IjoiZXhhbXBsZS1vd25lciIsIm9iamVjdF9rZXkiOiJyb290LzJjL3QvZml4dHVyZV8zL21hbmlmZXN0IiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXX0seyJjYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwidGFyZ2V0IjoicmVtb3RlOmV2ZW50cyIsImJ1Y2tldCI6ImV4YW1wbGUtcmVtb3RlIiwicHJlZml4IjoiZXZlbnRzL3RlYW1faWQ9NDIvIiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXX0seyJjYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwidGFyZ2V0IjoicmVtb3RlOmltcG9ydHMiLCJidWNrZXQiOiJleGFtcGxlLXJlbW90ZSIsInByZWZpeCI6ImltcG9ydHMvdGVhbV9pZD00Mi8iLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfV19.68Q85VwtUN5vna98tgoKdMkMjxRuQtuVXhkQz3Q0QdBOMiGgQKq-auP6ss4BK-BZPTwlKoaAAmPHRtIrdsAi3g",
+      "request": {
+        "catalog": "example-catalog",
+        "namespace": "team_42"
+      },
+      "expect": {
+        "read": "accept",
+        "relay": "relay"
+      }
+    },
+    {
+      "name": "writable session on another team",
+      "verify_at": 2000000001,
+      "claims": {
+        "iss": "https://hoglake.contract.test",
+        "aud": [
+          "trino-session",
+          "hoglake-session",
+          "hoglite-session"
+        ],
+        "sub": "example.alice",
+        "usr": "example.alice",
+        "jti": "token-a",
+        "profile": "example.aws-session",
+        "version": 1,
+        "purpose": "user-session",
+        "ten": "scoped",
+        "org": "example-org",
+        "primary_catalog": "example-catalog",
+        "sid": "session-a",
+        "generation": 1,
+        "session_deadline": 2000000120,
+        "iat": 2000000000,
+        "nbf": 2000000000,
+        "exp": 2000000060,
+        "cat": {
+          "example-catalog": [
+            "read",
+            "write"
+          ]
+        },
+        "prd": {
+          "team_id": {
+            "42": "write"
+          }
+        },
+        "rtg": {
+          "b": "hoglite",
+          "be": "11111111-1111-4111-8111-111111111111",
+          "t": "fixture_3"
+        },
+        "remote_schemas": {
+          "team": [
+            "read"
+          ]
+        },
+        "aws": {
+          "access_key_id": "fictional-key",
+          "secret_access_key": "fictional-secret",
+          "session_token": "fictional-session",
+          "region": "us-east-1",
+          "expires_at": 2000000060
+        },
+        "grants": [
+          {
+            "catalog": "example-catalog",
+            "target": "example-catalog",
+            "bucket": "example-customer",
+            "region": "us-east-1",
+            "actions": [
+              "s3:AbortMultipartUpload",
+              "s3:GetObject",
+              "s3:ListMultipartUploadParts",
+              "s3:PutObject"
+            ],
+            "prefix": "data/team_42/"
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "11111111-1111-4111-8111-111111111111",
+            "bucket": "example-owner",
+            "object_key": "root/2c/t/fixture_3/manifest",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "remote:events",
+            "bucket": "example-remote",
+            "prefix": "events/team_id=42/",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          },
+          {
+            "catalog": "example-catalog",
+            "target": "remote:imports",
+            "bucket": "example-remote",
+            "prefix": "imports/team_id=42/",
+            "region": "us-east-1",
+            "actions": [
+              "s3:GetObject"
+            ]
+          }
+        ]
+      },
+      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImNjMTBiNWFiNjQ5YzM0YTQiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2hvZ2xha2UuY29udHJhY3QudGVzdCIsImF1ZCI6WyJ0cmluby1zZXNzaW9uIiwiaG9nbGFrZS1zZXNzaW9uIiwiaG9nbGl0ZS1zZXNzaW9uIl0sInN1YiI6ImV4YW1wbGUuYWxpY2UiLCJ1c3IiOiJleGFtcGxlLmFsaWNlIiwianRpIjoidG9rZW4tYSIsInByb2ZpbGUiOiJleGFtcGxlLmF3cy1zZXNzaW9uIiwidmVyc2lvbiI6MSwicHVycG9zZSI6InVzZXItc2Vzc2lvbiIsInRlbiI6InNjb3BlZCIsIm9yZyI6ImV4YW1wbGUtb3JnIiwicHJpbWFyeV9jYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwic2lkIjoic2Vzc2lvbi1hIiwiZ2VuZXJhdGlvbiI6MSwic2Vzc2lvbl9kZWFkbGluZSI6MjAwMDAwMDEyMCwiaWF0IjoyMDAwMDAwMDAwLCJuYmYiOjIwMDAwMDAwMDAsImV4cCI6MjAwMDAwMDA2MCwiY2F0Ijp7ImV4YW1wbGUtY2F0YWxvZyI6WyJyZWFkIiwid3JpdGUiXX0sInByZCI6eyJ0ZWFtX2lkIjp7IjQyIjoid3JpdGUifX0sInJ0ZyI6eyJiIjoiaG9nbGl0ZSIsImJlIjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwidCI6ImZpeHR1cmVfMyJ9LCJyZW1vdGVfc2NoZW1hcyI6eyJ0ZWFtIjpbInJlYWQiXX0sImF3cyI6eyJhY2Nlc3Nfa2V5X2lkIjoiZmljdGlvbmFsLWtleSIsInNlY3JldF9hY2Nlc3Nfa2V5IjoiZmljdGlvbmFsLXNlY3JldCIsInNlc3Npb25fdG9rZW4iOiJmaWN0aW9uYWwtc2Vzc2lvbiIsInJlZ2lvbiI6InVzLWVhc3QtMSIsImV4cGlyZXNfYXQiOjIwMDAwMDAwNjB9LCJncmFudHMiOlt7ImNhdGFsb2ciOiJleGFtcGxlLWNhdGFsb2ciLCJ0YXJnZXQiOiJleGFtcGxlLWNhdGFsb2ciLCJidWNrZXQiOiJleGFtcGxlLWN1c3RvbWVyIiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpBYm9ydE11bHRpcGFydFVwbG9hZCIsInMzOkdldE9iamVjdCIsInMzOkxpc3RNdWx0aXBhcnRVcGxvYWRQYXJ0cyIsInMzOlB1dE9iamVjdCJdLCJwcmVmaXgiOiJkYXRhL3RlYW1fNDIvIn0seyJjYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwidGFyZ2V0IjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwiYnVja2V0IjoiZXhhbXBsZS1vd25lciIsIm9iamVjdF9rZXkiOiJyb290LzJjL3QvZml4dHVyZV8zL21hbmlmZXN0IiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXX0seyJjYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwidGFyZ2V0IjoicmVtb3RlOmV2ZW50cyIsImJ1Y2tldCI6ImV4YW1wbGUtcmVtb3RlIiwicHJlZml4IjoiZXZlbnRzL3RlYW1faWQ9NDIvIiwicmVnaW9uIjoidXMtZWFzdC0xIiwiYWN0aW9ucyI6WyJzMzpHZXRPYmplY3QiXX0seyJjYXRhbG9nIjoiZXhhbXBsZS1jYXRhbG9nIiwidGFyZ2V0IjoicmVtb3RlOmltcG9ydHMiLCJidWNrZXQiOiJleGFtcGxlLXJlbW90ZSIsInByZWZpeCI6ImltcG9ydHMvdGVhbV9pZD00Mi8iLCJyZWdpb24iOiJ1cy1lYXN0LTEiLCJhY3Rpb25zIjpbInMzOkdldE9iamVjdCJdfV19.hcatsuV5ZZIM0g9PifHg1H_-3yVg08gqxo2KpT1b9NrF0sz_cDrlk_cRmUyDUrHvnzPRe0PYb5el3o-6sFdmqg",
+      "request": {
+        "catalog": "example-catalog",
+        "namespace": "team_43"
+      },
+      "expect": {
+        "read": "accept",
+        "relay": "not_found"
       }
     }
   ]
