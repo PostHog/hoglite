@@ -444,7 +444,8 @@ func TestScopedCommitTableLevelFence(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// 4b. Duplicate DV paths within one commit batch MUST fail with 400.
+	// 4b. Duplicate DV paths within one commit batch and cross-list (add_files + add_delete_files)
+	// path collisions MUST fail with 400.
 	scopedNamespaceWantCode(t, scopedMutationCall(t, h, http.MethodPost, base+"/namespaces/scratch/tables/alpha/commit", team42WriteTok, commitTableReq{
 		TableUUID:      alphaDTO.TableUUID,
 		BaseSnapshotID: alphaCommit1.SnapshotID,
@@ -453,6 +454,38 @@ func TestScopedCommitTableLevelFence(t *testing.T) {
 			{DataFileID: dataFileID2, Path: "s3://example-customer/tables/team_id=42/alpha-dv-dup.puffin", DeleteCount: 1, FileSizeBytes: 64},
 		},
 	}), http.StatusBadRequest, "invalid_request")
+	scopedNamespaceWantCode(t, scopedMutationCall(t, h, http.MethodPost, base+"/namespaces/scratch/tables/alpha/commit", team42WriteTok, commitTableReq{
+		TableUUID:      alphaDTO.TableUUID,
+		BaseSnapshotID: alphaCommit2.SnapshotID,
+		AddFiles:       []commitAddFileReq{{Path: "s3://example-customer/tables/team_id=42/cross-list.parquet", RecordCount: 1, FileSizeBytes: 64}},
+		AddDeleteFiles: []commitAddDeleteFileReq{{DataFileID: dataFileID2, Path: "s3://example-customer/tables/team_id=42/cross-list.parquet", DeleteCount: 1, FileSizeBytes: 64}},
+	}), http.StatusBadRequest, "invalid_request")
+
+	// 4c. Catalog-wide path exclusivity at current head:
+	// - Reusing an already-committed DV path on a different live data file returns 409.
+	// - Reusing an already-committed data file path as a DV (cross-kind) returns 409.
+	// - Reusing a path registered on another table (alpha-1.parquet on beta) returns 409.
+	scopedNamespaceWantCode(t, scopedMutationCall(t, h, http.MethodPost, base+"/namespaces/scratch/tables/alpha/commit", team42WriteTok, commitTableReq{
+		TableUUID:      alphaDTO.TableUUID,
+		BaseSnapshotID: alphaCommit2.SnapshotID,
+		AddDeleteFiles: []commitAddDeleteFileReq{{
+			DataFileID: dataFileID2, Path: "s3://example-customer/tables/team_id=42/alpha-dv-1.puffin", DeleteCount: 1, FileSizeBytes: 64,
+		}},
+	}), http.StatusConflict, "conflict")
+	scopedNamespaceWantCode(t, scopedMutationCall(t, h, http.MethodPost, base+"/namespaces/scratch/tables/alpha/commit", team42WriteTok, commitTableReq{
+		TableUUID:      alphaDTO.TableUUID,
+		BaseSnapshotID: alphaCommit2.SnapshotID,
+		AddDeleteFiles: []commitAddDeleteFileReq{{
+			DataFileID: dataFileID2, Path: "s3://example-customer/tables/team_id=42/alpha-1.parquet", DeleteCount: 1, FileSizeBytes: 64,
+		}},
+	}), http.StatusConflict, "conflict")
+	scopedNamespaceWantCode(t, scopedMutationCall(t, h, http.MethodPost, base+"/namespaces/scratch/tables/beta/commit", team42WriteTok, commitTableReq{
+		TableUUID:      betaDTO.TableUUID,
+		BaseSnapshotID: alphaCommit2.SnapshotID,
+		AddFiles: []commitAddFileReq{{
+			Path: "s3://example-customer/tables/team_id=42/alpha-1.parquet", RecordCount: 1, FileSizeBytes: 64,
+		}},
+	}), http.StatusConflict, "conflict")
 
 	// 5. Stale DV commit to alpha using alphaCommit1.SnapshotID AFTER alphaCommit2 touched alpha MUST fail with 409.
 	scopedNamespaceWantCode(t, scopedMutationCall(t, h, http.MethodPost, base+"/namespaces/scratch/tables/alpha/commit", team42WriteTok, commitTableReq{
