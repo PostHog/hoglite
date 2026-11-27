@@ -718,14 +718,16 @@ func (s *Server) commitScopedTable(w http.ResponseWriter, r *http.Request, targe
 	// Defense-in-depth: verify every committed data file and deletion vector URI against
 	// the verified primary-catalog write grant prefix before opening any SQLite transaction,
 	// and guard against int64 overflow in counts and byte totals.
+	// Catalog-wide object exclusivity: cleanup and retirement drain `removals` by `path` alone,
+	// so one S3 object may never be registered twice across tables or across `files` and `dvs`.
 	var totalAddedRecords, totalAddedBytes int64
-	seenFilePaths := make(map[string]struct{}, len(req.AddFiles))
+	seenPaths := make(map[string]struct{}, len(req.AddFiles)+len(req.AddDeleteFiles))
 	for _, f := range req.AddFiles {
 		if f.RecordCount < 0 || f.FileSizeBytes < 0 || (f.FooterSize != nil && *f.FooterSize < 0) {
 			scopedNamespaceRefusal(w, http.StatusBadRequest)
 			return
 		}
-		if _, dup := seenFilePaths[f.Path]; dup {
+		if _, dup := seenPaths[f.Path]; dup {
 			scopedNamespaceRefusal(w, http.StatusBadRequest)
 			return
 		}
@@ -737,18 +739,17 @@ func (s *Server) commitScopedTable(w http.ResponseWriter, r *http.Request, targe
 			scopedNamespaceRefusal(w, http.StatusBadRequest)
 			return
 		}
-		seenFilePaths[f.Path] = struct{}{}
+		seenPaths[f.Path] = struct{}{}
 		totalAddedRecords += f.RecordCount
 		totalAddedBytes += f.FileSizeBytes
 	}
 	seenDeleteTargets := make(map[int64]bool, len(req.AddDeleteFiles))
-	seenDVPaths := make(map[string]struct{}, len(req.AddDeleteFiles))
 	for _, dv := range req.AddDeleteFiles {
 		if dv.DataFileID <= 0 || dv.DeleteCount <= 0 || dv.FileSizeBytes < 0 || seenDeleteTargets[dv.DataFileID] {
 			scopedNamespaceRefusal(w, http.StatusBadRequest)
 			return
 		}
-		if _, dup := seenDVPaths[dv.Path]; dup {
+		if _, dup := seenPaths[dv.Path]; dup {
 			scopedNamespaceRefusal(w, http.StatusBadRequest)
 			return
 		}
@@ -757,7 +758,7 @@ func (s *Server) commitScopedTable(w http.ResponseWriter, r *http.Request, targe
 			return
 		}
 		seenDeleteTargets[dv.DataFileID] = true
-		seenDVPaths[dv.Path] = struct{}{}
+		seenPaths[dv.Path] = struct{}{}
 	}
 	if status := s.scopedNamespaceOwned(r.Context(), target.tenant, t, getManifest); status != 0 {
 		scopedNamespaceRefusal(w, status)
@@ -848,9 +849,12 @@ WHERE t.table_uuid = ? COLLATE BINARY AND t.dropped_snapshot IS NULL AND ps.end_
 			ExpectScalarInt: int64Ptr(0),
 		})
 	}
-	// Fence every added data file and deletion vector against undrained cleanup removals
-	// and duplicate path registration (prevents append replay from double-registering a file).
-	// Catalog DDL maintains covering indexes files_path(path) and dvs_path(path) (BINARY).
+	// Enforce catalog-wide object exclusivity across `files`, `dvs`, and undrained `removals`:
+	// retirement/cleanup drains `removals` by `path` alone, so sharing one object across tables
+	// or across data/DV roles would let one table's cleanup delete another table's live object,
+	// and replaying an append would otherwise double-register rows.
+	// Catalog DDL maintains covering indexes files_path(path), dvs_path(path), and
+	// removals_undrained_path(path) (all BINARY).
 	for _, f := range req.AddFiles {
 		stmts = append(stmts,
 			Statement{
@@ -863,12 +867,22 @@ WHERE t.table_uuid = ? COLLATE BINARY AND t.dropped_snapshot IS NULL AND ps.end_
 				Args:            []any{f.Path},
 				ExpectScalarInt: int64Ptr(0),
 			},
+			Statement{
+				SQL:             `SELECT COUNT(*) FROM dvs WHERE path = ? COLLATE BINARY`,
+				Args:            []any{f.Path},
+				ExpectScalarInt: int64Ptr(0),
+			},
 		)
 	}
 	for _, dv := range req.AddDeleteFiles {
 		stmts = append(stmts,
 			Statement{
 				SQL:             `SELECT COUNT(*) FROM removals WHERE path = ? COLLATE BINARY AND drained_at IS NULL`,
+				Args:            []any{dv.Path},
+				ExpectScalarInt: int64Ptr(0),
+			},
+			Statement{
+				SQL:             `SELECT COUNT(*) FROM files WHERE path = ? COLLATE BINARY`,
 				Args:            []any{dv.Path},
 				ExpectScalarInt: int64Ptr(0),
 			},
