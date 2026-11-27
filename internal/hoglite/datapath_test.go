@@ -262,7 +262,8 @@ func TestDataPathValidation(t *testing.T) {
 		{"s3://bucket/prefix", true},
 		{"s3://bucket/a/b/c/", true},
 		{"s3://bucket/a//b", true}, // hoglake accepts an empty segment here too
-		{"s3://bucket/café", true},
+		{"s3://bucket/a!#$%&'()*+,-.:;=?@[]^_{}|~", true},
+		{"s3://bucket/café", false},
 		{"s3://b/" + strings.Repeat("x", MaxDataPathLength-len("s3://b/")), true},
 		{"", false},
 		{long, false},
@@ -280,6 +281,9 @@ func TestDataPathValidation(t *testing.T) {
 		{"s3://bucket/a\tb", false},
 		{"s3://bucket/a\nb", false},
 		{"s3://bucket/a\x00b", false},
+		{"s3://bucket/a\x7fb", false},
+		{"s3://bucket/a\u00a0b", false},
+		{"s3://bucket/\ufffd", false},
 		{"s3://bucket/\xff", false},
 	} {
 		err := validDataPath(tc.path)
@@ -308,6 +312,9 @@ func TestDataPathValidation(t *testing.T) {
 		{"null", `{"data_path": null}`, CodeInvalidDataPath},
 		{"empty", `{"data_path": ""}`, CodeInvalidDataPath},
 		{"object", `{"data_path": {"s3": "x"}}`, CodeInvalidDataPath},
+		{"non-ascii", `{"data_path": "s3://bucket/café"}`, CodeInvalidDataPath},
+		{"unpaired surrogate", `{"data_path": "s3://bucket/\uD800"}`, CodeInvalidDataPath},
+		{"invalid utf8", "{\"data_path\": \"s3://bucket/\xff\"}", CodeInvalidDataPath},
 		{"non-string class", `{"class": 1}`, ""},
 		{"truncated", `{"data_path": "s3://b/x"`, ""},
 		{"array body", `["s3://b/x"]`, ""},
@@ -1106,5 +1113,172 @@ func TestManifestEqualSeesDataPath(t *testing.T) {
 	b.DataPath = otherDataPath
 	if manifestEqual(a, &b) {
 		t.Fatal("data_path change not seen")
+	}
+}
+
+// hookGetManifestStore runs a one-shot callback right after reading a non-nil
+// manifest for tid, while still returning that pre-callback manifest to the
+// caller. Used to deterministically trigger races where a tenant is deleted or
+// replaced between the routing snapshot and the next step.
+type hookGetManifestStore struct {
+	Backend
+	mu     sync.Mutex
+	onRead map[string]func(*Manifest)
+}
+
+func (s *hookGetManifestStore) arm(tid string, fn func(*Manifest)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.onRead == nil {
+		s.onRead = map[string]func(*Manifest){}
+	}
+	s.onRead[tid] = fn
+}
+
+func (s *hookGetManifestStore) GetManifest(ctx context.Context, tid string) (*Manifest, string, error) {
+	mf, etag, err := s.Backend.GetManifest(ctx, tid)
+	if err == nil && mf != nil {
+		s.mu.Lock()
+		fn := s.onRead[tid]
+		delete(s.onRead, tid)
+		s.mu.Unlock()
+		if fn != nil {
+			fn(mf)
+		}
+	}
+	return mf, etag, err
+}
+
+// Regression test for P1 #1: if the target tenant exists during the initial
+// manifest read (before acquire) and is deleted before acquire reads it,
+// acquire sees mf == nil and MUST still run the overlap scan before creating
+// the new manifest.
+func TestDataPathOverlapCheckedWhenTargetDeletedBeforeAcquire(t *testing.T) {
+	fs := NewFakeStore()
+	hs := &hookGetManifestStore{Backend: fs}
+	c := newRaceCluster(t, hs, fs, "a")
+	for _, m := range c.mgrs {
+		t.Cleanup(m.ShutdownAll)
+	}
+	if code, _, _ := c.do(t, "a", "PUT", "/v1/tenants/other", createBody(otherDataPath)); code != 200 {
+		t.Fatalf("create other: %d", code)
+	}
+	if code, _, _ := c.do(t, "a", "PUT", "/v1/tenants/target", createBody(testDataPath)); code != 200 {
+		t.Fatalf("create target: %d", code)
+	}
+	// Release target so it has a stored manifest with no live owner:
+	// createAtLiveOwner reads the manifest and falls through to acquire.
+	if code, _, _ := c.do(t, "a", "POST", "/v1/t/target/release", nil); code != 200 {
+		t.Fatalf("release target: %d", code)
+	}
+	deleted := false
+	hs.arm("target", func(*Manifest) {
+		deleted = true
+		if err := fs.DeleteTenant(context.Background(), "target"); err != nil {
+			t.Errorf("delete target mid-create: %v", err)
+		}
+	})
+	code, out, _ := c.do(t, "a", "PUT", "/v1/tenants/target", createBody(otherDataPath))
+	if !deleted {
+		t.Fatal("precondition: target manifest read hook did not fire")
+	}
+	if code != 409 || out["code"] != CodeDataPathOverlap {
+		t.Fatalf("create after mid-flight delete: %d %v, want 409 %s", code, out, CodeDataPathOverlap)
+	}
+	if msg := fmt.Sprint(out["error"]); !strings.Contains(msg, "tenant other") {
+		t.Fatalf("overlap error does not name other: %q", msg)
+	}
+	if mf, _, _ := fs.GetManifest(context.Background(), "target"); mf != nil {
+		t.Fatalf("overlap refusal still created target manifest: %+v", mf)
+	}
+}
+
+// Regression test for P1 #2: if a tenant is deleted and recreated on the same
+// owner with a different data_path (or none) between a proxy's manifest read
+// and confirmOwner arriving, an idempotent PUT omitting data_path must NOT
+// return the deleted tenant's prefix. The proxy retries against the fresh
+// manifest and returns the replacement tenant's confirmed path.
+func TestDataPathConfirmOwnerStaleManifestRetries(t *testing.T) {
+	fs := NewFakeStore()
+	hs := &hookGetManifestStore{Backend: fs}
+	mgrs := map[string]*Manager{
+		"a": NewManager(fs, "fake", "a", "standard", t.TempDir(), testOpts(), 1000, &Metrics{}, ControllerOpts{}),
+		"b": NewManager(hs, "fake", "b", "standard", t.TempDir(), testOpts(), 1000, &Metrics{}, ControllerOpts{}),
+	}
+	c := &testCluster{fs: fs, servers: map[string]*httptest.Server{}, mgrs: mgrs}
+	peers := map[string]string{}
+	for id := range mgrs {
+		c.servers[id] = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			NewServer(mgrs[id], peers).Handler().ServeHTTP(w, r)
+		}))
+		t.Cleanup(c.servers[id].Close)
+		t.Cleanup(mgrs[id].ShutdownAll)
+	}
+	for id, srv := range c.servers {
+		peers[id] = srv.URL
+	}
+
+	// Case 1: replaced with a different data_path on the same owner.
+	if code, _, _ := c.do(t, "a", "PUT", "/v1/tenants/dp", createBody(testDataPath)); code != 200 {
+		t.Fatal("create dp with old path")
+	}
+	hs.arm("dp", func(*Manifest) {
+		if code, _, _ := c.do(t, "a", "DELETE", "/v1/tenants/dp", nil); code != 200 {
+			t.Errorf("delete dp: %d", code)
+		}
+		if code, _, _ := c.do(t, "a", "PUT", "/v1/tenants/dp", createBody(otherDataPath)); code != 200 {
+			t.Errorf("recreate dp with new path: %d", code)
+		}
+	})
+	start := time.Now()
+	code, out, hdr := c.do(t, "b", "PUT", "/v1/tenants/dp", createBody(""))
+	if code != 200 || out["existing"] != true || out["data_path"] != otherDataPath {
+		t.Fatalf("idempotent PUT after replacement: %d %v, want 200 with %q", code, out, otherDataPath)
+	}
+	wantDataPath(t, "idempotent PUT after replacement", hdr, otherDataPath)
+	if time.Since(start) > promptCreate {
+		t.Fatalf("stale confirmation retry took %v: waited out lease", time.Since(start))
+	}
+
+	// Case 2: replaced with a legacy tenant (no data_path) on the same owner.
+	hs.arm("dp", func(*Manifest) {
+		if code, _, _ := c.do(t, "a", "DELETE", "/v1/tenants/dp", nil); code != 200 {
+			t.Errorf("delete dp: %d", code)
+		}
+		if code, _, _ := c.do(t, "a", "PUT", "/v1/tenants/dp", createBody("")); code != 200 {
+			t.Errorf("recreate dp without data_path: %d", code)
+		}
+	})
+	start = time.Now()
+	code, out, hdr = c.do(t, "b", "PUT", "/v1/tenants/dp", createBody(""))
+	if code != 200 || out["existing"] != true || out["data_path"] != nil {
+		t.Fatalf("idempotent PUT after replacement with legacy: %d %v, want 200 with no data_path", code, out)
+	}
+	wantDataPath(t, "idempotent PUT after replacement with legacy", hdr, "")
+	if time.Since(start) > promptCreate {
+		t.Fatalf("stale confirmation retry (legacy) took %v: waited out lease", time.Since(start))
+	}
+
+	// Case 3: direct unit checks on confirmOwner for stale path and duplicate header.
+	var peerHeader http.Header
+	peer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for k, vs := range peerHeader {
+			for _, v := range vs {
+				w.Header().Add(k, v)
+			}
+		}
+		w.WriteHeader(200)
+	}))
+	defer peer.Close()
+	srv := NewServer(&Manager{metrics: &Metrics{}}, map[string]string{"peer": peer.URL})
+	req := httptest.NewRequest(http.MethodPut, "/v1/tenants/dp", nil)
+
+	peerHeader = http.Header{DataPathHeader: {otherDataPath}}
+	if check, got := srv.confirmOwner(req, "dp", &Manifest{Owner: "peer", DataPath: testDataPath}, nil); check != ownerStale || got != otherDataPath {
+		t.Fatalf("mismatched owner path: got (%v, %q), want (ownerStale, %q)", check, got, otherDataPath)
+	}
+	peerHeader = http.Header{DataPathHeader: {testDataPath, otherDataPath}}
+	if check, _ := srv.confirmOwner(req, "dp", &Manifest{Owner: "peer", DataPath: testDataPath}, nil); check != ownerDenied {
+		t.Fatalf("duplicate header: got %v, want ownerDenied", check)
 	}
 }

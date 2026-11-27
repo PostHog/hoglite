@@ -604,6 +604,19 @@ func (m *Manager) acquire(ctx context.Context, tid string, create bool, dataPath
 			if !create {
 				return nil, ErrNoTenant
 			}
+			if dataPath != "" {
+				// Run the overlap scan in the branch that is actually about
+				// to create a new manifest. Scanning earlier lets a tenant
+				// that existed during the pre-check and was deleted before
+				// this read bypass the scan and take another tenant's path.
+				otherTid, otherPath, oerr := otherDataPathOverlap(ctx, m.store, tid, dataPath)
+				if oerr != nil {
+					return nil, &dataPathOverlapScanError{err: oerr}
+				}
+				if otherTid != "" {
+					return nil, &dataPathOverlapError{tid: tid, want: dataPath, otherTid: otherTid, otherPath: otherPath}
+				}
+			}
 			t, err := m.createTenant(ctx, tid, "", dataPath)
 			if errors.Is(err, errCreateLost) {
 				// a peer created it between our read and our CAS (every

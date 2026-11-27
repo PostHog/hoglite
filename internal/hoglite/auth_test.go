@@ -611,7 +611,7 @@ func TestJWTAuthOwnerConfirmationPreservesAuthority(t *testing.T) {
 	r := httptest.NewRequest("PUT", "/v1/tenants/opaque_1", nil)
 	r = r.WithContext(context.WithValue(r.Context(), authorityKey{}, &requestAuthority{token: raw, tenant: "opaque_1"}))
 	s := NewServer(nil, map[string]string{"peer": peer.URL})
-	if s.confirmOwner(r, "opaque_1", &Manifest{Owner: "peer"}, nil) != ownerConfirmed || !observed.Load() {
+	if check, _ := s.confirmOwner(r, "opaque_1", &Manifest{Owner: "peer"}, nil); check != ownerConfirmed || !observed.Load() {
 		t.Fatal("owner confirmation did not preserve verified authority")
 	}
 }

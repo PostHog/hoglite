@@ -11,8 +11,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"unicode"
-	"unicode/utf8"
 )
 
 // The tenant data_path (Manifest.DataPath).
@@ -239,22 +237,53 @@ func otherDataPathOverlap(ctx context.Context, store Backend, tid, p string) (ot
 	return otherTid, otherPath, nil
 }
 
+// dataPathOverlapError is returned by Manager.acquire when the tenant to
+// create has a data_path overlapping another tenant on this backend.
+type dataPathOverlapError struct {
+	tid       string
+	want      string
+	otherTid  string
+	otherPath string
+}
+
+func (e *dataPathOverlapError) Error() string {
+	return fmt.Sprintf("tenant %s cannot take data_path %q: it overlaps tenant %s (data_path %q); tenant data_paths must be disjoint", e.tid, e.want, e.otherTid, e.otherPath)
+}
+
+// dataPathOverlapScanError is returned by Manager.acquire when the overlap
+// scan could not finish, so the create must be refused (503) rather than
+// proceed unchecked.
+type dataPathOverlapScanError struct {
+	err error
+}
+
+func (e *dataPathOverlapScanError) Error() string {
+	return "data_path overlap check did not finish: " + e.err.Error() + "; retry"
+}
+
+func (e *dataPathOverlapScanError) Unwrap() error { return e.err }
+
 // dataPathOverlap is the 409 of a create whose data_path another tenant
 // owns. It names that tenant and its path: only an operator can create a
 // tenant, and an operator reads every manifest through /status anyway.
 func dataPathOverlap(tid, want, otherTid, otherPath string) (int, any) {
 	return http.StatusConflict, apiError{
-		Error: fmt.Sprintf("tenant %s cannot take data_path %q: it overlaps tenant %s (data_path %q); tenant data_paths must be disjoint", tid, want, otherTid, otherPath),
+		Error: (&dataPathOverlapError{tid: tid, want: want, otherTid: otherTid, otherPath: otherPath}).Error(),
 		Code:  CodeDataPathOverlap,
 	}
 }
 
-// validDataPath checks the shape of a data_path. The rules are hoglake's
+// validDataPath checks the shape of a data_path. The rules match hoglake's
 // (CatalogService.validateDataPath), so the two sides agree on what a
 // data_path is: `s3://<bucket>[/<prefix>]`, non-empty bucket, at most
-// MaxDataPathLength bytes, no whitespace or control characters, no `.` or
-// `..` segment. A bucket root (`s3://bucket`) is legal. The value is stored
-// as given: no normalization, so the header repeats what the create sent.
+// MaxDataPathLength bytes, printable ASCII only (0x21..0x7E: no whitespace,
+// control, or non-ASCII characters), no `.` or `..` segment. Restricting to
+// RFC 9110 VCHAR (0x21..0x7E) guarantees X-Hoglite-Data-Path round-trips
+// identically through HTTP/1.1 parsers that decode header bytes as ISO-8859-1
+// (such as OpenJDK's HttpClient), and also rejects U+FFFD replacement runes
+// produced by encoding/json for malformed UTF-8 or unpaired surrogates. A
+// bucket root (`s3://bucket`) is legal. The value is stored as given: no
+// normalization, so the header repeats what the create sent.
 func validDataPath(p string) error {
 	if p == "" {
 		return errors.New("data_path must not be empty")
@@ -262,12 +291,9 @@ func validDataPath(p string) error {
 	if len(p) > MaxDataPathLength {
 		return fmt.Errorf("data_path is %d bytes, over the maximum %d", len(p), MaxDataPathLength)
 	}
-	if !utf8.ValidString(p) {
-		return errors.New("data_path must be valid UTF-8")
-	}
-	for _, r := range p {
-		if unicode.IsSpace(r) || unicode.IsControl(r) {
-			return errors.New("data_path must not contain whitespace or control characters")
+	for i := 0; i < len(p); i++ {
+		if p[i] < 0x21 || p[i] > 0x7E {
+			return errors.New("data_path must be printable ASCII (no whitespace, control, or non-ASCII characters)")
 		}
 	}
 	rest, ok := strings.CutPrefix(p, "s3://")

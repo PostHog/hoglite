@@ -351,11 +351,6 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) (int, any)
 	if code, out, done := s.createAtLiveOwner(w, r, tid, raw, body.DataPath); done {
 		return code, out
 	}
-	if body.DataPath != "" {
-		if code, out, refused := s.refuseDataPathOverlap(r.Context(), tid, body.DataPath); refused {
-			return code, out
-		}
-	}
 	// A peer can create the tenant after the initial manifest read.
 	// Singleflight followers also need to confirm that owner before waiting.
 	t, err := s.mgr.acquire(r.Context(), tid, true, body.DataPath, func(mf *Manifest) bool {
@@ -367,9 +362,21 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) (int, any)
 			// below answers 409 from the manifest.
 			return true
 		}
-		return r.Header.Get("x-hw-noproxy") != "" || s.confirmOwner(r, tid, mf, raw) == ownerConfirmed
+		if r.Header.Get("x-hw-noproxy") != "" {
+			return true
+		}
+		check, _ := s.confirmOwner(r, tid, mf, raw)
+		return check == ownerConfirmed || check == ownerStale
 	})
 	if err != nil {
+		var overlapErr *dataPathOverlapError
+		if errors.As(err, &overlapErr) {
+			return dataPathOverlap(overlapErr.tid, overlapErr.want, overlapErr.otherTid, overlapErr.otherPath)
+		}
+		var scanErr *dataPathOverlapScanError
+		if errors.As(err, &scanErr) {
+			return 503, apiError{Error: scanErr.Error()}
+		}
 		// create on an existing tenant is a no-op success (idempotent):
 		// if the manifest exists, the tenant exists, regardless of who
 		// currently owns it, unless the body names another data_path
@@ -399,8 +406,12 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) (int, any)
 					// could only read as a denial (503, retry)
 					return dataPathMismatch(tid, mf.DataPath, body.DataPath)
 				}
-				switch s.confirmOwner(r, tid, mf, raw) {
-				case ownerConfirmed, ownerUnroutable:
+				check, confirmedPath := s.confirmOwner(r, tid, mf, raw)
+				switch check {
+				case ownerConfirmed:
+					setDataPath(w, confirmedPath)
+					return 200, existingBodyWithPath(tid, mf, confirmedPath)
+				case ownerUnroutable:
 					setDataPath(w, mf.DataPath)
 					return 200, existingBody(tid, mf)
 				default:
@@ -421,34 +432,15 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) (int, any)
 	return 200, withDataPath(map[string]any{"tenant": tid, "owner": s.mgr.ID()}, t.dataPath)
 }
 
-// refuseDataPathOverlap answers a create that is about to make tid with
-// dataPath when another tenant of this backend owns an overlapping
-// data_path (409 data_path_overlap, datapath.go). A tenant that already
-// exists is not scanned: the mismatch rules decide its answer, and the
-// scan costs a manifest read per tenant. A scan that cannot finish refuses
-// too (503): an unchecked create could take another catalog's prefix.
-func (s *Server) refuseDataPathOverlap(ctx context.Context, tid, dataPath string) (int, any, bool) {
-	mf, _, err := s.mgr.store.GetManifest(ctx, tid)
-	if err != nil {
-		return errCode(err), apiError{Error: err.Error()}, true
-	}
-	if mf != nil {
-		return 0, nil, false
-	}
-	otherTid, otherPath, err := otherDataPathOverlap(ctx, s.mgr.store, tid, dataPath)
-	if err != nil {
-		return 503, apiError{Error: "data_path overlap check did not finish: " + err.Error() + "; retry"}, true
-	}
-	if otherTid != "" {
-		code, out := dataPathOverlap(tid, dataPath, otherTid, otherPath)
-		return code, out, true
-	}
-	return 0, nil, false
-}
-
 // existingBody is the answer to a create of a tenant that already exists.
 func existingBody(tid string, mf *Manifest) map[string]any {
-	return withDataPath(map[string]any{"tenant": tid, "owner": ownerAddr(mf), "existing": true}, mf.DataPath)
+	return existingBodyWithPath(tid, mf, mf.DataPath)
+}
+
+// existingBodyWithPath builds an "existing" create answer using dataPath
+// (the confirmed owner's data_path when confirmed over the wire).
+func existingBodyWithPath(tid string, mf *Manifest, dataPath string) map[string]any {
+	return withDataPath(map[string]any{"tenant": tid, "owner": ownerAddr(mf), "existing": true}, dataPath)
 }
 
 // ownerAddr is the routable address of mf's owner, never the fencing id.
@@ -515,10 +507,10 @@ func (s *Server) createAtLiveOwner(w http.ResponseWriter, r *http.Request, tid s
 		code, out := dataPathMismatch(tid, mf.DataPath, dataPath)
 		return code, out, true
 	}
-	if s.confirmOwner(r, tid, mf, raw) == ownerConfirmed {
+	if check, confirmedPath := s.confirmOwner(r, tid, mf, raw); check == ownerConfirmed {
 		s.mgr.metrics.Proxied.Add(1)
-		setDataPath(w, mf.DataPath)
-		return 200, existingBody(tid, mf), true
+		setDataPath(w, confirmedPath)
+		return 200, existingBodyWithPath(tid, mf, confirmedPath), true
 	}
 	return 0, nil, false
 }
@@ -526,27 +518,35 @@ func (s *Server) createAtLiveOwner(w http.ResponseWriter, r *http.Request, tid s
 type ownerCheck int
 
 const (
-	ownerConfirmed  ownerCheck = iota // the owner answered 200 for the tenant
-	ownerDenied                       // transport error, timeout or non-200
+	ownerConfirmed  ownerCheck = iota // the owner answered 200 with a matching data_path
+	ownerDenied                       // transport error, timeout, non-200, or malformed header
+	ownerStale                        // owner answered 200 but with a different data_path than mf
 	ownerUnroutable                   // not in our peer table: cannot ask
 )
 
 // confirmOwner forwards the create to mf's owner and reports whether it
-// holds the tenant. The owner answers from its local copy in about a
-// millisecond; the 2 s cap bounds a wedged owner, after which the caller
-// takes the slow path. A pod restarted under the owner's name (StatefulSet
-// pods keep their names) is a new incarnation that does not hold the
-// tenant: it answers 421, which counts as a denial.
-func (s *Server) confirmOwner(r *http.Request, tid string, mf *Manifest, raw []byte) ownerCheck {
+// holds the tenant with the same data_path as mf. The owner answers from its
+// local copy in about a millisecond; the 2 s cap bounds a wedged owner,
+// after which the caller takes the slow path. A pod restarted under the
+// owner's name (StatefulSet pods keep their names) is a new incarnation
+// that does not hold the tenant: it answers 421, which counts as a denial.
+//
+// If the tenant was deleted and recreated on the same owner with a different
+// data_path (or none) between reading mf and the confirmation arriving, an
+// idempotent PUT omitting data_path still receives 200, but the owner's
+// X-Hoglite-Data-Path header disagrees with mf.DataPath. We return
+// ownerStale so the caller re-reads the manifest instead of echoing the
+// deleted tenant's prefix.
+func (s *Server) confirmOwner(r *http.Request, tid string, mf *Manifest, raw []byte) (ownerCheck, string) {
 	base, ok := s.peers[ownerAddr(mf)]
 	if !ok {
-		return ownerUnroutable
+		return ownerUnroutable, ""
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut, base+"/v1/tenants/"+tid, bytes.NewReader(raw))
 	if err != nil {
-		return ownerDenied
+		return ownerDenied, ""
 	}
 	req.Header.Set("x-hw-noproxy", "1")
 	req.Header.Set("Content-Type", "application/json")
@@ -554,14 +554,21 @@ func (s *Server) confirmOwner(r *http.Request, tid string, mf *Manifest, raw []b
 	resp, err := s.client.Do(req)
 	if err != nil {
 		s.mgr.metrics.ProxyFails.Add(1)
-		return ownerDenied
+		return ownerDenied, ""
 	}
 	io.Copy(io.Discard, resp.Body)
 	resp.Body.Close()
 	if resp.StatusCode != 200 {
-		return ownerDenied
+		return ownerDenied, ""
 	}
-	return ownerConfirmed
+	if len(resp.Header.Values(DataPathHeader)) > 1 {
+		return ownerDenied, ""
+	}
+	confirmedPath := resp.Header.Get(DataPathHeader)
+	if confirmedPath != mf.DataPath {
+		return ownerStale, confirmedPath
+	}
+	return ownerConfirmed, confirmedPath
 }
 
 func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) (int, any) {
