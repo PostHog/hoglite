@@ -836,20 +836,35 @@ WHERE t.table_uuid = ? COLLATE BINARY AND t.dropped_snapshot IS NULL AND ps.end_
 			ExpectScalarInt: int64Ptr(0),
 		})
 	}
-	// Fence every added data file and deletion vector against undrained cleanup removals.
+	// Fence every added data file and deletion vector against undrained cleanup removals
+	// and duplicate path registration (prevents append replay from double-registering a file).
 	for _, f := range req.AddFiles {
-		stmts = append(stmts, Statement{
-			SQL:             `SELECT COUNT(*) FROM removals WHERE path = ? COLLATE BINARY AND drained_at IS NULL`,
-			Args:            []any{f.Path},
-			ExpectScalarInt: int64Ptr(0),
-		})
+		stmts = append(stmts,
+			Statement{
+				SQL:             `SELECT COUNT(*) FROM removals WHERE path = ? COLLATE BINARY AND drained_at IS NULL`,
+				Args:            []any{f.Path},
+				ExpectScalarInt: int64Ptr(0),
+			},
+			Statement{
+				SQL:             `SELECT COUNT(*) FROM files WHERE path = ? COLLATE BINARY`,
+				Args:            []any{f.Path},
+				ExpectScalarInt: int64Ptr(0),
+			},
+		)
 	}
 	for _, dv := range req.AddDeleteFiles {
-		stmts = append(stmts, Statement{
-			SQL:             `SELECT COUNT(*) FROM removals WHERE path = ? COLLATE BINARY AND drained_at IS NULL`,
-			Args:            []any{dv.Path},
-			ExpectScalarInt: int64Ptr(0),
-		})
+		stmts = append(stmts,
+			Statement{
+				SQL:             `SELECT COUNT(*) FROM removals WHERE path = ? COLLATE BINARY AND drained_at IS NULL`,
+				Args:            []any{dv.Path},
+				ExpectScalarInt: int64Ptr(0),
+			},
+			Statement{
+				SQL:             `SELECT COUNT(*) FROM dvs WHERE path = ? COLLATE BINARY`,
+				Args:            []any{dv.Path},
+				ExpectScalarInt: int64Ptr(0),
+			},
+		)
 	}
 	if len(req.AddFiles) > 0 {
 		stmts = append(stmts,

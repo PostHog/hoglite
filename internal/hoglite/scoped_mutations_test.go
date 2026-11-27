@@ -214,7 +214,7 @@ func TestScopedMutationsLifecycleAndSecurity(t *testing.T) {
 		TableUUID:      tblDTO.TableUUID,
 		BaseSnapshotID: tblDTO.ReadSnapshotID,
 		AddFiles: []commitAddFileReq{{
-			Path: "s3://example-customer/tables/team_id=42/part-1.parquet", RecordCount: 3, FileSizeBytes: 512,
+			Path: "s3://example-customer/tables/team_id=42/scratch-part-1.parquet", RecordCount: 3, FileSizeBytes: 512,
 		}},
 	})
 	if w.Code != http.StatusOK {
@@ -238,7 +238,7 @@ func TestScopedMutationsLifecycleAndSecurity(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &scanDTO); err != nil {
 		t.Fatal(err)
 	}
-	if len(scanDTO.Files) != 1 || scanDTO.Files[0].DataFile.Path != "s3://example-customer/tables/team_id=42/part-1.parquet" {
+	if len(scanDTO.Files) != 1 || scanDTO.Files[0].DataFile.Path != "s3://example-customer/tables/team_id=42/scratch-part-1.parquet" {
 		t.Fatalf("unexpected scan after insert: %+v", scanDTO)
 	}
 
@@ -380,6 +380,16 @@ func TestScopedCommitTableLevelFence(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// 2b. Replaying the exact same append path (e.g. retry after lost response) MUST fail with 409
+	// instead of double-registering the Parquet file.
+	scopedNamespaceWantCode(t, scopedMutationCall(t, h, http.MethodPost, base+"/namespaces/scratch/tables/alpha/commit", team42WriteTok, commitTableReq{
+		TableUUID:      alphaDTO.TableUUID,
+		BaseSnapshotID: alphaBase,
+		AddFiles: []commitAddFileReq{{
+			Path: "s3://example-customer/tables/team_id=42/alpha-1.parquet", RecordCount: 5, FileSizeBytes: 512,
+		}},
+	}), http.StatusConflict, "conflict")
+
 	// 3. Committing to beta advances catalog head again, but alpha is still untouched since alphaCommit1.
 	w = scopedMutationCall(t, h, http.MethodPost, base+"/namespaces/scratch/tables/beta/commit", team42WriteTok, commitTableReq{
 		TableUUID:      betaDTO.TableUUID,
@@ -459,15 +469,16 @@ func TestScopedCommitTableLevelFence(t *testing.T) {
 		}},
 	}), http.StatusConflict, "conflict")
 
-	// 8. Expired base_snapshot_id (< meta.earliest_snapshot_id) MUST fail with 409 even when no later rows remain.
+	// 8. Expired base_snapshot_id (< meta.earliest_snapshot_id) MUST fail with 409.
+	// Use beta (which has no intervening DDL) so this assertion isolates the retention-floor check.
 	scopedNamespaceWrite(t, tenant, "advance-retention-floor",
 		Statement{SQL: `UPDATE meta SET earliest_snapshot_id = ? WHERE id = 1`, Args: []any{dropColSnap}},
 	)
-	scopedNamespaceWantCode(t, scopedMutationCall(t, h, http.MethodPost, base+"/namespaces/scratch/tables/alpha/commit", team42WriteTok, commitTableReq{
-		TableUUID:      alphaDTO.TableUUID,
-		BaseSnapshotID: alphaCommit2.SnapshotID,
+	scopedNamespaceWantCode(t, scopedMutationCall(t, h, http.MethodPost, base+"/namespaces/scratch/tables/beta/commit", team42WriteTok, commitTableReq{
+		TableUUID:      betaDTO.TableUUID,
+		BaseSnapshotID: betaDTO.ReadSnapshotID,
 		AddFiles: []commitAddFileReq{{
-			Path: "s3://example-customer/tables/team_id=42/alpha-expired.parquet", RecordCount: 1, FileSizeBytes: 128,
+			Path: "s3://example-customer/tables/team_id=42/beta-expired.parquet", RecordCount: 1, FileSizeBytes: 128,
 		}},
 	}), http.StatusConflict, "conflict")
 
