@@ -59,8 +59,12 @@ type ReadSessionConfig struct {
 	// in addition to built-in reserved names (information_schema, team_<digits>).
 	ReadOnlyNamespaces []string
 	// Optional case-insensitive regexes blocking schema create/drop on matching namespaces
+	// in addition to built-in read-only namespaces and managed team schemas (local_team_<digits>),
 	// while keeping table reads and mutations subject to normal containment checks.
 	ProtectedSchemaLifecycle []string
+	// Optional maximum number of live namespaces a single team may own via scoped
+	// namespace creation. Zero uses the default limit; negative values are rejected.
+	MaxNamespacesPerTeam int
 }
 
 type readSessionProfile struct {
@@ -71,6 +75,7 @@ type readSessionProfile struct {
 	region                   string
 	readOnlyNamespaces       []*regexp.Regexp
 	protectedSchemaLifecycle []*regexp.Regexp
+	maxNamespacesPerTeam     int
 }
 
 type readSessionCredentials struct {
@@ -189,6 +194,13 @@ func readSessionConfig(cfg AuthConfig) (*readSessionProfile, error) {
 	if err != nil {
 		return nil, err
 	}
+	if rs.MaxNamespacesPerTeam < 0 {
+		return nil, errors.New("invalid read session max namespaces per team")
+	}
+	maxNamespaces := rs.MaxNamespacesPerTeam
+	if maxNamespaces == 0 {
+		maxNamespaces = scopedMutationDefaultMaxNamespacesPerTeam
+	}
 	return &readSessionProfile{
 		profile:                  rs.Profile,
 		remoteTargets:            [2]string{t0, t1},
@@ -197,12 +209,17 @@ func readSessionConfig(cfg AuthConfig) (*readSessionProfile, error) {
 		region:                   rs.Region,
 		readOnlyNamespaces:       readOnlyRes,
 		protectedSchemaLifecycle: protectedRes,
+		maxNamespacesPerTeam:     maxNamespaces,
 	}, nil
 }
 
 var builtInReadOnlyNamespaceRes = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)^information_schema$`),
 	regexp.MustCompile(`(?i)^team_[0-9]+$`),
+}
+
+var builtInProtectedSchemaLifecycleRes = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)^local_team_[0-9]+$`),
 }
 
 func compileNamespacePatterns(patterns []string) ([]*regexp.Regexp, error) {
@@ -242,6 +259,11 @@ func (p *readSessionProfile) isProtectedSchemaLifecycle(name string) bool {
 	if p.isReadOnlyNamespace(name) {
 		return true
 	}
+	for _, re := range builtInProtectedSchemaLifecycleRes {
+		if re.MatchString(name) {
+			return true
+		}
+	}
 	if p == nil {
 		return false
 	}
@@ -251,6 +273,13 @@ func (p *readSessionProfile) isProtectedSchemaLifecycle(name string) bool {
 		}
 	}
 	return false
+}
+
+func (p *readSessionProfile) maxLiveNamespacesPerTeam() int {
+	if p == nil || p.maxNamespacesPerTeam <= 0 {
+		return scopedMutationDefaultMaxNamespacesPerTeam
+	}
+	return p.maxNamespacesPerTeam
 }
 
 func validReadSessionBucket(bucket string) bool {
