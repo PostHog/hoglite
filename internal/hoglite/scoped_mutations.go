@@ -767,18 +767,32 @@ WHERE m.id = 1 AND m.name = ? COLLATE BINARY AND m.dropping = 0
 			Args:            []any{target.catalog, target.namespace, predField, predValue, target.table},
 			ExpectScalarInt: int64Ptr(1),
 		},
-		// 1: verify immutable table_uuid and base_snapshot_id match current head (409 Conflict if stale/recreated)
+		// 1: verify immutable table_uuid and table-level base_snapshot_id fence (409 Conflict if stale/recreated/concurrently modified).
+		// Unrelated commits to other tables or namespaces advance meta.next_snapshot without conflicting here.
 		{
 			SQL: `SELECT COUNT(*) FROM meta AS m
 JOIN namespaces AS n ON 1 = 1
 JOIN tables AS t ON t.namespace_id = n.id
 WHERE m.id = 1 AND m.name = ? COLLATE BINARY AND m.dropping = 0
-  AND m.next_snapshot - 1 = ?
+  AND ? >= t.created_snapshot AND ? <= m.next_snapshot - 1
   AND n.name = ? COLLATE BINARY AND n.dropped_snapshot IS NULL
   AND n.contained_field = ? COLLATE BINARY AND typeof(n.contained_value) = 'integer' AND n.contained_value = ?
   AND t.name = ? COLLATE BINARY AND t.dropped_snapshot IS NULL
-  AND t.table_uuid = ? COLLATE BINARY`,
-			Args:            []any{target.catalog, req.BaseSnapshotID, target.namespace, predField, predValue, target.table, req.TableUUID},
+  AND t.table_uuid = ? COLLATE BINARY
+  AND NOT EXISTS (SELECT 1 FROM files AS f WHERE f.table_id = t.id AND (f.begin_snapshot > ? OR (f.end_snapshot IS NOT NULL AND f.end_snapshot > ?)))
+  AND NOT EXISTS (SELECT 1 FROM dvs AS d WHERE d.table_id = t.id AND (d.begin_snapshot > ? OR (d.end_snapshot IS NOT NULL AND d.end_snapshot > ?)))
+  AND NOT EXISTS (SELECT 1 FROM columns AS c WHERE c.table_id = t.id AND (c.begin_snapshot > ? OR (c.end_snapshot IS NOT NULL AND c.end_snapshot > ?)))
+  AND NOT EXISTS (SELECT 1 FROM table_versions AS tv WHERE tv.table_id = t.id AND (tv.begin_snapshot > ? OR (tv.end_snapshot IS NOT NULL AND tv.end_snapshot > ?)))`,
+			Args: []any{
+				target.catalog,
+				req.BaseSnapshotID, req.BaseSnapshotID,
+				target.namespace, predField, predValue,
+				target.table, req.TableUUID,
+				req.BaseSnapshotID, req.BaseSnapshotID,
+				req.BaseSnapshotID, req.BaseSnapshotID,
+				req.BaseSnapshotID, req.BaseSnapshotID,
+				req.BaseSnapshotID, req.BaseSnapshotID,
+			},
 			ExpectScalarInt: int64Ptr(1),
 		},
 	}

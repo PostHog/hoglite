@@ -293,3 +293,149 @@ func TestScopedMutationsLifecycleAndSecurity(t *testing.T) {
 	// Dropped namespace is now 404.
 	scopedNamespaceWantCode(t, scopedNamespaceCall(t, h, base+"/namespaces/scratch", team42WriteTok), http.StatusNotFound, "not_found")
 }
+
+func TestScopedCommitTableLevelFence(t *testing.T) {
+	f, s3fx, spy, _, tenant, srv := newScopedTableScanHarness(t)
+	spy.denyManifest.Store(true)
+	scopedNamespaceWrite(t, tenant, "upgrade-to-full-catalog-ddl",
+		Statement{SQL: `ALTER TABLE meta ADD COLUMN next_namespace_id INTEGER NOT NULL DEFAULT 100`},
+		Statement{SQL: `ALTER TABLE meta ADD COLUMN next_table_id INTEGER NOT NULL DEFAULT 300`},
+		Statement{SQL: `ALTER TABLE meta ADD COLUMN next_file_id INTEGER NOT NULL DEFAULT 500`},
+		Statement{SQL: `ALTER TABLE meta ADD COLUMN schema_version INTEGER NOT NULL DEFAULT 1`},
+		Statement{SQL: `ALTER TABLE tables ADD COLUMN comment TEXT`},
+		Statement{SQL: `ALTER TABLE tables ADD COLUMN next_row_id INTEGER NOT NULL DEFAULT 0`},
+		Statement{SQL: `ALTER TABLE tables ADD COLUMN next_field_id INTEGER NOT NULL DEFAULT 1`},
+		Statement{SQL: `ALTER TABLE tables ADD COLUMN schema_version INTEGER NOT NULL DEFAULT 0`},
+		Statement{SQL: `ALTER TABLE table_versions ADD COLUMN comment TEXT`},
+		Statement{SQL: `CREATE TABLE IF NOT EXISTS table_totals(table_id INTEGER PRIMARY KEY, record_count INTEGER NOT NULL DEFAULT 0, file_count INTEGER NOT NULL DEFAULT 0, file_size_bytes INTEGER NOT NULL DEFAULT 0)`},
+		Statement{SQL: `CREATE TABLE IF NOT EXISTS snapshots(id INTEGER PRIMARY KEY, ts TEXT NOT NULL, author TEXT, message TEXT, schema_version INTEGER NOT NULL)`},
+		Statement{SQL: `CREATE TABLE IF NOT EXISTS changes(snapshot_id INTEGER NOT NULL, kind TEXT NOT NULL, object_id INTEGER NOT NULL)`},
+		Statement{SQL: `CREATE TABLE IF NOT EXISTS views(id INTEGER PRIMARY KEY, namespace_id INTEGER NOT NULL, namespace TEXT NOT NULL, name TEXT NOT NULL, view_uuid TEXT NOT NULL UNIQUE, dialect TEXT NOT NULL, sql_text TEXT NOT NULL, created_snapshot INTEGER NOT NULL, dropped_snapshot INTEGER)`},
+		Statement{SQL: `CREATE TABLE IF NOT EXISTS removals(id INTEGER PRIMARY KEY, path TEXT NOT NULL, file_kind TEXT NOT NULL, reason TEXT NOT NULL, queued_snapshot INTEGER NOT NULL, queued_at TEXT NOT NULL, drained_at TEXT)`},
+		Statement{SQL: `CREATE TABLE IF NOT EXISTS table_layouts(table_id INTEGER NOT NULL, begin_snapshot INTEGER NOT NULL, end_snapshot INTEGER, object_prefix_field_id INTEGER NOT NULL, PRIMARY KEY(table_id, begin_snapshot))`},
+		Statement{SQL: `CREATE TABLE IF NOT EXISTS partition_specs(table_id INTEGER NOT NULL, spec_id INTEGER NOT NULL, fields_json TEXT NOT NULL, begin_snapshot INTEGER NOT NULL, end_snapshot INTEGER, PRIMARY KEY(table_id, spec_id))`},
+	)
+	team42WriteTok := scopedTableScanToken(t, f, s3fx, "42",
+		"ASIAEXAMPLEALICE0021", "secret-w42", "session-w42", func(c map[string]any) {
+			c["cat"] = map[string]any{readSessionTestCatalog: []string{"read", "write"}}
+			c["prd"] = map[string]any{"team_id": map[string]string{"42": "write"}}
+			grants := c["grants"].([]map[string]any)
+			grants[0]["prefix"] = "tables/team_id=42/"
+			grants[0]["actions"] = readSessionWriteActions
+		})
+	base := "/v1/t/" + readSessionTestTenant + "/metadata/v1/catalogs/" + readSessionTestCatalog
+	h := srv.Handler()
+
+	// Create namespace scratch and two tables: alpha and beta.
+	w := scopedMutationCall(t, h, http.MethodPost, base+"/namespaces", team42WriteTok, createNamespaceReq{Name: "scratch"})
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create namespace status=%d body=%s", w.Code, w.Body.String())
+	}
+	w = scopedMutationCall(t, h, http.MethodPost, base+"/namespaces/scratch/tables", team42WriteTok, createTableReq{
+		Name:    "alpha",
+		Columns: []createTableColumnReq{{Name: "id", Type: "long"}},
+	})
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create alpha status=%d body=%s", w.Code, w.Body.String())
+	}
+	var alphaDTO scopedTableDTO
+	if err := json.Unmarshal(w.Body.Bytes(), &alphaDTO); err != nil {
+		t.Fatal(err)
+	}
+	alphaBase := alphaDTO.ReadSnapshotID
+
+	// Creating beta advances the catalog-wide head snapshot, but does NOT touch alpha.
+	w = scopedMutationCall(t, h, http.MethodPost, base+"/namespaces/scratch/tables", team42WriteTok, createTableReq{
+		Name:    "beta",
+		Columns: []createTableColumnReq{{Name: "id", Type: "long"}},
+	})
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create beta status=%d body=%s", w.Code, w.Body.String())
+	}
+	var betaDTO scopedTableDTO
+	if err := json.Unmarshal(w.Body.Bytes(), &betaDTO); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Committing to alpha with alphaBase (older than catalog head) must succeed because alpha itself did not change.
+	w = scopedMutationCall(t, h, http.MethodPost, base+"/namespaces/scratch/tables/alpha/commit", team42WriteTok, commitTableReq{
+		TableUUID:      alphaDTO.TableUUID,
+		BaseSnapshotID: alphaBase,
+		AddFiles: []commitAddFileReq{{
+			Path: "s3://example-customer/tables/team_id=42/alpha-1.parquet", RecordCount: 5, FileSizeBytes: 512,
+		}},
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("commit to alpha after unrelated beta DDL failed: status=%d body=%s", w.Code, w.Body.String())
+	}
+	var alphaCommit1 commitTableResp
+	if err := json.Unmarshal(w.Body.Bytes(), &alphaCommit1); err != nil {
+		t.Fatal(err)
+	}
+
+	// 2. Committing to beta advances catalog head again, but alpha is still untouched since alphaCommit1.
+	w = scopedMutationCall(t, h, http.MethodPost, base+"/namespaces/scratch/tables/beta/commit", team42WriteTok, commitTableReq{
+		TableUUID:      betaDTO.TableUUID,
+		BaseSnapshotID: betaDTO.ReadSnapshotID,
+		AddFiles: []commitAddFileReq{{
+			Path: "s3://example-customer/tables/team_id=42/beta-1.parquet", RecordCount: 2, FileSizeBytes: 256,
+		}},
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("commit to beta status=%d body=%s", w.Code, w.Body.String())
+	}
+
+	// 3. Look up alpha's file id, then commit a DV to alpha using alphaCommit1.SnapshotID (older than catalog head).
+	w = scopedNamespaceCall(t, h, fmt.Sprintf("%s/namespaces/scratch/tables/alpha/scan?snapshot=%d&table_uuid=%s", base, alphaCommit1.SnapshotID, alphaDTO.TableUUID), team42WriteTok)
+	if w.Code != http.StatusOK {
+		t.Fatalf("scan alpha status=%d body=%s", w.Code, w.Body.String())
+	}
+	var scanDTO scopedScanDTO
+	if err := json.Unmarshal(w.Body.Bytes(), &scanDTO); err != nil {
+		t.Fatal(err)
+	}
+	if len(scanDTO.Files) != 1 {
+		t.Fatalf("expected 1 file in alpha, got %d", len(scanDTO.Files))
+	}
+	dataFileID := scanDTO.Files[0].DataFile.DataFileID
+
+	w = scopedMutationCall(t, h, http.MethodPost, base+"/namespaces/scratch/tables/alpha/commit", team42WriteTok, commitTableReq{
+		TableUUID:      alphaDTO.TableUUID,
+		BaseSnapshotID: alphaCommit1.SnapshotID,
+		AddDeleteFiles: []commitAddDeleteFileReq{{
+			DataFileID: dataFileID, Path: "s3://example-customer/tables/team_id=42/alpha-dv-1.puffin", DeleteCount: 1, FileSizeBytes: 64,
+		}},
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("DV commit to alpha after unrelated beta commit failed: status=%d body=%s", w.Code, w.Body.String())
+	}
+	var alphaCommit2 commitTableResp
+	if err := json.Unmarshal(w.Body.Bytes(), &alphaCommit2); err != nil {
+		t.Fatal(err)
+	}
+
+	// 4. Stale commit to alpha using alphaCommit1.SnapshotID AFTER alphaCommit2 touched alpha MUST fail with 409.
+	scopedNamespaceWantCode(t, scopedMutationCall(t, h, http.MethodPost, base+"/namespaces/scratch/tables/alpha/commit", team42WriteTok, commitTableReq{
+		TableUUID:      alphaDTO.TableUUID,
+		BaseSnapshotID: alphaCommit1.SnapshotID,
+		AddFiles: []commitAddFileReq{{
+			Path: "s3://example-customer/tables/team_id=42/alpha-stale.parquet", RecordCount: 1, FileSizeBytes: 128,
+		}},
+	}), http.StatusConflict, "conflict")
+
+	// 5. Future base_snapshot_id (> catalog head) and pre-creation base_snapshot_id (< created_snapshot) MUST fail with 409.
+	scopedNamespaceWantCode(t, scopedMutationCall(t, h, http.MethodPost, base+"/namespaces/scratch/tables/alpha/commit", team42WriteTok, commitTableReq{
+		TableUUID:      alphaDTO.TableUUID,
+		BaseSnapshotID: alphaCommit2.SnapshotID + 99,
+		AddFiles: []commitAddFileReq{{
+			Path: "s3://example-customer/tables/team_id=42/alpha-future.parquet", RecordCount: 1, FileSizeBytes: 128,
+		}},
+	}), http.StatusConflict, "conflict")
+	scopedNamespaceWantCode(t, scopedMutationCall(t, h, http.MethodPost, base+"/namespaces/scratch/tables/alpha/commit", team42WriteTok, commitTableReq{
+		TableUUID:      alphaDTO.TableUUID,
+		BaseSnapshotID: alphaBase - 1,
+		AddFiles: []commitAddFileReq{{
+			Path: "s3://example-customer/tables/team_id=42/alpha-precreate.parquet", RecordCount: 1, FileSizeBytes: 128,
+		}},
+	}), http.StatusConflict, "conflict")
+}
