@@ -719,8 +719,13 @@ func (s *Server) commitScopedTable(w http.ResponseWriter, r *http.Request, targe
 	// the verified primary-catalog write grant prefix before opening any SQLite transaction,
 	// and guard against int64 overflow in counts and byte totals.
 	var totalAddedRecords, totalAddedBytes int64
+	seenFilePaths := make(map[string]struct{}, len(req.AddFiles))
 	for _, f := range req.AddFiles {
 		if f.RecordCount < 0 || f.FileSizeBytes < 0 || (f.FooterSize != nil && *f.FooterSize < 0) {
+			scopedNamespaceRefusal(w, http.StatusBadRequest)
+			return
+		}
+		if _, dup := seenFilePaths[f.Path]; dup {
 			scopedNamespaceRefusal(w, http.StatusBadRequest)
 			return
 		}
@@ -732,12 +737,18 @@ func (s *Server) commitScopedTable(w http.ResponseWriter, r *http.Request, targe
 			scopedNamespaceRefusal(w, http.StatusBadRequest)
 			return
 		}
+		seenFilePaths[f.Path] = struct{}{}
 		totalAddedRecords += f.RecordCount
 		totalAddedBytes += f.FileSizeBytes
 	}
 	seenDeleteTargets := make(map[int64]bool, len(req.AddDeleteFiles))
+	seenDVPaths := make(map[string]struct{}, len(req.AddDeleteFiles))
 	for _, dv := range req.AddDeleteFiles {
 		if dv.DataFileID <= 0 || dv.DeleteCount <= 0 || dv.FileSizeBytes < 0 || seenDeleteTargets[dv.DataFileID] {
+			scopedNamespaceRefusal(w, http.StatusBadRequest)
+			return
+		}
+		if _, dup := seenDVPaths[dv.Path]; dup {
 			scopedNamespaceRefusal(w, http.StatusBadRequest)
 			return
 		}
@@ -746,6 +757,7 @@ func (s *Server) commitScopedTable(w http.ResponseWriter, r *http.Request, targe
 			return
 		}
 		seenDeleteTargets[dv.DataFileID] = true
+		seenDVPaths[dv.Path] = struct{}{}
 	}
 	if status := s.scopedNamespaceOwned(r.Context(), target.tenant, t, getManifest); status != 0 {
 		scopedNamespaceRefusal(w, status)
@@ -754,6 +766,50 @@ func (s *Server) commitScopedTable(w http.ResponseWriter, r *http.Request, targe
 
 	nowTS := time.Now().UTC().Format(time.RFC3339Nano)
 	fileIDIncrement := int64(len(req.AddFiles) + len(req.AddDeleteFiles))
+	// 1: verify immutable table_uuid, retention floor, and table-level base_snapshot_id fence
+	// (409 Conflict if expired/stale/recreated/concurrently modified).
+	// Fast-path: when base_snapshot_id == m.next_snapshot - 1 (head), skip all history probes.
+	// Older bases use separate indexable range probes (no OR across begin_snapshot/end_snapshot):
+	// - Append-only commits (no add_delete_files) fence only on DDL (columns, table_versions),
+	//   so concurrent INSERTs into a busy table succeed without spurious 409s.
+	// - Delete commits (add_delete_files non-empty) also fence on files and dvs for that table.
+	fenceSQL := `SELECT COUNT(*) FROM meta AS m
+JOIN namespaces AS n ON 1 = 1
+JOIN tables AS t ON t.namespace_id = n.id
+WHERE m.id = 1 AND m.name = ? COLLATE BINARY AND m.dropping = 0
+  AND ? >= m.earliest_snapshot_id AND ? >= t.created_snapshot AND ? <= m.next_snapshot - 1
+  AND n.name = ? COLLATE BINARY AND n.dropped_snapshot IS NULL
+  AND n.contained_field = ? COLLATE BINARY AND typeof(n.contained_value) = 'integer' AND n.contained_value = ?
+  AND t.name = ? COLLATE BINARY AND t.dropped_snapshot IS NULL
+  AND t.table_uuid = ? COLLATE BINARY
+  AND (? = m.next_snapshot - 1 OR (
+        NOT EXISTS (SELECT 1 FROM columns AS c WHERE c.table_id = t.id AND c.begin_snapshot > ?)
+    AND NOT EXISTS (SELECT 1 FROM columns AS c WHERE c.table_id = t.id AND c.end_snapshot IS NOT NULL AND c.end_snapshot > ?)
+    AND NOT EXISTS (SELECT 1 FROM table_versions AS tv WHERE tv.table_id = t.id AND tv.begin_snapshot > ?)
+    AND NOT EXISTS (SELECT 1 FROM table_versions AS tv WHERE tv.table_id = t.id AND tv.end_snapshot IS NOT NULL AND tv.end_snapshot > ?)`
+	fenceArgs := []any{
+		target.catalog,
+		req.BaseSnapshotID, req.BaseSnapshotID, req.BaseSnapshotID,
+		target.namespace, predField, predValue,
+		target.table, req.TableUUID,
+		req.BaseSnapshotID,
+		req.BaseSnapshotID, req.BaseSnapshotID,
+		req.BaseSnapshotID, req.BaseSnapshotID,
+	}
+	if len(req.AddDeleteFiles) > 0 {
+		fenceSQL += `
+    AND NOT EXISTS (SELECT 1 FROM files AS f WHERE f.table_id = t.id AND f.begin_snapshot > ?)
+    AND NOT EXISTS (SELECT 1 FROM files AS f WHERE f.end_snapshot IS NOT NULL AND f.end_snapshot > ? AND f.table_id = t.id)
+    AND NOT EXISTS (SELECT 1 FROM dvs AS d WHERE d.table_id = t.id AND d.begin_snapshot > ?)
+    AND NOT EXISTS (SELECT 1 FROM dvs AS d WHERE d.end_snapshot IS NOT NULL AND d.end_snapshot > ? AND d.table_id = t.id)`
+		fenceArgs = append(fenceArgs,
+			req.BaseSnapshotID, req.BaseSnapshotID,
+			req.BaseSnapshotID, req.BaseSnapshotID,
+		)
+	}
+	fenceSQL += `
+  ))`
+
 	stmts := []Statement{
 		// 0: verify live catalog, team-owned namespace, and live table exist (404 if absent)
 		{
@@ -767,18 +823,10 @@ WHERE m.id = 1 AND m.name = ? COLLATE BINARY AND m.dropping = 0
 			Args:            []any{target.catalog, target.namespace, predField, predValue, target.table},
 			ExpectScalarInt: int64Ptr(1),
 		},
-		// 1: verify immutable table_uuid and base_snapshot_id match current head (409 Conflict if stale/recreated)
+		// 1: table-level base_snapshot_id & retention fence (409 Conflict)
 		{
-			SQL: `SELECT COUNT(*) FROM meta AS m
-JOIN namespaces AS n ON 1 = 1
-JOIN tables AS t ON t.namespace_id = n.id
-WHERE m.id = 1 AND m.name = ? COLLATE BINARY AND m.dropping = 0
-  AND m.next_snapshot - 1 = ?
-  AND n.name = ? COLLATE BINARY AND n.dropped_snapshot IS NULL
-  AND n.contained_field = ? COLLATE BINARY AND typeof(n.contained_value) = 'integer' AND n.contained_value = ?
-  AND t.name = ? COLLATE BINARY AND t.dropped_snapshot IS NULL
-  AND t.table_uuid = ? COLLATE BINARY`,
-			Args:            []any{target.catalog, req.BaseSnapshotID, target.namespace, predField, predValue, target.table, req.TableUUID},
+			SQL:             fenceSQL,
+			Args:            fenceArgs,
 			ExpectScalarInt: int64Ptr(1),
 		},
 	}
@@ -800,20 +848,36 @@ WHERE t.table_uuid = ? COLLATE BINARY AND t.dropped_snapshot IS NULL AND ps.end_
 			ExpectScalarInt: int64Ptr(0),
 		})
 	}
-	// Fence every added data file and deletion vector against undrained cleanup removals.
+	// Fence every added data file and deletion vector against undrained cleanup removals
+	// and duplicate path registration (prevents append replay from double-registering a file).
+	// Catalog DDL maintains covering indexes files_path(path) and dvs_path(path) (BINARY).
 	for _, f := range req.AddFiles {
-		stmts = append(stmts, Statement{
-			SQL:             `SELECT COUNT(*) FROM removals WHERE path = ? COLLATE BINARY AND drained_at IS NULL`,
-			Args:            []any{f.Path},
-			ExpectScalarInt: int64Ptr(0),
-		})
+		stmts = append(stmts,
+			Statement{
+				SQL:             `SELECT COUNT(*) FROM removals WHERE path = ? COLLATE BINARY AND drained_at IS NULL`,
+				Args:            []any{f.Path},
+				ExpectScalarInt: int64Ptr(0),
+			},
+			Statement{
+				SQL:             `SELECT COUNT(*) FROM files WHERE path = ? COLLATE BINARY`,
+				Args:            []any{f.Path},
+				ExpectScalarInt: int64Ptr(0),
+			},
+		)
 	}
 	for _, dv := range req.AddDeleteFiles {
-		stmts = append(stmts, Statement{
-			SQL:             `SELECT COUNT(*) FROM removals WHERE path = ? COLLATE BINARY AND drained_at IS NULL`,
-			Args:            []any{dv.Path},
-			ExpectScalarInt: int64Ptr(0),
-		})
+		stmts = append(stmts,
+			Statement{
+				SQL:             `SELECT COUNT(*) FROM removals WHERE path = ? COLLATE BINARY AND drained_at IS NULL`,
+				Args:            []any{dv.Path},
+				ExpectScalarInt: int64Ptr(0),
+			},
+			Statement{
+				SQL:             `SELECT COUNT(*) FROM dvs WHERE path = ? COLLATE BINARY`,
+				Args:            []any{dv.Path},
+				ExpectScalarInt: int64Ptr(0),
+			},
+		)
 	}
 	if len(req.AddFiles) > 0 {
 		stmts = append(stmts,
