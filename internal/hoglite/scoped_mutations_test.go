@@ -557,3 +557,107 @@ func TestScopedCommitTableLevelFence(t *testing.T) {
 		}},
 	}), http.StatusConflict, "conflict")
 }
+
+func TestScopedNamespaceIsolationAndProtection(t *testing.T) {
+	f, s3fx, spy, _, tenant, srv := newScopedTableScanHarness(t)
+	spy.denyManifest.Store(true)
+	upgradeScopedMutationCatalog(t, tenant, true)
+
+	h := srv.Handler()
+	base := "/v1/t/" + readSessionTestTenant + "/metadata/v1/catalogs/" + readSessionTestCatalog
+	team42WriteTok := scopedTableScanToken(t, f, s3fx, "42",
+		"ASIAEXAMPLEALICE0011", "secret-w42", "session-w42", func(c map[string]any) {
+			c["cat"] = map[string]any{readSessionTestCatalog: []string{"read", "write"}}
+			c["prd"] = map[string]any{"team_id": map[string]string{"42": "write"}}
+			grants := c["grants"].([]map[string]any)
+			grants[0]["prefix"] = "tables/team_id=42/"
+			grants[0]["actions"] = readSessionWriteActions
+		})
+	team43WriteTok := scopedTableScanToken(t, f, s3fx, "43",
+		"ASIAEXAMPLEBOB000012", "secret-w43", "session-w43", func(c map[string]any) {
+			c["cat"] = map[string]any{readSessionTestCatalog: []string{"read", "write"}}
+			c["prd"] = map[string]any{"team_id": map[string]string{"43": "write"}}
+			grants := c["grants"].([]map[string]any)
+			grants[0]["prefix"] = "tables/team_id=43/"
+			grants[0]["actions"] = readSessionWriteActions
+		})
+
+	// 1. Default protected schema lifecycle blocks local_team_<digits> create/drop
+	// even when no custom HL_SCOPED_NAMESPACE_PROTECTED_SCHEMA_PATTERNS are configured.
+	for _, blocked := range []string{"local_team_42", "local_team_43", "local_team_007"} {
+		scopedNamespaceWantCode(t, scopedMutationCall(t, h, http.MethodPost, base+"/namespaces", team42WriteTok, createNamespaceReq{Name: blocked}), http.StatusForbidden, "forbidden")
+		scopedNamespaceWantCode(t, scopedMutationCall(t, h, http.MethodDelete, base+"/namespaces/"+blocked, team42WriteTok, nil), http.StatusForbidden, "forbidden")
+	}
+
+	// Service-managed local_team_42 still allows table DDL/DML for owning team 42,
+	// while remaining invisible (404) to team 43 and undroppable (403) by team 42.
+	scopedNamespaceWrite(t, tenant, "seed-managed-local-team-42",
+		Statement{SQL: `DROP INDEX IF EXISTS namespaces_live_containment`},
+		Statement{SQL: `CREATE INDEX IF NOT EXISTS namespaces_live_containment ON namespaces(contained_field, contained_value) WHERE dropped_snapshot IS NULL AND contained_field IS NOT NULL`},
+		Statement{SQL: `INSERT INTO namespaces(id, name, created_snapshot, dropped_snapshot, contained_field, contained_value) VALUES(50, 'local_team_42', 1, NULL, 'team_id', 42)`},
+	)
+	scopedNamespaceWantCode(t, scopedMutationCall(t, h, http.MethodDelete, base+"/namespaces/local_team_42", team42WriteTok, nil), http.StatusForbidden, "forbidden")
+	w := scopedMutationCall(t, h, http.MethodPost, base+"/namespaces/local_team_42/tables", team42WriteTok, createTableReq{
+		Name: "events_local", Columns: []createTableColumnReq{{Name: "id", Type: "long"}},
+	})
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create table in managed local_team_42 status=%d body=%s", w.Code, w.Body.String())
+	}
+	var managedTbl scopedTableDTO
+	if err := json.Unmarshal(w.Body.Bytes(), &managedTbl); err != nil {
+		t.Fatal(err)
+	}
+	w = scopedMutationCall(t, h, http.MethodPost, base+"/namespaces/local_team_42/tables/events_local/commit", team42WriteTok, commitTableReq{
+		TableUUID:      managedTbl.TableUUID,
+		BaseSnapshotID: managedTbl.ReadSnapshotID,
+		AddFiles: []commitAddFileReq{{
+			Path: "s3://example-customer/tables/team_id=42/local-1.parquet", RecordCount: 2, FileSizeBytes: 128,
+		}},
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("commit to managed local_team_42 table status=%d body=%s", w.Code, w.Body.String())
+	}
+	scopedNamespaceWantCode(t, scopedMutationCall(t, h, http.MethodPost, base+"/namespaces/local_team_42/tables", team43WriteTok, createTableReq{
+		Name: "evil", Columns: []createTableColumnReq{{Name: "id", Type: "long"}},
+	}), http.StatusNotFound, "not_found")
+
+	// 2. Cross-team namespace creation refuses with 403 Forbidden (matching protected
+	// schema refusal) rather than 409 Conflict, while same-team duplicate keeps 409 Conflict.
+	w = scopedMutationCall(t, h, http.MethodPost, base+"/namespaces", team42WriteTok, createNamespaceReq{Name: "shared_name"})
+	if w.Code != http.StatusCreated {
+		t.Fatalf("team 42 create shared_name status=%d body=%s", w.Code, w.Body.String())
+	}
+	scopedNamespaceWantCode(t, scopedMutationCall(t, h, http.MethodPost, base+"/namespaces", team42WriteTok, createNamespaceReq{Name: "shared_name"}), http.StatusConflict, "conflict")
+	scopedNamespaceWantCode(t, scopedMutationCall(t, h, http.MethodPost, base+"/namespaces", team43WriteTok, createNamespaceReq{Name: "shared_name"}), http.StatusForbidden, "forbidden")
+	// Uncontained namespace collision also returns 403 Forbidden rather than 409 Conflict.
+	scopedNamespaceWantCode(t, scopedMutationCall(t, h, http.MethodPost, base+"/namespaces", team43WriteTok, createNamespaceReq{Name: "uncontained"}), http.StatusForbidden, "forbidden")
+	// Team 42's namespace remains readable to team 42 and hidden (404) from team 43.
+	if w := scopedNamespaceCall(t, h, base+"/namespaces/shared_name", team42WriteTok); w.Code != http.StatusOK {
+		t.Fatalf("team 42 read shared_name status=%d body=%s", w.Code, w.Body.String())
+	}
+	scopedNamespaceWantCode(t, scopedNamespaceCall(t, h, base+"/namespaces/shared_name", team43WriteTok), http.StatusNotFound, "not_found")
+
+	// 3. Per-team live namespace cap prevents one team from squatting unlimited names,
+	// without affecting other teams or counting dropped namespaces.
+	if got := srv.auth.readSession.maxLiveNamespacesPerTeam(); got != scopedMutationDefaultMaxNamespacesPerTeam {
+		t.Fatalf("unexpected default max namespaces per team: %d", got)
+	}
+	srv.auth.readSession.maxNamespacesPerTeam = 3
+	// Team 43 starts with 1 seeded live namespace ("other").
+	if w := scopedMutationCall(t, h, http.MethodPost, base+"/namespaces", team43WriteTok, createNamespaceReq{Name: "ns_a"}); w.Code != http.StatusCreated {
+		t.Fatalf("team 43 create ns_a (2/3) status=%d body=%s", w.Code, w.Body.String())
+	}
+	if w := scopedMutationCall(t, h, http.MethodPost, base+"/namespaces", team43WriteTok, createNamespaceReq{Name: "ns_b"}); w.Code != http.StatusCreated {
+		t.Fatalf("team 43 create ns_b (3/3) status=%d body=%s", w.Code, w.Body.String())
+	}
+	// 4th live namespace for team 43 is refused (403), while own duplicate still reports 409.
+	scopedNamespaceWantCode(t, scopedMutationCall(t, h, http.MethodPost, base+"/namespaces", team43WriteTok, createNamespaceReq{Name: "ns_c"}), http.StatusForbidden, "forbidden")
+	scopedNamespaceWantCode(t, scopedMutationCall(t, h, http.MethodPost, base+"/namespaces", team43WriteTok, createNamespaceReq{Name: "ns_b"}), http.StatusConflict, "conflict")
+	// Dropping ns_b frees a slot so ns_c succeeds.
+	if w := scopedMutationCall(t, h, http.MethodDelete, base+"/namespaces/ns_b", team43WriteTok, nil); w.Code != http.StatusOK {
+		t.Fatalf("team 43 drop ns_b status=%d body=%s", w.Code, w.Body.String())
+	}
+	if w := scopedMutationCall(t, h, http.MethodPost, base+"/namespaces", team43WriteTok, createNamespaceReq{Name: "ns_c"}); w.Code != http.StatusCreated {
+		t.Fatalf("team 43 create ns_c after drop status=%d body=%s", w.Code, w.Body.String())
+	}
+}

@@ -17,10 +17,11 @@ import (
 )
 
 const (
-	scopedMutationMaxBodyBytes = 256 << 10
-	scopedMutationMaxColumns   = 1024
-	scopedMutationMaxFiles     = 1000
-	scopedMutationClient       = "scoped-metadata"
+	scopedMutationMaxBodyBytes                = 256 << 10
+	scopedMutationMaxColumns                  = 1024
+	scopedMutationMaxFiles                    = 1000
+	scopedMutationDefaultMaxNamespacesPerTeam = 100
+	scopedMutationClient                      = "scoped-metadata"
 )
 
 var (
@@ -178,6 +179,7 @@ func (s *Server) createScopedNamespace(w http.ResponseWriter, r *http.Request, t
 		}
 		return
 	}
+	maxNamespaces := s.auth.readSession.maxLiveNamespacesPerTeam()
 	nowTS := time.Now().UTC().Format(time.RFC3339Nano)
 	results, _, err := t.SubmitTxCtx(r.Context(), TxRequest{
 		Client: scopedMutationClient,
@@ -189,33 +191,52 @@ func (s *Server) createScopedNamespace(w http.ResponseWriter, r *http.Request, t
 				Args:            []any{target.catalog},
 				ExpectScalarInt: int64Ptr(1),
 			},
-			// 1: namespace does not already exist
+			// 1: caller's own team does not already own a live namespace with this name (409 Conflict)
+			{
+				SQL: `SELECT COUNT(*) FROM namespaces
+WHERE name = ? COLLATE BINARY AND dropped_snapshot IS NULL
+  AND contained_field = ? COLLATE BINARY AND typeof(contained_value) = 'integer' AND contained_value = ?`,
+				Args:            []any{req.Name, predField, predValue},
+				ExpectScalarInt: int64Ptr(0),
+			},
+			// 2: no other team or uncontained live namespace owns this name (403 Forbidden, matching protected schema refusal)
 			{
 				SQL:             `SELECT COUNT(*) FROM namespaces WHERE name = ? COLLATE BINARY AND dropped_snapshot IS NULL`,
 				Args:            []any{req.Name},
 				ExpectScalarInt: int64Ptr(0),
 			},
-			// 2: allocate snapshot, schema_version, namespace_id
+			// 3: caller's team has not reached the per-team live namespace cap (403 Forbidden)
+			{
+				SQL: `SELECT CASE WHEN COUNT(*) < ? THEN 1 ELSE 0 END FROM namespaces
+WHERE dropped_snapshot IS NULL
+  AND contained_field IS NOT NULL
+  AND contained_field = ? COLLATE BINARY
+  AND typeof(contained_value) = 'integer'
+  AND contained_value = ?`,
+				Args:            []any{int64(maxNamespaces), predField, predValue},
+				ExpectScalarInt: int64Ptr(1),
+			},
+			// 4: allocate snapshot, schema_version, namespace_id
 			{
 				SQL:            `UPDATE meta SET next_snapshot = next_snapshot + 1, schema_version = schema_version + 1, next_namespace_id = next_namespace_id + 1 WHERE id = 1 AND name = ? COLLATE BINARY AND dropping = 0`,
 				Args:           []any{target.catalog},
 				ExpectAffected: int64Ptr(1),
 			},
-			// 3: snapshot row
+			// 5: snapshot row
 			{
 				SQL:  `INSERT INTO snapshots(id, ts, author, message, schema_version) SELECT next_snapshot - 1, ?, NULL, 'create namespace', schema_version FROM meta WHERE id = 1`,
 				Args: []any{nowTS},
 			},
-			// 4: namespace row stamped with team containment
+			// 6: namespace row stamped with team containment
 			{
 				SQL:  `INSERT INTO namespaces(id, name, created_snapshot, contained_field, contained_value) SELECT next_namespace_id - 1, ?, next_snapshot - 1, ?, ? FROM meta WHERE id = 1`,
 				Args: []any{req.Name, predField, predValue},
 			},
-			// 5: change row
+			// 7: change row
 			{
 				SQL: `INSERT INTO changes(snapshot_id, kind, object_id) SELECT next_snapshot - 1, 'namespace_created', next_namespace_id - 1 FROM meta WHERE id = 1`,
 			},
-			// 6: readback
+			// 8: readback
 			{
 				SQL: `SELECT next_namespace_id - 1 FROM meta WHERE id = 1`,
 			},
@@ -224,11 +245,14 @@ func (s *Server) createScopedNamespace(w http.ResponseWriter, r *http.Request, t
 	if err != nil {
 		var expErr *ExpectFailedError
 		if errors.As(err, &expErr) {
-			if expErr.Index == 1 {
+			switch expErr.Index {
+			case 1:
 				scopedNamespaceRefusal(w, http.StatusConflict)
-				return
+			case 2, 3:
+				scopedNamespaceRefusal(w, http.StatusForbidden)
+			default:
+				scopedNamespaceRefusal(w, http.StatusNotFound)
 			}
-			scopedNamespaceRefusal(w, http.StatusNotFound)
 			return
 		}
 		if isMissingScopedSchemaError(err) {
@@ -238,11 +262,11 @@ func (s *Server) createScopedNamespace(w http.ResponseWriter, r *http.Request, t
 		}
 		return
 	}
-	if len(results) != 7 || len(results[6].Rows) != 1 || len(results[6].Rows[0]) != 1 {
+	if len(results) != 9 || len(results[8].Rows) != 1 || len(results[8].Rows[0]) != 1 {
 		scopedNamespaceRefusal(w, http.StatusServiceUnavailable)
 		return
 	}
-	nsID, ok := results[6].Rows[0][0].(int64)
+	nsID, ok := results[8].Rows[0][0].(int64)
 	if !ok {
 		scopedNamespaceRefusal(w, http.StatusServiceUnavailable)
 		return

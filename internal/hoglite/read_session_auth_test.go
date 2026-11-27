@@ -264,6 +264,7 @@ func TestReadSessionConfigValidation(t *testing.T) {
 		"double slash prefix":     func(c *AuthConfig) { c.ReadSession.Prefix = "root//sub" },
 		"empty region":            func(c *AuthConfig) { c.ReadSession.Region = "" },
 		"uppercase region":        func(c *AuthConfig) { c.ReadSession.Region = "US-EAST-1" },
+		"negative max namespaces": func(c *AuthConfig) { c.ReadSession.MaxNamespacesPerTeam = -1 },
 	}
 	for name, mutate := range badCases {
 		t.Run(name, func(t *testing.T) {
