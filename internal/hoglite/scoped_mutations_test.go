@@ -65,6 +65,8 @@ func upgradeScopedMutationCatalog(t *testing.T, tenant *Tenant, withLegacyContai
 		Statement{SQL: `CREATE TABLE IF NOT EXISTS removals(id INTEGER PRIMARY KEY, path TEXT NOT NULL, file_kind TEXT NOT NULL, reason TEXT NOT NULL, queued_snapshot INTEGER NOT NULL, queued_at TEXT NOT NULL, drained_at TEXT)`},
 		Statement{SQL: `CREATE TABLE IF NOT EXISTS table_layouts(table_id INTEGER NOT NULL, begin_snapshot INTEGER NOT NULL, end_snapshot INTEGER, object_prefix_field_id INTEGER NOT NULL, PRIMARY KEY(table_id, begin_snapshot))`},
 		Statement{SQL: `CREATE TABLE IF NOT EXISTS partition_specs(table_id INTEGER NOT NULL, spec_id INTEGER NOT NULL, fields_json TEXT NOT NULL, begin_snapshot INTEGER NOT NULL, end_snapshot INTEGER, PRIMARY KEY(table_id, spec_id))`},
+		Statement{SQL: `CREATE INDEX IF NOT EXISTS files_path ON files(path)`},
+		Statement{SQL: `CREATE INDEX IF NOT EXISTS dvs_path ON dvs(path)`},
 	)
 	scopedNamespaceWrite(t, tenant, "upgrade-to-full-catalog-ddl", stmts...)
 }
@@ -390,6 +392,16 @@ func TestScopedCommitTableLevelFence(t *testing.T) {
 		}},
 	}), http.StatusConflict, "conflict")
 
+	// 2c. Duplicate paths within a single commit batch MUST fail with 400 before opening a write tx.
+	scopedNamespaceWantCode(t, scopedMutationCall(t, h, http.MethodPost, base+"/namespaces/scratch/tables/alpha/commit", team42WriteTok, commitTableReq{
+		TableUUID:      alphaDTO.TableUUID,
+		BaseSnapshotID: alphaBase,
+		AddFiles: []commitAddFileReq{
+			{Path: "s3://example-customer/tables/team_id=42/alpha-dup-batch.parquet", RecordCount: 1, FileSizeBytes: 128},
+			{Path: "s3://example-customer/tables/team_id=42/alpha-dup-batch.parquet", RecordCount: 1, FileSizeBytes: 128},
+		},
+	}), http.StatusBadRequest, "invalid_request")
+
 	// 3. Committing to beta advances catalog head again, but alpha is still untouched since alphaCommit1.
 	w = scopedMutationCall(t, h, http.MethodPost, base+"/namespaces/scratch/tables/beta/commit", team42WriteTok, commitTableReq{
 		TableUUID:      betaDTO.TableUUID,
@@ -432,6 +444,16 @@ func TestScopedCommitTableLevelFence(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// 4b. Duplicate DV paths within one commit batch MUST fail with 400.
+	scopedNamespaceWantCode(t, scopedMutationCall(t, h, http.MethodPost, base+"/namespaces/scratch/tables/alpha/commit", team42WriteTok, commitTableReq{
+		TableUUID:      alphaDTO.TableUUID,
+		BaseSnapshotID: alphaCommit1.SnapshotID,
+		AddDeleteFiles: []commitAddDeleteFileReq{
+			{DataFileID: dataFileID1, Path: "s3://example-customer/tables/team_id=42/alpha-dv-dup.puffin", DeleteCount: 1, FileSizeBytes: 64},
+			{DataFileID: dataFileID2, Path: "s3://example-customer/tables/team_id=42/alpha-dv-dup.puffin", DeleteCount: 1, FileSizeBytes: 64},
+		},
+	}), http.StatusBadRequest, "invalid_request")
+
 	// 5. Stale DV commit to alpha using alphaCommit1.SnapshotID AFTER alphaCommit2 touched alpha MUST fail with 409.
 	scopedNamespaceWantCode(t, scopedMutationCall(t, h, http.MethodPost, base+"/namespaces/scratch/tables/alpha/commit", team42WriteTok, commitTableReq{
 		TableUUID:      alphaDTO.TableUUID,
@@ -469,6 +491,17 @@ func TestScopedCommitTableLevelFence(t *testing.T) {
 		}},
 	}), http.StatusConflict, "conflict")
 
+	// 7b. Pre-creation base_snapshot_id (< created_snapshot) MUST fail with 409 while still within retention.
+	// Use beta (created at betaDTO.ReadSnapshotID > earliest_snapshot_id=1, no intervening DDL) so this
+	// isolates the created_snapshot check from the retention floor.
+	scopedNamespaceWantCode(t, scopedMutationCall(t, h, http.MethodPost, base+"/namespaces/scratch/tables/beta/commit", team42WriteTok, commitTableReq{
+		TableUUID:      betaDTO.TableUUID,
+		BaseSnapshotID: betaDTO.ReadSnapshotID - 1,
+		AddFiles: []commitAddFileReq{{
+			Path: "s3://example-customer/tables/team_id=42/beta-precreate.parquet", RecordCount: 1, FileSizeBytes: 128,
+		}},
+	}), http.StatusConflict, "conflict")
+
 	// 8. Expired base_snapshot_id (< meta.earliest_snapshot_id) MUST fail with 409.
 	// Use beta (which has no intervening DDL) so this assertion isolates the retention-floor check.
 	scopedNamespaceWrite(t, tenant, "advance-retention-floor",
@@ -482,19 +515,12 @@ func TestScopedCommitTableLevelFence(t *testing.T) {
 		}},
 	}), http.StatusConflict, "conflict")
 
-	// 9. Future base_snapshot_id (> catalog head) and pre-creation base_snapshot_id (< created_snapshot) MUST fail with 409.
+	// 9. Future base_snapshot_id (> catalog head) MUST fail with 409.
 	scopedNamespaceWantCode(t, scopedMutationCall(t, h, http.MethodPost, base+"/namespaces/scratch/tables/alpha/commit", team42WriteTok, commitTableReq{
 		TableUUID:      alphaDTO.TableUUID,
 		BaseSnapshotID: dropColSnap + 99,
 		AddFiles: []commitAddFileReq{{
 			Path: "s3://example-customer/tables/team_id=42/alpha-future.parquet", RecordCount: 1, FileSizeBytes: 128,
-		}},
-	}), http.StatusConflict, "conflict")
-	scopedNamespaceWantCode(t, scopedMutationCall(t, h, http.MethodPost, base+"/namespaces/scratch/tables/alpha/commit", team42WriteTok, commitTableReq{
-		TableUUID:      alphaDTO.TableUUID,
-		BaseSnapshotID: alphaBase - 1,
-		AddFiles: []commitAddFileReq{{
-			Path: "s3://example-customer/tables/team_id=42/alpha-precreate.parquet", RecordCount: 1, FileSizeBytes: 128,
 		}},
 	}), http.StatusConflict, "conflict")
 }

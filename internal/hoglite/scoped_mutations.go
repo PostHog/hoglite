@@ -719,8 +719,13 @@ func (s *Server) commitScopedTable(w http.ResponseWriter, r *http.Request, targe
 	// the verified primary-catalog write grant prefix before opening any SQLite transaction,
 	// and guard against int64 overflow in counts and byte totals.
 	var totalAddedRecords, totalAddedBytes int64
+	seenFilePaths := make(map[string]struct{}, len(req.AddFiles))
 	for _, f := range req.AddFiles {
 		if f.RecordCount < 0 || f.FileSizeBytes < 0 || (f.FooterSize != nil && *f.FooterSize < 0) {
+			scopedNamespaceRefusal(w, http.StatusBadRequest)
+			return
+		}
+		if _, dup := seenFilePaths[f.Path]; dup {
 			scopedNamespaceRefusal(w, http.StatusBadRequest)
 			return
 		}
@@ -732,12 +737,18 @@ func (s *Server) commitScopedTable(w http.ResponseWriter, r *http.Request, targe
 			scopedNamespaceRefusal(w, http.StatusBadRequest)
 			return
 		}
+		seenFilePaths[f.Path] = struct{}{}
 		totalAddedRecords += f.RecordCount
 		totalAddedBytes += f.FileSizeBytes
 	}
 	seenDeleteTargets := make(map[int64]bool, len(req.AddDeleteFiles))
+	seenDVPaths := make(map[string]struct{}, len(req.AddDeleteFiles))
 	for _, dv := range req.AddDeleteFiles {
 		if dv.DataFileID <= 0 || dv.DeleteCount <= 0 || dv.FileSizeBytes < 0 || seenDeleteTargets[dv.DataFileID] {
+			scopedNamespaceRefusal(w, http.StatusBadRequest)
+			return
+		}
+		if _, dup := seenDVPaths[dv.Path]; dup {
 			scopedNamespaceRefusal(w, http.StatusBadRequest)
 			return
 		}
@@ -746,6 +757,7 @@ func (s *Server) commitScopedTable(w http.ResponseWriter, r *http.Request, targe
 			return
 		}
 		seenDeleteTargets[dv.DataFileID] = true
+		seenDVPaths[dv.Path] = struct{}{}
 	}
 	if status := s.scopedNamespaceOwned(r.Context(), target.tenant, t, getManifest); status != 0 {
 		scopedNamespaceRefusal(w, status)
@@ -838,6 +850,7 @@ WHERE t.table_uuid = ? COLLATE BINARY AND t.dropped_snapshot IS NULL AND ps.end_
 	}
 	// Fence every added data file and deletion vector against undrained cleanup removals
 	// and duplicate path registration (prevents append replay from double-registering a file).
+	// Catalog DDL maintains covering indexes files_path(path) and dvs_path(path) (BINARY).
 	for _, f := range req.AddFiles {
 		stmts = append(stmts,
 			Statement{
