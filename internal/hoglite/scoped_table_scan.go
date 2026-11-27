@@ -131,6 +131,7 @@ type scopedDataFileDTO struct {
 type scopedDeleteFileDTO struct {
 	DeleteFileID  int64  `json:"delete_file_id"`
 	Path          string `json:"path"`
+	FileFormat    string `json:"file_format"`
 	DeleteCount   int64  `json:"delete_count"`
 	FileSizeBytes int64  `json:"file_size_bytes"`
 	BeginSnapshot int64  `json:"begin_snapshot"`
@@ -1141,6 +1142,7 @@ func (s *Server) readScopedScan(w http.ResponseWriter, r *http.Request, target s
 			dv = &scopedDeleteFileDTO{
 				DeleteFileID:  dvID,
 				Path:          dvPath,
+				FileFormat:    "puffin-dv",
 				DeleteCount:   dvCount,
 				FileSizeBytes: dvSize,
 				BeginSnapshot: dvBegin,

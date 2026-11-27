@@ -471,7 +471,7 @@ func TestScopedScanHappyPathAndSnapshotPinning(t *testing.T) {
 	f0 := dto3.Files[0]
 	if f0.DataFile.DataFileID != 10 || f0.DataFile.FooterSize == nil || *f0.DataFile.FooterSize != 256 ||
 		f0.DataFile.ExplicitRowIDs ||
-		f0.DeleteFile == nil || f0.DeleteFile.DeleteFileID != 501 || f0.DeleteFile.DeleteCount != 1 {
+		f0.DeleteFile == nil || f0.DeleteFile.DeleteFileID != 501 || f0.DeleteFile.FileFormat != "puffin-dv" || f0.DeleteFile.DeleteCount != 1 {
 		t.Fatalf("unexpected scan@3 file 0: %+v", f0)
 	}
 	f1 := dto3.Files[1]
