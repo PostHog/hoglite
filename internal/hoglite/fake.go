@@ -55,6 +55,12 @@ func (f *FakeStore) newEtag() string {
 
 func (f *FakeStore) manifestKey(tid string) string { return manifestKey("fake", tid) }
 
+// FakeStorageRoot is the s3:// root FakeStore reports as its own storage
+// (StorageRoots): its keys live under the "fake" prefix of this bucket.
+const FakeStorageRoot = "s3://fake-bucket/fake"
+
+func (f *FakeStore) StorageRoots() []string { return []string{FakeStorageRoot} }
+
 func (f *FakeStore) GetManifest(ctx context.Context, tid string) (*Manifest, string, error) {
 	f.delay()
 	f.mu.Lock()

@@ -61,7 +61,7 @@ func (t *Tenant) deltasOn() bool { return t.opts.Compress && t.opts.DeltaMaxChai
 // base: deltas off, a create, a generation that is not a chain yet, a
 // full chain, or any doubt about the local file. Runs before the fold.
 func (t *Tenant) planDelta() *walDelta {
-	if !t.deltasOn() || t.etag == "" || t.mf.Format != manifestFormatChain || t.mf.BaseSize <= 0 {
+	if !t.deltasOn() || t.etag == "" || manifestCodec(t.mf) != manifestFormatChain || t.mf.BaseSize <= 0 {
 		return nil
 	}
 	// rebase at the configured cap, and never past what readers accept,
