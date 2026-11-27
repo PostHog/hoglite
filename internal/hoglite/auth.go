@@ -30,6 +30,7 @@ type AuthConfig struct {
 	Mode, Issuer, BackendID, JWKSFile, JWKSURL, UpstreamAudience string
 	ScopedNamespaceEnabled                                       bool
 	ScopedNamespacePredicateFields                               []string
+	ReadSession                                                  *ReadSessionConfig
 }
 
 type verificationKey struct {
@@ -42,6 +43,7 @@ type JWTAuth struct {
 	issuer, backend, upstream string
 	scopedNamespaceEnabled    bool
 	scopedNamespaceFields     map[string]bool
+	readSession               *readSessionProfile
 	fetch                     func(context.Context) ([]byte, error)
 	now                       func() time.Time
 	mu                        sync.Mutex
@@ -61,6 +63,10 @@ const (
 // Off preserves the internal service's legacy development behavior.
 func NewJWTAuth(ctx context.Context, cfg AuthConfig) (*JWTAuth, error) {
 	fields, err := scopedNamespaceConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
+	readSession, err := readSessionConfig(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -93,6 +99,7 @@ func NewJWTAuth(ctx context.Context, cfg AuthConfig) (*JWTAuth, error) {
 	a := &JWTAuth{
 		issuer: cfg.Issuer, backend: cfg.BackendID, upstream: upstream, now: time.Now,
 		scopedNamespaceEnabled: cfg.ScopedNamespaceEnabled, scopedNamespaceFields: fields,
+		readSession: readSession,
 	}
 	if cfg.JWKSFile != "" {
 		a.fetch = func(context.Context) ([]byte, error) {
@@ -132,7 +139,21 @@ func NewJWTAuth(ctx context.Context, cfg AuthConfig) (*JWTAuth, error) {
 	if err := a.refresh(ctx); err != nil {
 		return nil, fmt.Errorf("load public JWKS: %w", err)
 	}
+	if a.readSession != nil && !a.hasKeyAlg("ES256") {
+		return nil, errors.New("read sessions require at least one ES256 key in JWKS")
+	}
 	return a, nil
+}
+
+func (a *JWTAuth) hasKeyAlg(alg string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for _, k := range a.keys {
+		if k.alg == alg {
+			return true
+		}
+	}
+	return false
 }
 
 func absoluteHTTPURL(raw string) bool {

@@ -15,10 +15,15 @@ import (
 )
 
 type Server struct {
-	mgr    *Manager
-	auth   *JWTAuth
-	peers  map[string]string // replica id -> base URL
-	client *http.Client
+	mgr                *Manager
+	auth               *JWTAuth
+	peers              map[string]string // replica id -> base URL
+	client             *http.Client
+	readSessionS3      ReadSessionS3Config
+	readS3Once         sync.Once
+	readS3Client       *http.Client
+	readSessionLogOnce sync.Once
+	readSessionLogCh   chan string
 
 	mu          sync.Mutex
 	ownerCache  map[string]ownerCacheEntry
@@ -71,6 +76,12 @@ func NewServer(mgr *Manager, peers map[string]string) *Server {
 // WithAuth attaches startup-validated offline authentication before serving.
 func (s *Server) WithAuth(auth *JWTAuth) *Server {
 	s.auth = auth
+	return s
+}
+
+// WithReadSessionS3 sets S3 transport options for request-local manifest reads.
+func (s *Server) WithReadSessionS3(cfg ReadSessionS3Config) *Server {
+	s.readSessionS3 = cfg
 	return s
 }
 
@@ -267,6 +278,8 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) (int, any
 	fmt.Fprintf(&b, "hoglite_read_timeouts_total %d\n", m.ReadTimeouts.Load())
 	fmt.Fprintf(&b, "hoglite_write_timeouts_total %d\n", m.WriteTimeouts.Load())
 	fmt.Fprintf(&b, "hoglite_result_too_large_total %d\n", m.ResultTooLarge.Load())
+	fmt.Fprintf(&b, "hoglite_read_session_manifest_reads_total %d\n", m.ReadSessionManifestReads.Load())
+	fmt.Fprintf(&b, "hoglite_read_session_manifest_errors_total %d\n", m.ReadSessionManifestErrors.Load())
 	interruptOK := 0
 	if interruptSupport() == nil {
 		interruptOK = 1

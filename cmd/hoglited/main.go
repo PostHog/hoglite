@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -24,6 +25,40 @@ import (
 
 	"hoglite/internal/hoglite"
 )
+
+// newDaemonMetrics builds the daemon metrics with a best-effort diagnostic
+// logger for caller-session manifest reads backed by a duplicated stdout
+// descriptor (fd > 2). Using a non-standard fd avoids os.Stderr lock
+// contention with log.Default() and turns a broken stdout pipe into a normal
+// EPIPE error instead of Go's SIGPIPE process termination on fd 1/2. When
+// stdout and stderr refer to the same underlying file or pipe (for example
+// `hoglited 2>&1 | ...`), diagnostics are discarded so they cannot fill the
+// shared pipe buffer and stall shutdown logging.
+func newDaemonMetrics() *hoglite.Metrics {
+	return &hoglite.Metrics{
+		Logger:            log.Default(),
+		ReadSessionLogger: log.New(newReadSessionLogWriter(os.Stdout, os.Stderr), "", log.LstdFlags),
+	}
+}
+
+func newReadSessionLogWriter(target, daemonErr *os.File) io.Writer {
+	if target == nil {
+		return io.Discard
+	}
+	if daemonErr != nil {
+		tInfo, tErr := target.Stat()
+		eInfo, eErr := daemonErr.Stat()
+		if tErr == nil && eErr == nil && os.SameFile(tInfo, eInfo) {
+			return io.Discard
+		}
+	}
+	fd, err := syscall.Dup(int(target.Fd()))
+	if err != nil {
+		return io.Discard
+	}
+	syscall.CloseOnExec(fd)
+	return os.NewFile(uintptr(fd), "read-session-log")
+}
 
 func main() {
 	if handled, code := runVersion(os.Args[1:], os.Stdout, os.Stderr); handled {
@@ -76,6 +111,13 @@ func main() {
 		authUpstream    = flag.String("auth-upstream-audience", envOr("HL_AUTH_UPSTREAM_AUDIENCE", ""), "upstream metadata audience (default hoglake)")
 		scopedNamespace = flag.Bool("scoped-namespace", envBool("HL_SCOPED_NAMESPACE", false), "enable scoped namespace reads on the API listener")
 		scopedFields    = flag.String("scoped-namespace-predicate-fields", envOr("HL_SCOPED_NAMESPACE_PREDICATE_FIELDS", ""), "exact comma-separated predicate fields for scoped namespace reads")
+		rsProfile       = flag.String("scoped-namespace-read-session-profile", envOr("HL_SCOPED_NAMESPACE_READ_SESSION_PROFILE", ""), "enable dedicated read-session JWT verification on the scoped namespace route (empty = off)")
+		rsTargets       = flag.String("scoped-namespace-read-session-remote-targets", envOr("HL_SCOPED_NAMESPACE_READ_SESSION_REMOTE_TARGETS", ""), "two comma-separated remote storage targets for the dedicated read-session profile")
+		rsRegion        = flag.String("scoped-namespace-read-session-region", envOr("HL_SCOPED_NAMESPACE_READ_SESSION_REGION", ""), "exact AWS region for caller-credential manifest reads")
+		rsEndpoint      = flag.String("scoped-namespace-read-session-s3-endpoint", envOr("HL_SCOPED_NAMESPACE_READ_SESSION_S3_ENDPOINT", ""), "optional HTTPS S3 endpoint URL for caller-credential manifest reads")
+		rsPathStyle     = flag.Bool("scoped-namespace-read-session-s3-path-style", envBool("HL_SCOPED_NAMESPACE_READ_SESSION_S3_PATH_STYLE", false), "use path-style S3 requests for caller-credential manifest reads")
+		rsReadOnlyNs    = flag.String("scoped-namespace-read-only-patterns", envOr("HL_SCOPED_NAMESPACE_READ_ONLY_PATTERNS", ""), "optional comma-separated case-insensitive regexes blocking all mutations on matching namespaces")
+		rsProtectedNs   = flag.String("scoped-namespace-protected-schema-patterns", envOr("HL_SCOPED_NAMESPACE_PROTECTED_SCHEMA_PATTERNS", ""), "optional comma-separated case-insensitive regexes blocking schema create/drop on matching namespaces")
 	)
 	flag.Parse()
 	metricsAddr, err := metricsAddress(*addr, *metricsPort)
@@ -86,10 +128,22 @@ func main() {
 	if *scopedFields != "" {
 		predicateFields = strings.Split(*scopedFields, ",")
 	}
+	readSession, readSessionS3, err := buildReadSessionConfig(*rsProfile, *rsTargets, *bucket, *prefix, *rsRegion, *rsEndpoint, *rsPathStyle)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if readSession != nil {
+		if *rsReadOnlyNs != "" {
+			readSession.ReadOnlyNamespaces = strings.Split(*rsReadOnlyNs, ",")
+		}
+		if *rsProtectedNs != "" {
+			readSession.ProtectedSchemaLifecycle = strings.Split(*rsProtectedNs, ",")
+		}
+	}
 	auth, err := hoglite.NewJWTAuth(context.Background(), hoglite.AuthConfig{
 		Mode: *authMode, Issuer: *authIssuer, BackendID: *authBackend, JWKSFile: *authFile, JWKSURL: *authURL,
 		UpstreamAudience: *authUpstream, ScopedNamespaceEnabled: *scopedNamespace,
-		ScopedNamespacePredicateFields: predicateFields,
+		ScopedNamespacePredicateFields: predicateFields, ReadSession: readSession,
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -239,7 +293,7 @@ func main() {
 	if opts.PutTimeout >= opts.Lease/3+opts.SkewMargin {
 		log.Printf("WARNING: fencing margin violated: PutTimeout %v must be < lease/3 + skew %v", opts.PutTimeout, opts.SkewMargin)
 	}
-	metrics := &hoglite.Metrics{Logger: log.Default()}
+	metrics := newDaemonMetrics()
 	mgr := hoglite.NewManagerSat(store, *prefix, *id, *class, *dir, opts, *maxOpen, metrics, ctrl, *satCommitMs*1000, *satInflight)
 	if *sweep {
 		sw := hoglite.NewSweeper(mgr, store, *prefix, opts, metrics)
@@ -257,6 +311,9 @@ func main() {
 		}
 	}
 	srv := hoglite.NewServer(mgr, peers).WithAuth(auth)
+	if readSession != nil {
+		srv = srv.WithReadSessionS3(readSessionS3)
+	}
 
 	httpSrv := &http.Server{Addr: *addr, Handler: srv.Handler()}
 	var metricsSrv *http.Server
@@ -287,10 +344,39 @@ func main() {
 	case <-time.After(30 * time.Second):
 		log.Printf("drain timed out; exiting anyway")
 	}
-	fmt.Println(httpSrv.Shutdown(context.Background()))
-	if metricsSrv != nil {
-		fmt.Println(metricsSrv.Shutdown(context.Background()))
+	if err := httpSrv.Shutdown(context.Background()); err != nil {
+		log.Printf("http shutdown: %v", err)
 	}
+	if metricsSrv != nil {
+		if err := metricsSrv.Shutdown(context.Background()); err != nil {
+			log.Printf("metrics shutdown: %v", err)
+		}
+	}
+}
+
+func buildReadSessionConfig(profile, targetsCSV, bucket, prefix, region, endpoint string, pathStyle bool) (*hoglite.ReadSessionConfig, hoglite.ReadSessionS3Config, error) {
+	if profile == "" {
+		return nil, hoglite.ReadSessionS3Config{}, nil
+	}
+	var targets []string
+	if targetsCSV != "" {
+		targets = strings.Split(targetsCSV, ",")
+	}
+	rs := &hoglite.ReadSessionConfig{
+		Profile:       profile,
+		RemoteTargets: targets,
+		Bucket:        bucket,
+		Prefix:        prefix,
+		Region:        region,
+	}
+	rsS3 := hoglite.ReadSessionS3Config{
+		BaseEndpoint: endpoint,
+		UsePathStyle: pathStyle,
+	}
+	if err := hoglite.ValidateReadSessionS3Config(rsS3); err != nil {
+		return nil, hoglite.ReadSessionS3Config{}, err
+	}
+	return rs, rsS3, nil
 }
 
 func defaultID() string {
