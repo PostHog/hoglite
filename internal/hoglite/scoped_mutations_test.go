@@ -39,16 +39,20 @@ func scopedMutationCall(t *testing.T, h http.Handler, method, path, token string
 	return w
 }
 
-func TestScopedMutationsLifecycleAndSecurity(t *testing.T) {
-	f, s3fx, spy, _, tenant, srv := newScopedTableScanHarness(t)
-	spy.denyManifest.Store(true)
-	// Upgrade the minimal read fixture to full catalog DDL including the legacy unique containment index.
-	scopedNamespaceWrite(t, tenant, "upgrade-to-full-catalog-ddl",
-		Statement{SQL: `ALTER TABLE meta ADD COLUMN next_namespace_id INTEGER NOT NULL DEFAULT 100`},
-		Statement{SQL: `ALTER TABLE meta ADD COLUMN next_table_id INTEGER NOT NULL DEFAULT 300`},
-		Statement{SQL: `ALTER TABLE meta ADD COLUMN next_file_id INTEGER NOT NULL DEFAULT 500`},
-		Statement{SQL: `ALTER TABLE meta ADD COLUMN schema_version INTEGER NOT NULL DEFAULT 1`},
-		Statement{SQL: `CREATE UNIQUE INDEX IF NOT EXISTS namespaces_live_containment ON namespaces(contained_field, contained_value) WHERE dropped_snapshot IS NULL AND contained_field IS NOT NULL`},
+func upgradeScopedMutationCatalog(t *testing.T, tenant *Tenant, withLegacyContainmentIndex bool) {
+	t.Helper()
+	stmts := []Statement{
+		{SQL: `ALTER TABLE meta ADD COLUMN next_namespace_id INTEGER NOT NULL DEFAULT 100`},
+		{SQL: `ALTER TABLE meta ADD COLUMN next_table_id INTEGER NOT NULL DEFAULT 300`},
+		{SQL: `ALTER TABLE meta ADD COLUMN next_file_id INTEGER NOT NULL DEFAULT 500`},
+		{SQL: `ALTER TABLE meta ADD COLUMN schema_version INTEGER NOT NULL DEFAULT 1`},
+	}
+	if withLegacyContainmentIndex {
+		stmts = append(stmts, Statement{
+			SQL: `CREATE UNIQUE INDEX IF NOT EXISTS namespaces_live_containment ON namespaces(contained_field, contained_value) WHERE dropped_snapshot IS NULL AND contained_field IS NOT NULL`,
+		})
+	}
+	stmts = append(stmts,
 		Statement{SQL: `ALTER TABLE tables ADD COLUMN comment TEXT`},
 		Statement{SQL: `ALTER TABLE tables ADD COLUMN next_row_id INTEGER NOT NULL DEFAULT 0`},
 		Statement{SQL: `ALTER TABLE tables ADD COLUMN next_field_id INTEGER NOT NULL DEFAULT 1`},
@@ -62,6 +66,14 @@ func TestScopedMutationsLifecycleAndSecurity(t *testing.T) {
 		Statement{SQL: `CREATE TABLE IF NOT EXISTS table_layouts(table_id INTEGER NOT NULL, begin_snapshot INTEGER NOT NULL, end_snapshot INTEGER, object_prefix_field_id INTEGER NOT NULL, PRIMARY KEY(table_id, begin_snapshot))`},
 		Statement{SQL: `CREATE TABLE IF NOT EXISTS partition_specs(table_id INTEGER NOT NULL, spec_id INTEGER NOT NULL, fields_json TEXT NOT NULL, begin_snapshot INTEGER NOT NULL, end_snapshot INTEGER, PRIMARY KEY(table_id, spec_id))`},
 	)
+	scopedNamespaceWrite(t, tenant, "upgrade-to-full-catalog-ddl", stmts...)
+}
+
+func TestScopedMutationsLifecycleAndSecurity(t *testing.T) {
+	f, s3fx, spy, _, tenant, srv := newScopedTableScanHarness(t)
+	spy.denyManifest.Store(true)
+	// Upgrade the minimal read fixture to full catalog DDL including the legacy unique containment index.
+	upgradeScopedMutationCatalog(t, tenant, true)
 	// Configure optional post-neutral patterns: reserved_ro (all mutations blocked) and managed_team_<digits> (schema create/drop blocked).
 	roRes, err := compileNamespacePatterns([]string{`^reserved_ro$`})
 	if err != nil {
@@ -297,24 +309,7 @@ func TestScopedMutationsLifecycleAndSecurity(t *testing.T) {
 func TestScopedCommitTableLevelFence(t *testing.T) {
 	f, s3fx, spy, _, tenant, srv := newScopedTableScanHarness(t)
 	spy.denyManifest.Store(true)
-	scopedNamespaceWrite(t, tenant, "upgrade-to-full-catalog-ddl",
-		Statement{SQL: `ALTER TABLE meta ADD COLUMN next_namespace_id INTEGER NOT NULL DEFAULT 100`},
-		Statement{SQL: `ALTER TABLE meta ADD COLUMN next_table_id INTEGER NOT NULL DEFAULT 300`},
-		Statement{SQL: `ALTER TABLE meta ADD COLUMN next_file_id INTEGER NOT NULL DEFAULT 500`},
-		Statement{SQL: `ALTER TABLE meta ADD COLUMN schema_version INTEGER NOT NULL DEFAULT 1`},
-		Statement{SQL: `ALTER TABLE tables ADD COLUMN comment TEXT`},
-		Statement{SQL: `ALTER TABLE tables ADD COLUMN next_row_id INTEGER NOT NULL DEFAULT 0`},
-		Statement{SQL: `ALTER TABLE tables ADD COLUMN next_field_id INTEGER NOT NULL DEFAULT 1`},
-		Statement{SQL: `ALTER TABLE tables ADD COLUMN schema_version INTEGER NOT NULL DEFAULT 0`},
-		Statement{SQL: `ALTER TABLE table_versions ADD COLUMN comment TEXT`},
-		Statement{SQL: `CREATE TABLE IF NOT EXISTS table_totals(table_id INTEGER PRIMARY KEY, record_count INTEGER NOT NULL DEFAULT 0, file_count INTEGER NOT NULL DEFAULT 0, file_size_bytes INTEGER NOT NULL DEFAULT 0)`},
-		Statement{SQL: `CREATE TABLE IF NOT EXISTS snapshots(id INTEGER PRIMARY KEY, ts TEXT NOT NULL, author TEXT, message TEXT, schema_version INTEGER NOT NULL)`},
-		Statement{SQL: `CREATE TABLE IF NOT EXISTS changes(snapshot_id INTEGER NOT NULL, kind TEXT NOT NULL, object_id INTEGER NOT NULL)`},
-		Statement{SQL: `CREATE TABLE IF NOT EXISTS views(id INTEGER PRIMARY KEY, namespace_id INTEGER NOT NULL, namespace TEXT NOT NULL, name TEXT NOT NULL, view_uuid TEXT NOT NULL UNIQUE, dialect TEXT NOT NULL, sql_text TEXT NOT NULL, created_snapshot INTEGER NOT NULL, dropped_snapshot INTEGER)`},
-		Statement{SQL: `CREATE TABLE IF NOT EXISTS removals(id INTEGER PRIMARY KEY, path TEXT NOT NULL, file_kind TEXT NOT NULL, reason TEXT NOT NULL, queued_snapshot INTEGER NOT NULL, queued_at TEXT NOT NULL, drained_at TEXT)`},
-		Statement{SQL: `CREATE TABLE IF NOT EXISTS table_layouts(table_id INTEGER NOT NULL, begin_snapshot INTEGER NOT NULL, end_snapshot INTEGER, object_prefix_field_id INTEGER NOT NULL, PRIMARY KEY(table_id, begin_snapshot))`},
-		Statement{SQL: `CREATE TABLE IF NOT EXISTS partition_specs(table_id INTEGER NOT NULL, spec_id INTEGER NOT NULL, fields_json TEXT NOT NULL, begin_snapshot INTEGER NOT NULL, end_snapshot INTEGER, PRIMARY KEY(table_id, spec_id))`},
-	)
+	upgradeScopedMutationCatalog(t, tenant, false)
 	team42WriteTok := scopedTableScanToken(t, f, s3fx, "42",
 		"ASIAEXAMPLEALICE0021", "secret-w42", "session-w42", func(c map[string]any) {
 			c["cat"] = map[string]any{readSessionTestCatalog: []string{"read", "write"}}
@@ -333,7 +328,7 @@ func TestScopedCommitTableLevelFence(t *testing.T) {
 	}
 	w = scopedMutationCall(t, h, http.MethodPost, base+"/namespaces/scratch/tables", team42WriteTok, createTableReq{
 		Name:    "alpha",
-		Columns: []createTableColumnReq{{Name: "id", Type: "long"}},
+		Columns: []createTableColumnReq{{Name: "id", Type: "long"}, {Name: "extra", Type: "string"}},
 	})
 	if w.Code != http.StatusCreated {
 		t.Fatalf("create alpha status=%d body=%s", w.Code, w.Body.String())
@@ -357,7 +352,7 @@ func TestScopedCommitTableLevelFence(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// 1. Committing to alpha with alphaBase (older than catalog head) must succeed because alpha itself did not change.
+	// 1. Append to alpha with alphaBase (older than catalog head) succeeds because alpha DDL did not change.
 	w = scopedMutationCall(t, h, http.MethodPost, base+"/namespaces/scratch/tables/alpha/commit", team42WriteTok, commitTableReq{
 		TableUUID:      alphaDTO.TableUUID,
 		BaseSnapshotID: alphaBase,
@@ -368,12 +363,24 @@ func TestScopedCommitTableLevelFence(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("commit to alpha after unrelated beta DDL failed: status=%d body=%s", w.Code, w.Body.String())
 	}
+
+	// 2. Concurrent append to the SAME busy table alpha from the same alphaBase ALSO succeeds (append-only fences on DDL only).
+	w = scopedMutationCall(t, h, http.MethodPost, base+"/namespaces/scratch/tables/alpha/commit", team42WriteTok, commitTableReq{
+		TableUUID:      alphaDTO.TableUUID,
+		BaseSnapshotID: alphaBase,
+		AddFiles: []commitAddFileReq{{
+			Path: "s3://example-customer/tables/team_id=42/alpha-2.parquet", RecordCount: 4, FileSizeBytes: 256,
+		}},
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("concurrent append to busy table alpha failed: status=%d body=%s", w.Code, w.Body.String())
+	}
 	var alphaCommit1 commitTableResp
 	if err := json.Unmarshal(w.Body.Bytes(), &alphaCommit1); err != nil {
 		t.Fatal(err)
 	}
 
-	// 2. Committing to beta advances catalog head again, but alpha is still untouched since alphaCommit1.
+	// 3. Committing to beta advances catalog head again, but alpha is still untouched since alphaCommit1.
 	w = scopedMutationCall(t, h, http.MethodPost, base+"/namespaces/scratch/tables/beta/commit", team42WriteTok, commitTableReq{
 		TableUUID:      betaDTO.TableUUID,
 		BaseSnapshotID: betaDTO.ReadSnapshotID,
@@ -385,7 +392,7 @@ func TestScopedCommitTableLevelFence(t *testing.T) {
 		t.Fatalf("commit to beta status=%d body=%s", w.Code, w.Body.String())
 	}
 
-	// 3. Look up alpha's file id, then commit a DV to alpha using alphaCommit1.SnapshotID (older than catalog head).
+	// 4. Look up alpha's file ids, then commit a DV to alpha using alphaCommit1.SnapshotID (older than catalog head).
 	w = scopedNamespaceCall(t, h, fmt.Sprintf("%s/namespaces/scratch/tables/alpha/scan?snapshot=%d&table_uuid=%s", base, alphaCommit1.SnapshotID, alphaDTO.TableUUID), team42WriteTok)
 	if w.Code != http.StatusOK {
 		t.Fatalf("scan alpha status=%d body=%s", w.Code, w.Body.String())
@@ -394,16 +401,17 @@ func TestScopedCommitTableLevelFence(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &scanDTO); err != nil {
 		t.Fatal(err)
 	}
-	if len(scanDTO.Files) != 1 {
-		t.Fatalf("expected 1 file in alpha, got %d", len(scanDTO.Files))
+	if len(scanDTO.Files) != 2 {
+		t.Fatalf("expected 2 files in alpha, got %d", len(scanDTO.Files))
 	}
-	dataFileID := scanDTO.Files[0].DataFile.DataFileID
+	dataFileID1 := scanDTO.Files[0].DataFile.DataFileID
+	dataFileID2 := scanDTO.Files[1].DataFile.DataFileID
 
 	w = scopedMutationCall(t, h, http.MethodPost, base+"/namespaces/scratch/tables/alpha/commit", team42WriteTok, commitTableReq{
 		TableUUID:      alphaDTO.TableUUID,
 		BaseSnapshotID: alphaCommit1.SnapshotID,
 		AddDeleteFiles: []commitAddDeleteFileReq{{
-			DataFileID: dataFileID, Path: "s3://example-customer/tables/team_id=42/alpha-dv-1.puffin", DeleteCount: 1, FileSizeBytes: 64,
+			DataFileID: dataFileID1, Path: "s3://example-customer/tables/team_id=42/alpha-dv-1.puffin", DeleteCount: 1, FileSizeBytes: 64,
 		}},
 	})
 	if w.Code != http.StatusOK {
@@ -414,19 +422,59 @@ func TestScopedCommitTableLevelFence(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// 4. Stale commit to alpha using alphaCommit1.SnapshotID AFTER alphaCommit2 touched alpha MUST fail with 409.
+	// 5. Stale DV commit to alpha using alphaCommit1.SnapshotID AFTER alphaCommit2 touched alpha MUST fail with 409.
 	scopedNamespaceWantCode(t, scopedMutationCall(t, h, http.MethodPost, base+"/namespaces/scratch/tables/alpha/commit", team42WriteTok, commitTableReq{
 		TableUUID:      alphaDTO.TableUUID,
 		BaseSnapshotID: alphaCommit1.SnapshotID,
-		AddFiles: []commitAddFileReq{{
-			Path: "s3://example-customer/tables/team_id=42/alpha-stale.parquet", RecordCount: 1, FileSizeBytes: 128,
+		AddDeleteFiles: []commitAddDeleteFileReq{{
+			DataFileID: dataFileID2, Path: "s3://example-customer/tables/team_id=42/alpha-dv-stale.puffin", DeleteCount: 1, FileSizeBytes: 64,
 		}},
 	}), http.StatusConflict, "conflict")
 
-	// 5. Future base_snapshot_id (> catalog head) and pre-creation base_snapshot_id (< created_snapshot) MUST fail with 409.
+	// 6. End-only file retirement (without adding any replacement) conflicts with a stale DV commit from alphaCommit2.
+	retireSnap := alphaCommit2.SnapshotID + 1
+	scopedNamespaceWrite(t, tenant, "retire-file-end-only",
+		Statement{SQL: `UPDATE meta SET next_snapshot = ? WHERE id = 1`, Args: []any{retireSnap + 1}},
+		Statement{SQL: `UPDATE files SET end_snapshot = ? WHERE id = ?`, Args: []any{retireSnap, dataFileID2}},
+	)
 	scopedNamespaceWantCode(t, scopedMutationCall(t, h, http.MethodPost, base+"/namespaces/scratch/tables/alpha/commit", team42WriteTok, commitTableReq{
 		TableUUID:      alphaDTO.TableUUID,
-		BaseSnapshotID: alphaCommit2.SnapshotID + 99,
+		BaseSnapshotID: alphaCommit2.SnapshotID,
+		AddDeleteFiles: []commitAddDeleteFileReq{{
+			DataFileID: dataFileID1, Path: "s3://example-customer/tables/team_id=42/alpha-dv-after-retire.puffin", DeleteCount: 2, FileSizeBytes: 64,
+		}},
+	}), http.StatusConflict, "conflict")
+
+	// 7. End-only column drop (without adding any new column) conflicts with a stale append from retireSnap.
+	dropColSnap := retireSnap + 1
+	scopedNamespaceWrite(t, tenant, "drop-column-end-only",
+		Statement{SQL: `UPDATE meta SET next_snapshot = ? WHERE id = 1`, Args: []any{dropColSnap + 1}},
+		Statement{SQL: `UPDATE columns SET end_snapshot = ? WHERE table_id = (SELECT id FROM tables WHERE table_uuid = ?) AND name = 'extra'`, Args: []any{dropColSnap, alphaDTO.TableUUID}},
+	)
+	scopedNamespaceWantCode(t, scopedMutationCall(t, h, http.MethodPost, base+"/namespaces/scratch/tables/alpha/commit", team42WriteTok, commitTableReq{
+		TableUUID:      alphaDTO.TableUUID,
+		BaseSnapshotID: retireSnap,
+		AddFiles: []commitAddFileReq{{
+			Path: "s3://example-customer/tables/team_id=42/alpha-after-col-drop.parquet", RecordCount: 1, FileSizeBytes: 128,
+		}},
+	}), http.StatusConflict, "conflict")
+
+	// 8. Expired base_snapshot_id (< meta.earliest_snapshot_id) MUST fail with 409 even when no later rows remain.
+	scopedNamespaceWrite(t, tenant, "advance-retention-floor",
+		Statement{SQL: `UPDATE meta SET earliest_snapshot_id = ? WHERE id = 1`, Args: []any{dropColSnap}},
+	)
+	scopedNamespaceWantCode(t, scopedMutationCall(t, h, http.MethodPost, base+"/namespaces/scratch/tables/alpha/commit", team42WriteTok, commitTableReq{
+		TableUUID:      alphaDTO.TableUUID,
+		BaseSnapshotID: alphaCommit2.SnapshotID,
+		AddFiles: []commitAddFileReq{{
+			Path: "s3://example-customer/tables/team_id=42/alpha-expired.parquet", RecordCount: 1, FileSizeBytes: 128,
+		}},
+	}), http.StatusConflict, "conflict")
+
+	// 9. Future base_snapshot_id (> catalog head) and pre-creation base_snapshot_id (< created_snapshot) MUST fail with 409.
+	scopedNamespaceWantCode(t, scopedMutationCall(t, h, http.MethodPost, base+"/namespaces/scratch/tables/alpha/commit", team42WriteTok, commitTableReq{
+		TableUUID:      alphaDTO.TableUUID,
+		BaseSnapshotID: dropColSnap + 99,
 		AddFiles: []commitAddFileReq{{
 			Path: "s3://example-customer/tables/team_id=42/alpha-future.parquet", RecordCount: 1, FileSizeBytes: 128,
 		}},
