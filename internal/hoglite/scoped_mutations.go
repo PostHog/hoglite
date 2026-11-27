@@ -878,7 +878,7 @@ WHERE t.table_uuid = ? COLLATE BINARY AND t.dropped_snapshot IS NULL
 		}
 		stmts = append(stmts, Statement{
 			SQL: `INSERT INTO files(id, table_id, begin_snapshot, end_snapshot, record_count, file_size_bytes, footer_size, row_id_start, explicit_row_ids, stats_state, file_format, path)
-SELECT m.next_file_id - ?, t.id, m.next_snapshot - 1, NULL, ?, ?, ?, t.next_row_id + ?, 0, 'none', 'parquet', ?
+SELECT m.next_file_id - ?, t.id, m.next_snapshot - 1, NULL, ?, ?, ?, t.next_row_id + ?, 0, 'pending', 'parquet', ?
 FROM meta AS m JOIN tables AS t ON 1 = 1
 WHERE m.id = 1 AND t.table_uuid = ? COLLATE BINARY AND t.dropped_snapshot IS NULL`,
 			Args: []any{idOffset, f.RecordCount, f.FileSizeBytes, footerArg, rowOffset, f.Path, req.TableUUID},
