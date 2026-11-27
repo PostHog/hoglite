@@ -269,7 +269,7 @@ func TestScopedMutationsLifecycleAndSecurity(t *testing.T) {
 		TableUUID:      tblDTO.TableUUID,
 		BaseSnapshotID: commitResp.SnapshotID,
 		AddDeleteFiles: []commitAddDeleteFileReq{{
-			DataFileID: dataFileID, Path: "s3://example-customer/tables/team_id=42/dv-1.puffin", DeleteCount: 2, FileSizeBytes: 128,
+			DataFileID: dataFileID, Path: "s3://example-customer/tables/team_id=42/scratch-dv-1.puffin", DeleteCount: 2, FileSizeBytes: 128,
 		}},
 	})
 	if w.Code != http.StatusOK {
